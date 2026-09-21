@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>OkiRomSim.Assembler</RootNamespace>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- instrs.y is the machine-generated instruction grammar, derived from the
+         Grammar/66207.op opcode spec (patched: TRB alias, MBR off N8,C = C4, bogus
+         OR #N16/D0 forms removed). Using it verbatim keeps the assembler byte-exact. -->
+    <EmbeddedResource Include="Grammar\instrs.y" LogicalName="instrs.y" />
+    <None Include="Grammar\66207.op" CopyToOutputDirectory="Never" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,40 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>OkiRomSimStudio</AssemblyName>
+    <RootNamespace>OkiRomSim.Desktop</RootNamespace>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
+    <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\**" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Assets\icon.ico" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Floating versions so this restores against whatever 11.x is current. Pin them once it
+         builds on your machine if you want reproducible restores. -->
+    <PackageReference Include="Avalonia" Version="11.*" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.*" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.*" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.*" />
+    <PackageReference Include="Avalonia.AvaloniaEdit" Version="11.*" />
+    <!-- serial: HTS-style datalogging cable and the Moates Ostrich/Demon trace -->
+    <PackageReference Include="System.IO.Ports" Version="10.*" />
+    <PackageReference Include="Avalonia.Controls.ColorPicker" Version="11.*" />
+    <!-- keeps the MCP password in settings.json encrypted for this Windows user -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.*" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\OkiRomSim.Core\OkiRomSim.Core.csproj" />
+    <ProjectReference Include="..\OkiRomSim.Assembler\OkiRomSim.Assembler.csproj" />
+    <ProjectReference Include="..\OkiRomSim.Calibration\OkiRomSim.Calibration.csproj" />
+    <ProjectReference Include="..\OkiRomSim.Mcp\OkiRomSim.Mcp.csproj" />
+  </ItemGroup>
+</Project>
