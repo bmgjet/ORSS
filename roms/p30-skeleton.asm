@@ -1,3 +1,21 @@
+;==================================================================================================
+; p30-skeleton.asm - a minimal P30 (Honda OBD1, OKI MSM66207, P28-style board) that still runs the
+; engine, as the base for building a ROM out of feature modules. See roms/p30-skeleton.md.
+;
+; Built from roms/p30.asm one subsystem at a time; after every step the simulator compared it with
+; stock P30 at 14 operating points (cranking, cold/warm idle, cruise, part load, WOT low and VTEC,
+; rev limit, decel, hot WOT, key-on prime, stall, tip-in).
+;
+; Kept: boot and self-tests, ROM checksum, crank/TDC/CYP sync, sensors, fuel (maps, cranking,
+;   warm-up, IAT/baro/battery corrections, tip-in, decel cut), ignition, rev limiter, VTEC (with its
+;   oil-pressure check), idle air control (IACV), fuel pump, and the stock calibration at 6000h-7649h.
+; Removed: serial datalog/diagnostic link, trouble-code detection, storage and flashing, check-engine
+;   lamp, closed-loop O2 (fuel is always open loop), EGR, automatic transmission control and lock-up.
+; Added: module hooks at 5F00h, module requests (fuel cut, ignition retard), a 2.048 ms tick, and a
+;   checksum byte at 7FFFh. Free for modules: skel_free_start-5EFFh and 764Ah-7FFEh.
+;
+; Not bench-tested on a car. Treat it like any new ROM: emulator and wideband first.
+;==================================================================================================
                 org 0000h
 int_start_vec:            DW  int_start        ; 0000 E221
 int_break_vec:            DW  int_break        ; 0002 E921
@@ -157,6 +175,10 @@ timer1_check_start:     ANDB    off(TCON1), #0f7h      ; 0132 0 0C8 ??? C441D0F7
                 ADD     off(TMR1), off(000cah) ; 0139 1 0C8 ??? B43683CA
                 RTI                            ; 013D 1 0C8 ??? 02
 timer1_tmr1_reload:     ORB     off(TCON1), #008h      ; 013E 0 0C8 ??? C441E008
+                INCB    0feh                   ; (skeleton) module tick: word at 0FEh counts IACV PWM periods, 2.048 ms each
+                JNE     timer1_tick_done
+                INCB    0ffh
+timer1_tick_done:
                 INCB    r6                     ; 0142 0 0C8 ??? AE
                 L       A, #00a00h             ; 0143 1 0C8 ??? 67000A
                 SUB     A, er0                 ; 0146 1 0C8 ??? 28
@@ -1693,7 +1715,8 @@ gearcorrect_store_result:     ADDB    A, off(00245h)         ; 0FAB 0 200 180 87
                 JGE     gearcorrect_store_result_store_ram247             ; 0FAD 0 200 180 CD02
                 LB      A, #0ffh               ; 0FAF 0 200 180 77FF
 gearcorrect_store_result_store_ram247:     STB     A, off(00247h)         ; 0FB1 0 200 180 D447
-gearcorrect_store_result_load_r2:     MOVB    r2, off(00246h)        ; 0FB3 0 200 180 C4464A
+gearcorrect_store_result_load_r2:     CAL     skel_ign_service ; (skeleton) module retard request, then hook_ign
+                MOVB    r2, off(00246h)        ; 0FB3 0 200 180 C4464A
                 MOVB    r4, off(0024ch)        ; 0FB6 0 200 180 C44C4C
                 CAL     ign_angle_to_timer_convert             ; 0FB9 0 200 180 322F4E
                 MOV     DP, #00355h            ; 0FBC 0 200 180 625503
@@ -2616,6 +2639,8 @@ doubleup_limiter_cont:     JBR     off(0011ch).5, ignition_cut_mode_check ; 1816
 ignition_cut_mode_check:     CMP     0ach, A                ; 181A 1 100 280 B5ACC1
                 MB      off(0011ch).5, C       ; 181D 1 100 280 C41C3D
                 JLT     revlimiter_fuelcut_set             ; 1820 1 100 280 CA24
+                CMPB    off(001f0h), #000h     ; (skeleton) module fuel-cut request: any bit set cuts fuel like the rev limiter
+                JNE     revlimiter_fuelcut_set
                 JBS     off(00119h).7, fuelcuttrack_store ; 1822 1 100 280 EF1937
                 JBR     off(00116h).2, fuelcut_extra_gate ; 1825 1 100 280 DA1622
                 LB      A, #0c8h               ; 1828 0 100 280 77C8
@@ -2901,6 +2926,7 @@ injtimer_mul_chain3:     L       A, off(0014ah)         ; 1D66 1 100 280 E44A
 injtimer_mul_final:     L       A, off(00148h)         ; 1D6C 1 100 280 E448
                 MUL                            ; 1D6E 1 100 280 9035
                 MOV     off(00146h), er1       ; 1D70 1 100 280 457C46
+                CAL     hook_fuel              ; (skeleton) module slot: final pulse width is the word at 146h
                 JBS     off(0011dh).4, dwell_zero_result ; 1D73 1 100 280 EC1D4F
                 LB      A, off(0012dh)         ; 1D76 0 100 280 F42D
                 CMPB    A, #0c0h               ; 1D78 0 100 280 C6C0
@@ -3804,6 +3830,7 @@ serial_baud_select_done:     MOVB    off(002b6h), #032h     ; 2558 1 208 180 C4B
                 LC      A, 0003ah              ; 2596 1 208 180 909C3A00
                 ST      A, [DP]                ; 259A 1 208 180 D2
                 CLRB    0ebh                   ; 259B 1 208 180 C5EB15
+                CAL     skel_boot_modules      ; (skeleton) clear the module requests, then hook_init
                 J       stack_sanity_check             ; 259E 1 208 180 032838
 ; [CG] background_task_scheduler  @0x2686
 ; [CG] TRACED: manages an IE interrupt-mask cycle counter (RAM 0xCE), runs housekeeping
@@ -6673,7 +6700,8 @@ fuelpump_state_check:     RC                             ; 42A8 0 208 180 95
                 LB      A, off(002bch)         ; 42A9 0 208 180 F4BC
                 JEQ     fuelpump_state_active_store_carry_p1_bit4             ; 42AB 0 208 180 C901
 fuelpump_state_active:     SC                             ; 42AD 0 208 180 85
-fuelpump_state_active_store_carry_p1_bit4:     RB      P1.4                   ; 42AE (skeleton: no key-on bulb check, the lamp stays off)
+; (skeleton: the stock key-on bulb check wrote P1.4 here; the lamp output is left to feature modules)
+fuelpump_state_active_store_carry_p1_bit4:
 fuelpump_state_active_cmp_ram0e9:     CMPB    0e9h, #014h            ; 42B1 0 208 180 C5E9C014
                 JLT     accut_reset_c3             ; 42B5 0 208 180 CA63
                 CMPB    0c1h, #015h            ; 42B7 0 208 180 C5C1C015
@@ -7034,7 +7062,8 @@ prep_lowpower_ie_config:     MOV     0f4h, #002a0h          ; 4B1A 1 208 180 B5F
                 CLR     IRQ                    ; 4B27 1 208 180 B51815
                 RB      TCON0.2                ; 4B2A 1 208 180 C5400A
                 ST      A, IE                  ; 4B2D 1 208 180 D51A
-lowpower_trap_call:     J       regbank_selftest2_start             ; 4B2F 1 208 180 035037
+lowpower_trap_call:     CAL     hook_main              ; (skeleton) module slot: once per main-loop pass
+                J       regbank_selftest2_start             ; 4B2F 1 208 180 035037
 ; [CG] crank_helper2  @0x4B32
 ; [CG] VERIFIED: entry point that first checks off(120h).2; if set, skips straight to the
 ; [CG] shared clamp body (injector_timer_schedule). If clear, also bails immediately when
@@ -9343,6 +9372,304 @@ inj_accum1_store2:     ST      A, off(001b8h)         ; 5FF7 1 108 280 D4B8
                 ST      A, off(001bah)         ; 5FFA 1 108 280 D4BA
                 J       inj_accum_store_114             ; 5FFC 1 108 280 03904C
 ; ------------------------------------------------------------------------------------------------
+; Code that stock P30 kept after the calibration (764Ah-78ADh), moved down here so the space above the
+; calibration is one free block.
+; ------------------------------------------------------------------------------------------------
+inj_accum_check2_add_acc:     ADD     A, off(001bah)         ; 764A 1 108 280 87BA
+                CMP     A, #00100h             ; 764C 1 108 280 C60001
+                JGE     inj_accum_check2_store_ram1ba             ; 764F 1 108 280 CD01
+                CLR     A                      ; 7651 1 108 280 F9
+inj_accum_check2_store_ram1ba:     ST      A, off(001bah)         ; 7652 1 108 280 D4BA
+                CLR     A                      ; 7654 1 108 280 F9
+                J       inj_accum_store_114             ; 7655 1 108 280 03904C
+inj_accum_check4_add_acc:     ADD     A, off(001b8h)         ; 7658 1 108 280 87B8
+                CMP     A, #00100h             ; 765A 1 108 280 C60001
+                JGE     inj_accum_check4_store_ram1b8             ; 765D 1 108 280 CD01
+                CLR     A                      ; 765F 1 108 280 F9
+inj_accum_check4_store_ram1b8:     ST      A, off(001b8h)         ; 7660 1 108 280 D4B8
+                J       inj_accum2_zero2             ; 7662 1 108 280 038A4C
+crank_pswl4_store_cmp_acc:     CMPB    A, r0                  ; 7665 0 108 280 48
+                JLE     crank_pswl4_store_goto_4d5c             ; 7666 0 108 280 CF09
+                LB      A, [DP]                ; 7668 0 108 280 F2
+                ADDB    A, #001h               ; 7669 0 108 280 8601
+                CMPB    A, r0                  ; 766B 0 108 280 48
+                JLE     crank_pswl4_store_goto_4d5c             ; 766C 0 108 280 CF03
+                J       crank_pswl4_store_if_ram117_bit0_clr             ; 766E 0 108 280 03814D
+crank_pswl4_store_goto_4d5c:     J       crank_mul_alt_mulb_acc             ; 7671 0 108 280 035C4D
+timer2_irq_clear_orb_off_irq:     ORB     off(IRQ), #008h        ; 7674 1 0D0 ??? C418E008
+                RB      TRNSIT.0               ; 7678 1 0D0 ??? C54608
+                JEQ     timer2_irq_clear_return             ; 767B 1 0D0 ??? C903
+                SB      09fh.2                 ; 767D 1 0D0 ??? C59F1A
+timer2_irq_clear_return:     RTI                            ; 7680 1 0D0 ??? 02
+; [CG] diag_report_finalize  @0x7681
+; [CG] TRACED: writes into the diagnostic-snapshot RAM area (0x3AC/0x3D4, adjacent to
+; [CG] cfgvariant_snapshot_capture's own 0x340 block), gated by off(120h).2 and off(122h).1, and
+; [CG] hands off to fuelmap_do_lookup_b35. A second stage of the diagnostic/serial report
+; [CG] construction.
+diag_report_finalize:     JBR     off(00122h).1, diag_report_finalize_load_dp ; 7681 1 100 280 D92201
+                CLR     A                      ; 7684 1 100 280 F9
+diag_report_finalize_load_dp:     MOV     DP, #003d4h            ; 7685 1 100 280 62D403
+                ST      A, [DP]                ; 7688 1 100 280 D2
+                MOV     DP, #003ach            ; 7689 1 100 280 62AC03
+                J       diag_report_finalize_store_dp_ind             ; 768C 1 100 280 031814
+crank_tooth_count_store_set_ram120_bit2:     SB      off(00120h).2          ; 768F 0 108 280 C4201A
+                RB      PSWH.0                 ; 7692 0 108 280 A208
+                MOVB    off(001b6h), #077h     ; 7694 0 108 280 C4B69877
+                MOVB    off(001beh), #011h     ; 7698 0 108 280 C4BE9811
+                SB      PSWH.0                 ; 769C 0 108 280 A218
+                J       crank_cycle_dispatch2             ; 769E 0 108 280 036905
+threshold_bank_217_0_load_carry_ram0a0_bit6:     MB      C, 0a0h.6              ; 76A1 0 200 180 C5A02E
+                JBR     off(00227h).5, threshold_bank_217_0_goto_0a01 ; 76A4 0 200 180 DD2706
+                MOVB    r2, off(00236h)        ; 76A7 0 200 180 C4364A
+                MB      C, 0a0h.7              ; 76AA 0 200 180 C5A02F
+threshold_bank_217_0_goto_0a01:     J       threshold_bank_217_0_store_carry_pswl_bit4             ; 76AD 0 200 180 03010A
+flag_dispatch_21d_212:     JBS     off(00227h).5, flag_dispatch_21d_212_goto_ignmap_2d_lookup ; 76B0 1 200 180 ED2706
+                JBS     off(0021fh).1, flag_dispatch_21d_212_goto_ignmap_2d_lookup ; 76B3 1 200 180 E91F03
+                J       flag_dispatch_21d_212_load_r3             ; 76B6 1 200 180 034F0B
+flag_dispatch_21d_212_goto_ignmap_2d_lookup:     J       ignmap_2d_lookup             ; 76B9 1 200 180 03760B
+boot_completion_helper_clear_carry_2:     RC                             ; 76C9 0 208 180 95
+                LCB     A, idle_init_start_tbl            ; 76CA 0 208 180 909D1160
+                STB     A, r0                  ; 76CE 0 208 180 88
+                JNE     boot_completion_helper_store_carry_ram227_bit5             ; 76CF 0 208 180 CE0C
+                LCB     A, diag_mode_code_store_tbl_2            ; 76D1 0 208 180 909D0F60
+                JEQ     boot_completion_helper_store_carry_ram227_bit5             ; 76D5 0 208 180 C906
+                SLLB    r1                     ; 76D7 0 208 180 21D7
+                SLLB    r1                     ; 76D9 0 208 180 21D7
+                MOVB    r1, #080h              ; 76DB 0 208 180 9980
+boot_completion_helper_store_carry_ram227_bit5:     MB      off(00227h).5, C       ; 76DD 0 208 180 C4273D
+                MOV     DP, #003c7h            ; 76E0 0 208 180 62C703
+                J       boot_completion_helper_load_dp_ind             ; 76E3 0 208 180 03BE55
+boot_completion_helper_rom_load_tbl_600f:     LCB     A, diag_mode_code_store_tbl_2            ; 76E6 0 208 180 909D0F60
+                JEQ     boot_completion_helper_goto_55c5             ; 76EA 0 208 180 C906
+                SLLB    r2                     ; 76EC 0 208 180 22D7
+                MOVB    r2, #080h              ; 76EE 0 208 180 9A80
+                RORB    r2                     ; 76F0 0 208 180 22C7
+boot_completion_helper_goto_55c5:     J       boot_completion_helper_load_r2             ; 76F2 0 208 180 03C555
+crankfuel_timer_wait_loop_sll_er0:     SLL     er0                    ; 76F5 1 100 280 44D7
+                RB      off(00122h).0          ; 76F7 1 100 280 C42208
+                J       crankfuel_timer_wait_loop_if_eq_goto_cylinder_index_adva             ; 76FA 1 100 280 038414
+sensor_check_vcal3_if_ram217_bit5_set:     JBS     off(00217h).5, sensor_check_vcal3_load_ram2be ; 76FD 0 208 180 ED1706
+                JBS     off(00230h).5, sensor_check_vcal3_goto_sensor_check_clear ; 7700 0 208 180 ED3007
+                J       sensor_check_vcal3_cmp_ram236             ; 7703 0 208 180 034A3B
+sensor_check_vcal3_load_ram2be:     MOVB    off(002beh), #064h     ; 7706 0 208 180 C4BE9864
+sensor_check_vcal3_goto_sensor_check_clear:     J       sensor_check_clear             ; 770A 0 208 180 03673B
+prep_lowpower_seq_store_tmr1:     ST      A, TMR1                ; 770D 1 208 180 D536
+                SLL     er0                    ; 770F 1 208 180 44D7
+                DIV                            ; 7711 1 208 180 9037
+                DIV                            ; 7713 1 208 180 9037
+                J       prep_lowpower_seq_load_carry_ram09f_bit1             ; 7715 1 208 180 030E4B
+int_crank_sync_if_ram112_bit7_set:     JBS     off(00112h).7, int_crank_sync_set_ram120_bit4 ; 7718 1 108 280 EF1203
+                J       int_crank_sync_clear_irqh_bit7             ; 771B 1 108 280 030304
+int_crank_sync_set_ram120_bit4:     SB      off(00120h).4          ; 771E 1 108 280 C4201C
+                J       crank_sync_retry_check             ; 7721 1 108 280 032D04
+crank_cycle_p4_gate_if_ram121_bit1_clr:     JBR     off(00121h).1, crank_cycle_p4_gate_goto_crank_cycle_f4_check ; 7730 0 108 280 D9210F
+                JBS     off(00112h).2, crank_cycle_p4_gate_if_ram118_bit0_set ; 7733 0 108 280 EA1203
+                JBR     off(00112h).4, crank_cycle_p4_gate_goto_crank_cycle_result_common ; 7736 0 108 280 DC1203
+crank_cycle_p4_gate_if_ram118_bit0_set:     JBS     off(00118h).0, crank_cycle_p4_gate_goto_crank_cycle_result_a ; 7739 0 108 280 E81803
+crank_cycle_p4_gate_goto_crank_cycle_result_common:     J       crank_cycle_result_common             ; 773C 0 108 280 03D606
+crank_cycle_p4_gate_goto_crank_cycle_result_a:     J       crank_cycle_result_a             ; 773F 0 108 280 03CF06
+crank_cycle_p4_gate_goto_crank_cycle_f4_check:     J       crank_cycle_f4_check             ; 7742 0 108 280 03AF06
+idle_target_final_store_call_stub_or_short_helper:     CAL     stub_or_short_helper             ; 7745 1 208 180 326B51
+                VCAL    6                      ; 7748 1 208 180 16
+                CLR     A                      ; 7749 1 208 180 F9
+                JBS     off(00212h).2, idle_target_final_store_load_imm ; 774A 1 208 180 EA1203
+                JBR     off(00212h).4, idle_target_final_store_goto_idle_output_vcal5 ; 774D 1 208 180 DC1203
+idle_target_final_store_load_imm:     L       A, #02000h             ; 7750 1 208 180 670020
+idle_target_final_store_goto_idle_output_vcal5:     J       idle_output_vcal5             ; 7753 1 208 180 034B31
+ignition_timing_calc_task_load_ram2cf:     LB      A, off(002cfh)         ; 7756 0 208 180 F4CF
+                JEQ     ignition_timing_calc_task_set_ram222_bit6             ; 7758 0 208 180 C903
+                J       ignition_timing_calc_task_load_ram29f_2             ; 775A 0 208 180 033935
+ignition_timing_calc_task_set_ram222_bit6:     SB      off(00222h).6          ; 775D 0 208 180 C4221E
+                JEQ     ignition_timing_calc_task_load_dp_2             ; 7760 0 208 180 C903
+                J       ignition_timing_calc_task_load_ram29f             ; 7762 0 208 180 031334
+ignition_timing_calc_task_load_dp_2:     MOV     DP, #00316h            ; 7765 0 208 180 621603
+                JBS     off(0022fh).7, ignition_timing_calc_task_load_dp_ind_2 ; 7768 0 208 180 EF2F03
+                MOV     DP, #00318h            ; 776B 0 208 180 621803
+ignition_timing_calc_task_load_dp_ind_2:     L       A, [DP]                ; 776E 1 208 180 E2
+                ST      A, off(0029ah)         ; 776F 1 208 180 D49A
+                J       ignition_timing_calc_task_if_eq_goto_3475             ; 7771 1 208 180 036B34
+ignition_timing_calc_task_clear_ram22f_bit2_2:     RB      off(0022fh).2          ; 7774 1 208 180 C42F0A
+                RB      off(0022fh).1          ; 7777 1 208 180 C42F09
+                J       ignition_timing_calc_task_store_ram298             ; 777A 1 208 180 03BD77
+ignition_timing_calc_task_load_dp_ind_3:     L       A, [DP]                ; 777D 1 208 180 E2
+                SJ      ignition_timing_calc_task_cmp_acc_10             ; 777E 1 208 180 CB02
+ignition_timing_calc_task_if_lt_goto_7787:     JLT     ignition_timing_calc_task_load_imm_4             ; 7780 1 208 180 CA05
+ignition_timing_calc_task_cmp_acc_10:     CMP     A, #003ffh             ; 7782 1 208 180 C6FF03
+                JLT     ignition_timing_calc_task_goto_34c3             ; 7785 1 208 180 CA03
+ignition_timing_calc_task_load_imm_4:     L       A, #003ffh             ; 7787 1 208 180 67FF03
+ignition_timing_calc_task_goto_34c3:     J       ignition_timing_calc_task_goto_34c9             ; 778A 1 208 180 03C334
+ignition_timing_calc_task_sll_acc:     SLL     A                      ; 778D 1 208 180 53
+                JLT     ignition_timing_calc_task_goto_3558             ; 778E 1 208 180 CA03
+                SLL     A                      ; 7790 1 208 180 53
+                JGE     ignition_timing_calc_task_goto_355b             ; 7791 1 208 180 CD03
+ignition_timing_calc_task_goto_3558:     J       ignition_timing_calc_task_load_imm_2             ; 7793 1 208 180 035835
+ignition_timing_calc_task_goto_355b:     J       ignition_timing_calc_task_load_r1             ; 7796 1 208 180 035B35
+ignition_timing_calc_task_if_ge_goto_779d:     JGE     ignition_timing_calc_task_clear_r0_2             ; 7799 1 208 180 CD02
+                MOVB    r1, #0ffh              ; 779B 1 208 180 99FF
+ignition_timing_calc_task_clear_r0_2:     CLRB    r0                     ; 779D 1 208 180 2015
+                L       A, [DP]                ; 779F 1 208 180 E2
+                J       ignition_timing_calc_task_mul_acc_2             ; 77A0 1 208 180 036435
+ignition_timing_calc_task_sll_acc_2:     SLL     A                      ; 77A3 1 208 180 53
+                L       A, er1                 ; 77A4 1 208 180 35
+                ROL     A                      ; 77A5 1 208 180 33
+                CAL     clamp_0_3ff_simple             ; 77A6 1 208 180 32C777
+                J       ignition_timing_calc_task_if_ram22f_bit2_set             ; 77A9 1 208 180 036935
+ignition_timing_calc_task_cmp_acc_11:     CMP     A, #003ffh             ; 77AC 1 208 180 C6FF03
+                JGE     ignition_timing_calc_task_goto_3590             ; 77AF 1 208 180 CD03
+                J       ignition_timing_calc_task_cmp_acc_5             ; 77B1 1 208 180 038B35
+ignition_timing_calc_task_goto_3590:     J       ignition_timing_calc_task_load_imm_3             ; 77B4 1 208 180 039035
+ignition_timing_calc_task_clear_ram22f_bit1:     RB      off(0022fh).1          ; 77B7 1 208 180 C42F09
+ignition_timing_calc_task_clear_ram222_bit6:     RB      off(00222h).6          ; 77BA 1 208 180 C4220E
+ignition_timing_calc_task_store_ram298:     ST      A, off(00298h)         ; 77BD 1 208 180 D498
+                J       ignition_timing_calc_task_cmp_acc_6             ; 77BF 1 208 180 03A035
+ignition_timing_calc_task_clear_ram22f_bit2_3:     RB      off(0022fh).2          ; 77C2 1 208 180 C42F0A
+                SJ      ignition_timing_calc_task_clear_ram222_bit6             ; 77C5 1 208 180 CBF3
+; [CG] clamp_0_3ff_simple  @0x77C7
+; [CG] VERIFIED: clamps A to [0, 0x3FF] using a simpler direct-compare form than
+; [CG] clamp_0_to_3ff (no register-pair bound source, just two fixed compares).
+clamp_0_3ff_simple:     JLT     clamp_0_3ff_simple_load_imm             ; 77C7 1 208 180 CA05
+                CMP     A, #003ffh             ; 77C9 1 208 180 C6FF03
+                JLT     clamp_0_3ff_simple_return             ; 77CC 1 208 180 CA03
+clamp_0_3ff_simple_load_imm:     L       A, #003ffh             ; 77CE 1 208 180 67FF03
+clamp_0_3ff_simple_return:     RT                             ; 77D1 1 208 180 01
+cfg_selector3_dispatch:     JBS     off(00217h).6, cfg_selector3_dispatch_goto_2b7d ; 77D2 0 208 180 EE170D
+                CMP     off(00280h), #08000h   ; 77D5 0 208 180 B480C00080
+                JGE     cfg_selector3_dispatch_goto_5809             ; 77DA 0 208 180 CD03
+                J       cfg_selector3_dispatch_goto_5802             ; 77DC 0 208 180 036D2B
+cfg_selector3_dispatch_goto_5809:     J       cfg_selector3_dispatch_cmp_acc             ; 77DF 0 208 180 030958
+cfg_selector3_dispatch_goto_2b7d:     J       cfg_selector3_dispatch_goto_idle_ectvs_result1             ; 77E2 0 208 180 037D2B
+                DB  043h,000h,043h,000h,043h,000h,043h,000h ; 77E5
+                DB  030h,000h,043h,000h,043h,000h,043h,000h ; 77ED
+                DB  043h,000h,043h,000h,030h,000h,043h,000h ; 77F5
+                DB  07Ch,003h,035h,004h,0EAh,003h,09Ch,002h ; 77FD
+                DB  080h,000h,09Ch,002h,07Ch,003h,05Ah,004h ; 7805
+                DB  05Ah,004h,05Ah,004h,080h,000h,05Ah,004h ; 780D
+coldstart_full_reset_clear_ram221_bit7:     RB      off(00221h).7          ; 7831 0 208 180 C4210F
+                SB      (0011eh-00180h)[USP].4 ; 7834 0 208 180 C39E1C
+                SB      off(0021eh).4          ; 7837 0 208 180 C41E1C
+                J       coldstart_full_reset_orb_tcon3             ; 783A 0 208 180 03E839
+idle_state_defaults_if_ram219_bit0_clr:     JBR     off(00219h).0, idle_state_defaults_goto_idle_stage_b7_store ; 783D 0 208 180 D81906
+                JBR     off(0021eh).4, idle_state_defaults_goto_426c ; 7840 0 208 180 DC1E06
+                J       idle_state_defaults_load_stk             ; 7843 0 208 180 032A42
+idle_state_defaults_goto_idle_stage_b7_store:     J       idle_stage_b7_store             ; 7846 0 208 180 033C42
+idle_state_defaults_goto_426c:     J       idle_stage_c0_load_clear_ram219_bit0             ; 7849 0 208 180 036C42
+purge_counter_check:     JBR     off(00218h).0, purge_counter_check_cmp_stk ; 784C 0 208 180 D81803
+                JBR     off(0021eh).4, purge_counter_check_goto_purge_result_clear ; 784F 0 208 180 DC1E08
+purge_counter_check_cmp_stk:     CMP     (001b4h-00180h)[USP], #005dch ; 7852 0 208 180 B334C0DC05
+                J       purge_counter_check_if_lt_goto_purge_result_clear             ; 7857 0 208 180 034343
+purge_counter_check_goto_purge_result_clear:     J       purge_result_clear             ; 785A 0 208 180 035443
+crank_tooth_counter_reset_if_ram113_bit0_set:     JBS     off(00113h).0, crank_tooth_counter_reset_clear_ram11d_bit6 ; 786C 1 108 280 E81303
+                J       crank_tooth_counter_reset_clear_ram09f_bit2             ; 786F 1 108 280 036C04
+crank_tooth_counter_reset_clear_ram11d_bit6:     RB      off(0011dh).6          ; 7872 1 108 280 C41D0E
+                J       crank_tooth_seq_check             ; 7875 1 108 280 037104
+tps_hysteresis_reentry_if_ram116_bit3_clr:     JBR     off(00116h).3, tps_hysteresis_reentry_goto_postig_gate_chain2 ; 7878 0 100 280 DB1603
+                JBS     off(00111h).5, tps_hysteresis_reentry_goto_postig_result_default ; 787B 0 100 280 ED1103
+tps_hysteresis_reentry_goto_postig_gate_chain2:     J       postig_gate_chain2             ; 787E 0 100 280 03F218
+tps_hysteresis_reentry_goto_postig_result_default:     J       postig_result_default             ; 7881 0 100 280 032619
+cfgvariant_check_v5_16_17_cmp_r7:     CMPB    r7, #015h              ; 7884 0 208 ??? 27C015
+                JNE     cfgvariant_check_v5_16_17_goto_5468             ; 7887 0 208 ??? CE03
+                J       cfgvariant_check_v5_16_17_incb_r0             ; 7889 0 208 ??? 036754
+cfgvariant_check_v5_16_17_goto_5468:     J       cfgvariant_check_v5_16_17_goto_cfgvariant_remap_start             ; 788C 0 208 ??? 036854
+cfgvariant_check_v5_16_17_cmp_r7_2:     CMPB    r7, #016h              ; 788F 0 208 ??? 27C016
+                JNE     cfgvariant_check_v5_16_17_goto_5474             ; 7892 0 208 ??? CE03
+                J       cfgvariant_check_v5_16_17_incb_r0_2             ; 7894 0 208 ??? 037354
+cfgvariant_check_v5_16_17_goto_5474:     J       cfgvariant_check_v5_16_17_goto_cfgvariant_remap_start_2             ; 7897 0 208 ??? 037454
+overrev_hardcap_compare_cmp_stk:     CMPB    (001cah-00180h)[USP], #003h ; 789A 0 200 180 C34AC003
+                JNE     overrev_hardcap_compare_goto_knockretard2_store             ; 789E 0 200 180 CE0B
+                LB      A, #000h               ; 78A0 0 200 180 7700
+                CMPB    0c1h, #028h            ; 78A2 0 200 180 C5C1C028
+                JGE     overrev_hardcap_compare_goto_knockretard2_store             ; 78A6 0 200 180 CD03
+                J       overrev_hardcap_compare_load_imm             ; 78A8 0 200 180 039B0C
+overrev_hardcap_compare_goto_knockretard2_store:     J       knockretard2_store             ; 78AB 0 200 180 039D0C
+; ================================================================================================
+; Skeleton services for feature modules (called from the hook sites above; not part of stock P30)
+; ================================================================================================
+skel_boot_modules:
+                L       A, X1                  ; keep X1
+                PUSHS   A
+                CLR     X1
+                CLRB    A                      ; nothing is requested until a module asks
+                STB     A, 001f0h[X1]          ; fuel-cut request
+                STB     A, off(002fdh)         ; ignition retard request
+                POPS    A
+                MOV     X1, A
+                J       hook_init              ; module slot: once at power-up (tail call)
+skel_ign_service:
+                LB      A, off(002fdh)         ; ignition retard requested by the modules, in advance-byte units
+                JEQ     skel_ign_service_hook
+                LB      A, off(00246h)         ; final advance (the two bytes the spark timer is built from)
+                SUBB    A, off(002fdh)
+                JGE     skel_ign_service_store1
+                CLRB    A                      ; no further than the bottom of the scale
+skel_ign_service_store1:
+                STB     A, off(00246h)
+                LB      A, off(00247h)
+                SUBB    A, off(002fdh)
+                JGE     skel_ign_service_store2
+                CLRB    A
+skel_ign_service_store2:
+                STB     A, off(00247h)
+skel_ign_service_hook:
+                J       hook_ign               ; module slot (tail call)
+
+; ================================================================================================
+; Module interface: fixed addresses the feature editor relies on. See roms/p30-skeleton.md.
+;
+; Hook slots: 3 bytes each, RT until a module is installed; installing one writes J <module> over
+; the slot. The module ends with RT (to the hook site) or with J to the next module on the same hook.
+;   hook_init  5F00  once at power-up, before the main loop starts             (main-loop context)
+;   hook_main  5F03  once per main-loop pass                                     (main-loop context)
+;   hook_fuel  5F06  every fuel calculation, the final pulse width is word 146h  (crank interrupt)
+;   hook_ign   5F09  every spark calculation, the final advance is 246h/247h     (main-loop context)
+;   5F0C-5F17  four spare slots
+; Rules for module code: return with RT; leave LRB, USP, SSP and the caller's register bank as found;
+; A and the flags are free; save DP, X1, X2 if you use them. Use your own register bank:
+;   PUSHS LRB / MOV LRB, #nnh ... POPS LRB   (banks in module RAM: 7Bh=3D8h 7Ch=3E0h 7Dh=3E8h 7Eh=3F0h 3Fh=1F8h)
+;
+; RAM for modules (unused by the skeleton):
+;   0FEh-0FFh  tick: word, +1 every 2.048 ms (timer 1), read it, do not write it
+;   1F0h       fuel-cut request: while any bit is set, fuel is cut like the rev limiter (one bit per module)
+;   2FDh       ignition retard request: subtracted from the final advance (floor 0)
+;   0FBh-0FDh, 1F1h-1FFh, 2F7h-2F9h, 2FEh-2FFh, 3D6h-3F9h  free for modules
+; Outputs freed by the skeleton: P1.4 (dash check-engine lamp, 1 = on) and P1.5 (ECU LED).
+; ================================================================================================
+skel_free_start:                               ; everything from here to 5EFFh is free for modules
+                org 05F00h
+hook_init:      RT
+                NOP
+                NOP
+hook_main:      RT
+                NOP
+                NOP
+hook_fuel:      RT
+                NOP
+                NOP
+hook_ign:       RT
+                NOP
+                NOP
+hook_spare1:    RT
+                NOP
+                NOP
+hook_spare2:    RT
+                NOP
+                NOP
+hook_spare3:    RT
+                NOP
+                NOP
+hook_spare4:    RT
+                NOP
+                NOP
+                org 05FE0h
+skel_info:      DB  050h,033h,030h,02Dh,053h,04Bh,045h,04Ch,045h,054h,04Fh,04Eh ; 5FE0 'P30-SKELETON' identifies the base for the feature editor
+skel_version:   DB  001h, 000h             ; 5FEC layout version 1.0
+skel_free_lo:   DW  skel_free_start        ; 5FEE first free byte below the calibration
+skel_free_hi:   DW  05EFFh                 ; 5FF0 last free byte below the calibration
+skel_free2_lo:  DW  0764Ah                 ; 5FF2 free block above the calibration
+skel_free2_hi:  DW  07FFEh                 ; 5FF4 (7FFFh is the checksum byte)
+skel_hooks:     DW  hook_init              ; 5FF6 hook table
+skel_hookcount: DB  8                      ; 5FF8 slots
+skel_reserved:  DB  0FFh, 0FFh, 0FFh, 0FFh, 0FFh, 0FFh ; 5FF9
+; ------------------------------------------------------------------------------------------------
 ; Calibration: kept at its stock P30 addresses (6000h-7640h), so P30 definitions and XDFs still line up.
 ; The gap between the end of the code above and here is free space.
 ; ------------------------------------------------------------------------------------------------
@@ -10096,210 +10423,9 @@ crank_edge_flag_store_tbl_3:       DB  000h,000h,000h,000h,000h,000h,000h,000h,0
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h ; 762C
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h ; 7636
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h ; 7640
-inj_accum_check2_add_acc:     ADD     A, off(001bah)         ; 764A 1 108 280 87BA
-                CMP     A, #00100h             ; 764C 1 108 280 C60001
-                JGE     inj_accum_check2_store_ram1ba             ; 764F 1 108 280 CD01
-                CLR     A                      ; 7651 1 108 280 F9
-inj_accum_check2_store_ram1ba:     ST      A, off(001bah)         ; 7652 1 108 280 D4BA
-                CLR     A                      ; 7654 1 108 280 F9
-                J       inj_accum_store_114             ; 7655 1 108 280 03904C
-inj_accum_check4_add_acc:     ADD     A, off(001b8h)         ; 7658 1 108 280 87B8
-                CMP     A, #00100h             ; 765A 1 108 280 C60001
-                JGE     inj_accum_check4_store_ram1b8             ; 765D 1 108 280 CD01
-                CLR     A                      ; 765F 1 108 280 F9
-inj_accum_check4_store_ram1b8:     ST      A, off(001b8h)         ; 7660 1 108 280 D4B8
-                J       inj_accum2_zero2             ; 7662 1 108 280 038A4C
-crank_pswl4_store_cmp_acc:     CMPB    A, r0                  ; 7665 0 108 280 48
-                JLE     crank_pswl4_store_goto_4d5c             ; 7666 0 108 280 CF09
-                LB      A, [DP]                ; 7668 0 108 280 F2
-                ADDB    A, #001h               ; 7669 0 108 280 8601
-                CMPB    A, r0                  ; 766B 0 108 280 48
-                JLE     crank_pswl4_store_goto_4d5c             ; 766C 0 108 280 CF03
-                J       crank_pswl4_store_if_ram117_bit0_clr             ; 766E 0 108 280 03814D
-crank_pswl4_store_goto_4d5c:     J       crank_mul_alt_mulb_acc             ; 7671 0 108 280 035C4D
-timer2_irq_clear_orb_off_irq:     ORB     off(IRQ), #008h        ; 7674 1 0D0 ??? C418E008
-                RB      TRNSIT.0               ; 7678 1 0D0 ??? C54608
-                JEQ     timer2_irq_clear_return             ; 767B 1 0D0 ??? C903
-                SB      09fh.2                 ; 767D 1 0D0 ??? C59F1A
-timer2_irq_clear_return:     RTI                            ; 7680 1 0D0 ??? 02
-; [CG] diag_report_finalize  @0x7681
-; [CG] TRACED: writes into the diagnostic-snapshot RAM area (0x3AC/0x3D4, adjacent to
-; [CG] cfgvariant_snapshot_capture's own 0x340 block), gated by off(120h).2 and off(122h).1, and
-; [CG] hands off to fuelmap_do_lookup_b35. A second stage of the diagnostic/serial report
-; [CG] construction.
-diag_report_finalize:     JBR     off(00122h).1, diag_report_finalize_load_dp ; 7681 1 100 280 D92201
-                CLR     A                      ; 7684 1 100 280 F9
-diag_report_finalize_load_dp:     MOV     DP, #003d4h            ; 7685 1 100 280 62D403
-                ST      A, [DP]                ; 7688 1 100 280 D2
-                MOV     DP, #003ach            ; 7689 1 100 280 62AC03
-                J       diag_report_finalize_store_dp_ind             ; 768C 1 100 280 031814
-crank_tooth_count_store_set_ram120_bit2:     SB      off(00120h).2          ; 768F 0 108 280 C4201A
-                RB      PSWH.0                 ; 7692 0 108 280 A208
-                MOVB    off(001b6h), #077h     ; 7694 0 108 280 C4B69877
-                MOVB    off(001beh), #011h     ; 7698 0 108 280 C4BE9811
-                SB      PSWH.0                 ; 769C 0 108 280 A218
-                J       crank_cycle_dispatch2             ; 769E 0 108 280 036905
-threshold_bank_217_0_load_carry_ram0a0_bit6:     MB      C, 0a0h.6              ; 76A1 0 200 180 C5A02E
-                JBR     off(00227h).5, threshold_bank_217_0_goto_0a01 ; 76A4 0 200 180 DD2706
-                MOVB    r2, off(00236h)        ; 76A7 0 200 180 C4364A
-                MB      C, 0a0h.7              ; 76AA 0 200 180 C5A02F
-threshold_bank_217_0_goto_0a01:     J       threshold_bank_217_0_store_carry_pswl_bit4             ; 76AD 0 200 180 03010A
-flag_dispatch_21d_212:     JBS     off(00227h).5, flag_dispatch_21d_212_goto_ignmap_2d_lookup ; 76B0 1 200 180 ED2706
-                JBS     off(0021fh).1, flag_dispatch_21d_212_goto_ignmap_2d_lookup ; 76B3 1 200 180 E91F03
-                J       flag_dispatch_21d_212_load_r3             ; 76B6 1 200 180 034F0B
-flag_dispatch_21d_212_goto_ignmap_2d_lookup:     J       ignmap_2d_lookup             ; 76B9 1 200 180 03760B
-boot_completion_helper_clear_carry_2:     RC                             ; 76C9 0 208 180 95
-                LCB     A, idle_init_start_tbl            ; 76CA 0 208 180 909D1160
-                STB     A, r0                  ; 76CE 0 208 180 88
-                JNE     boot_completion_helper_store_carry_ram227_bit5             ; 76CF 0 208 180 CE0C
-                LCB     A, diag_mode_code_store_tbl_2            ; 76D1 0 208 180 909D0F60
-                JEQ     boot_completion_helper_store_carry_ram227_bit5             ; 76D5 0 208 180 C906
-                SLLB    r1                     ; 76D7 0 208 180 21D7
-                SLLB    r1                     ; 76D9 0 208 180 21D7
-                MOVB    r1, #080h              ; 76DB 0 208 180 9980
-boot_completion_helper_store_carry_ram227_bit5:     MB      off(00227h).5, C       ; 76DD 0 208 180 C4273D
-                MOV     DP, #003c7h            ; 76E0 0 208 180 62C703
-                J       boot_completion_helper_load_dp_ind             ; 76E3 0 208 180 03BE55
-boot_completion_helper_rom_load_tbl_600f:     LCB     A, diag_mode_code_store_tbl_2            ; 76E6 0 208 180 909D0F60
-                JEQ     boot_completion_helper_goto_55c5             ; 76EA 0 208 180 C906
-                SLLB    r2                     ; 76EC 0 208 180 22D7
-                MOVB    r2, #080h              ; 76EE 0 208 180 9A80
-                RORB    r2                     ; 76F0 0 208 180 22C7
-boot_completion_helper_goto_55c5:     J       boot_completion_helper_load_r2             ; 76F2 0 208 180 03C555
-crankfuel_timer_wait_loop_sll_er0:     SLL     er0                    ; 76F5 1 100 280 44D7
-                RB      off(00122h).0          ; 76F7 1 100 280 C42208
-                J       crankfuel_timer_wait_loop_if_eq_goto_cylinder_index_adva             ; 76FA 1 100 280 038414
-sensor_check_vcal3_if_ram217_bit5_set:     JBS     off(00217h).5, sensor_check_vcal3_load_ram2be ; 76FD 0 208 180 ED1706
-                JBS     off(00230h).5, sensor_check_vcal3_goto_sensor_check_clear ; 7700 0 208 180 ED3007
-                J       sensor_check_vcal3_cmp_ram236             ; 7703 0 208 180 034A3B
-sensor_check_vcal3_load_ram2be:     MOVB    off(002beh), #064h     ; 7706 0 208 180 C4BE9864
-sensor_check_vcal3_goto_sensor_check_clear:     J       sensor_check_clear             ; 770A 0 208 180 03673B
-prep_lowpower_seq_store_tmr1:     ST      A, TMR1                ; 770D 1 208 180 D536
-                SLL     er0                    ; 770F 1 208 180 44D7
-                DIV                            ; 7711 1 208 180 9037
-                DIV                            ; 7713 1 208 180 9037
-                J       prep_lowpower_seq_load_carry_ram09f_bit1             ; 7715 1 208 180 030E4B
-int_crank_sync_if_ram112_bit7_set:     JBS     off(00112h).7, int_crank_sync_set_ram120_bit4 ; 7718 1 108 280 EF1203
-                J       int_crank_sync_clear_irqh_bit7             ; 771B 1 108 280 030304
-int_crank_sync_set_ram120_bit4:     SB      off(00120h).4          ; 771E 1 108 280 C4201C
-                J       crank_sync_retry_check             ; 7721 1 108 280 032D04
-crank_cycle_p4_gate_if_ram121_bit1_clr:     JBR     off(00121h).1, crank_cycle_p4_gate_goto_crank_cycle_f4_check ; 7730 0 108 280 D9210F
-                JBS     off(00112h).2, crank_cycle_p4_gate_if_ram118_bit0_set ; 7733 0 108 280 EA1203
-                JBR     off(00112h).4, crank_cycle_p4_gate_goto_crank_cycle_result_common ; 7736 0 108 280 DC1203
-crank_cycle_p4_gate_if_ram118_bit0_set:     JBS     off(00118h).0, crank_cycle_p4_gate_goto_crank_cycle_result_a ; 7739 0 108 280 E81803
-crank_cycle_p4_gate_goto_crank_cycle_result_common:     J       crank_cycle_result_common             ; 773C 0 108 280 03D606
-crank_cycle_p4_gate_goto_crank_cycle_result_a:     J       crank_cycle_result_a             ; 773F 0 108 280 03CF06
-crank_cycle_p4_gate_goto_crank_cycle_f4_check:     J       crank_cycle_f4_check             ; 7742 0 108 280 03AF06
-idle_target_final_store_call_stub_or_short_helper:     CAL     stub_or_short_helper             ; 7745 1 208 180 326B51
-                VCAL    6                      ; 7748 1 208 180 16
-                CLR     A                      ; 7749 1 208 180 F9
-                JBS     off(00212h).2, idle_target_final_store_load_imm ; 774A 1 208 180 EA1203
-                JBR     off(00212h).4, idle_target_final_store_goto_idle_output_vcal5 ; 774D 1 208 180 DC1203
-idle_target_final_store_load_imm:     L       A, #02000h             ; 7750 1 208 180 670020
-idle_target_final_store_goto_idle_output_vcal5:     J       idle_output_vcal5             ; 7753 1 208 180 034B31
-ignition_timing_calc_task_load_ram2cf:     LB      A, off(002cfh)         ; 7756 0 208 180 F4CF
-                JEQ     ignition_timing_calc_task_set_ram222_bit6             ; 7758 0 208 180 C903
-                J       ignition_timing_calc_task_load_ram29f_2             ; 775A 0 208 180 033935
-ignition_timing_calc_task_set_ram222_bit6:     SB      off(00222h).6          ; 775D 0 208 180 C4221E
-                JEQ     ignition_timing_calc_task_load_dp_2             ; 7760 0 208 180 C903
-                J       ignition_timing_calc_task_load_ram29f             ; 7762 0 208 180 031334
-ignition_timing_calc_task_load_dp_2:     MOV     DP, #00316h            ; 7765 0 208 180 621603
-                JBS     off(0022fh).7, ignition_timing_calc_task_load_dp_ind_2 ; 7768 0 208 180 EF2F03
-                MOV     DP, #00318h            ; 776B 0 208 180 621803
-ignition_timing_calc_task_load_dp_ind_2:     L       A, [DP]                ; 776E 1 208 180 E2
-                ST      A, off(0029ah)         ; 776F 1 208 180 D49A
-                J       ignition_timing_calc_task_if_eq_goto_3475             ; 7771 1 208 180 036B34
-ignition_timing_calc_task_clear_ram22f_bit2_2:     RB      off(0022fh).2          ; 7774 1 208 180 C42F0A
-                RB      off(0022fh).1          ; 7777 1 208 180 C42F09
-                J       ignition_timing_calc_task_store_ram298             ; 777A 1 208 180 03BD77
-ignition_timing_calc_task_load_dp_ind_3:     L       A, [DP]                ; 777D 1 208 180 E2
-                SJ      ignition_timing_calc_task_cmp_acc_10             ; 777E 1 208 180 CB02
-ignition_timing_calc_task_if_lt_goto_7787:     JLT     ignition_timing_calc_task_load_imm_4             ; 7780 1 208 180 CA05
-ignition_timing_calc_task_cmp_acc_10:     CMP     A, #003ffh             ; 7782 1 208 180 C6FF03
-                JLT     ignition_timing_calc_task_goto_34c3             ; 7785 1 208 180 CA03
-ignition_timing_calc_task_load_imm_4:     L       A, #003ffh             ; 7787 1 208 180 67FF03
-ignition_timing_calc_task_goto_34c3:     J       ignition_timing_calc_task_goto_34c9             ; 778A 1 208 180 03C334
-ignition_timing_calc_task_sll_acc:     SLL     A                      ; 778D 1 208 180 53
-                JLT     ignition_timing_calc_task_goto_3558             ; 778E 1 208 180 CA03
-                SLL     A                      ; 7790 1 208 180 53
-                JGE     ignition_timing_calc_task_goto_355b             ; 7791 1 208 180 CD03
-ignition_timing_calc_task_goto_3558:     J       ignition_timing_calc_task_load_imm_2             ; 7793 1 208 180 035835
-ignition_timing_calc_task_goto_355b:     J       ignition_timing_calc_task_load_r1             ; 7796 1 208 180 035B35
-ignition_timing_calc_task_if_ge_goto_779d:     JGE     ignition_timing_calc_task_clear_r0_2             ; 7799 1 208 180 CD02
-                MOVB    r1, #0ffh              ; 779B 1 208 180 99FF
-ignition_timing_calc_task_clear_r0_2:     CLRB    r0                     ; 779D 1 208 180 2015
-                L       A, [DP]                ; 779F 1 208 180 E2
-                J       ignition_timing_calc_task_mul_acc_2             ; 77A0 1 208 180 036435
-ignition_timing_calc_task_sll_acc_2:     SLL     A                      ; 77A3 1 208 180 53
-                L       A, er1                 ; 77A4 1 208 180 35
-                ROL     A                      ; 77A5 1 208 180 33
-                CAL     clamp_0_3ff_simple             ; 77A6 1 208 180 32C777
-                J       ignition_timing_calc_task_if_ram22f_bit2_set             ; 77A9 1 208 180 036935
-ignition_timing_calc_task_cmp_acc_11:     CMP     A, #003ffh             ; 77AC 1 208 180 C6FF03
-                JGE     ignition_timing_calc_task_goto_3590             ; 77AF 1 208 180 CD03
-                J       ignition_timing_calc_task_cmp_acc_5             ; 77B1 1 208 180 038B35
-ignition_timing_calc_task_goto_3590:     J       ignition_timing_calc_task_load_imm_3             ; 77B4 1 208 180 039035
-ignition_timing_calc_task_clear_ram22f_bit1:     RB      off(0022fh).1          ; 77B7 1 208 180 C42F09
-ignition_timing_calc_task_clear_ram222_bit6:     RB      off(00222h).6          ; 77BA 1 208 180 C4220E
-ignition_timing_calc_task_store_ram298:     ST      A, off(00298h)         ; 77BD 1 208 180 D498
-                J       ignition_timing_calc_task_cmp_acc_6             ; 77BF 1 208 180 03A035
-ignition_timing_calc_task_clear_ram22f_bit2_3:     RB      off(0022fh).2          ; 77C2 1 208 180 C42F0A
-                SJ      ignition_timing_calc_task_clear_ram222_bit6             ; 77C5 1 208 180 CBF3
-; [CG] clamp_0_3ff_simple  @0x77C7
-; [CG] VERIFIED: clamps A to [0, 0x3FF] using a simpler direct-compare form than
-; [CG] clamp_0_to_3ff (no register-pair bound source, just two fixed compares).
-clamp_0_3ff_simple:     JLT     clamp_0_3ff_simple_load_imm             ; 77C7 1 208 180 CA05
-                CMP     A, #003ffh             ; 77C9 1 208 180 C6FF03
-                JLT     clamp_0_3ff_simple_return             ; 77CC 1 208 180 CA03
-clamp_0_3ff_simple_load_imm:     L       A, #003ffh             ; 77CE 1 208 180 67FF03
-clamp_0_3ff_simple_return:     RT                             ; 77D1 1 208 180 01
-cfg_selector3_dispatch:     JBS     off(00217h).6, cfg_selector3_dispatch_goto_2b7d ; 77D2 0 208 180 EE170D
-                CMP     off(00280h), #08000h   ; 77D5 0 208 180 B480C00080
-                JGE     cfg_selector3_dispatch_goto_5809             ; 77DA 0 208 180 CD03
-                J       cfg_selector3_dispatch_goto_5802             ; 77DC 0 208 180 036D2B
-cfg_selector3_dispatch_goto_5809:     J       cfg_selector3_dispatch_cmp_acc             ; 77DF 0 208 180 030958
-cfg_selector3_dispatch_goto_2b7d:     J       cfg_selector3_dispatch_goto_idle_ectvs_result1             ; 77E2 0 208 180 037D2B
-                DB  043h,000h,043h,000h,043h,000h,043h,000h ; 77E5
-                DB  030h,000h,043h,000h,043h,000h,043h,000h ; 77ED
-                DB  043h,000h,043h,000h,030h,000h,043h,000h ; 77F5
-                DB  07Ch,003h,035h,004h,0EAh,003h,09Ch,002h ; 77FD
-                DB  080h,000h,09Ch,002h,07Ch,003h,05Ah,004h ; 7805
-                DB  05Ah,004h,05Ah,004h,080h,000h,05Ah,004h ; 780D
-coldstart_full_reset_clear_ram221_bit7:     RB      off(00221h).7          ; 7831 0 208 180 C4210F
-                SB      (0011eh-00180h)[USP].4 ; 7834 0 208 180 C39E1C
-                SB      off(0021eh).4          ; 7837 0 208 180 C41E1C
-                J       coldstart_full_reset_orb_tcon3             ; 783A 0 208 180 03E839
-idle_state_defaults_if_ram219_bit0_clr:     JBR     off(00219h).0, idle_state_defaults_goto_idle_stage_b7_store ; 783D 0 208 180 D81906
-                JBR     off(0021eh).4, idle_state_defaults_goto_426c ; 7840 0 208 180 DC1E06
-                J       idle_state_defaults_load_stk             ; 7843 0 208 180 032A42
-idle_state_defaults_goto_idle_stage_b7_store:     J       idle_stage_b7_store             ; 7846 0 208 180 033C42
-idle_state_defaults_goto_426c:     J       idle_stage_c0_load_clear_ram219_bit0             ; 7849 0 208 180 036C42
-purge_counter_check:     JBR     off(00218h).0, purge_counter_check_cmp_stk ; 784C 0 208 180 D81803
-                JBR     off(0021eh).4, purge_counter_check_goto_purge_result_clear ; 784F 0 208 180 DC1E08
-purge_counter_check_cmp_stk:     CMP     (001b4h-00180h)[USP], #005dch ; 7852 0 208 180 B334C0DC05
-                J       purge_counter_check_if_lt_goto_purge_result_clear             ; 7857 0 208 180 034343
-purge_counter_check_goto_purge_result_clear:     J       purge_result_clear             ; 785A 0 208 180 035443
-crank_tooth_counter_reset_if_ram113_bit0_set:     JBS     off(00113h).0, crank_tooth_counter_reset_clear_ram11d_bit6 ; 786C 1 108 280 E81303
-                J       crank_tooth_counter_reset_clear_ram09f_bit2             ; 786F 1 108 280 036C04
-crank_tooth_counter_reset_clear_ram11d_bit6:     RB      off(0011dh).6          ; 7872 1 108 280 C41D0E
-                J       crank_tooth_seq_check             ; 7875 1 108 280 037104
-tps_hysteresis_reentry_if_ram116_bit3_clr:     JBR     off(00116h).3, tps_hysteresis_reentry_goto_postig_gate_chain2 ; 7878 0 100 280 DB1603
-                JBS     off(00111h).5, tps_hysteresis_reentry_goto_postig_result_default ; 787B 0 100 280 ED1103
-tps_hysteresis_reentry_goto_postig_gate_chain2:     J       postig_gate_chain2             ; 787E 0 100 280 03F218
-tps_hysteresis_reentry_goto_postig_result_default:     J       postig_result_default             ; 7881 0 100 280 032619
-cfgvariant_check_v5_16_17_cmp_r7:     CMPB    r7, #015h              ; 7884 0 208 ??? 27C015
-                JNE     cfgvariant_check_v5_16_17_goto_5468             ; 7887 0 208 ??? CE03
-                J       cfgvariant_check_v5_16_17_incb_r0             ; 7889 0 208 ??? 036754
-cfgvariant_check_v5_16_17_goto_5468:     J       cfgvariant_check_v5_16_17_goto_cfgvariant_remap_start             ; 788C 0 208 ??? 036854
-cfgvariant_check_v5_16_17_cmp_r7_2:     CMPB    r7, #016h              ; 788F 0 208 ??? 27C016
-                JNE     cfgvariant_check_v5_16_17_goto_5474             ; 7892 0 208 ??? CE03
-                J       cfgvariant_check_v5_16_17_incb_r0_2             ; 7894 0 208 ??? 037354
-cfgvariant_check_v5_16_17_goto_5474:     J       cfgvariant_check_v5_16_17_goto_cfgvariant_remap_start_2             ; 7897 0 208 ??? 037454
-overrev_hardcap_compare_cmp_stk:     CMPB    (001cah-00180h)[USP], #003h ; 789A 0 200 180 C34AC003
-                JNE     overrev_hardcap_compare_goto_knockretard2_store             ; 789E 0 200 180 CE0B
-                LB      A, #000h               ; 78A0 0 200 180 7700
-                CMPB    0c1h, #028h            ; 78A2 0 200 180 C5C1C028
-                JGE     overrev_hardcap_compare_goto_knockretard2_store             ; 78A6 0 200 180 CD03
-                J       overrev_hardcap_compare_load_imm             ; 78A8 0 200 180 039B0C
-overrev_hardcap_compare_goto_knockretard2_store:     J       knockretard2_store             ; 78AB 0 200 180 039D0C
-                DB  084h ; CHECKSUM correction: keeps the 8-bit sum of the image at 0 (the ROM checks it at run time, BRK 48h)
+; ------------------------------------------------------------------------------------------------
+; Checksum: the 8-bit sum of the whole image must be 0 (the ROM checks it while running, BRK 48h).
+; This byte, at a fixed address, is what the build (and the feature editor) adjusts.
+; ------------------------------------------------------------------------------------------------
+                org 07FFFh
+checksum_fix:   DB  0B0h ; CHECKSUM correction
