@@ -2160,12 +2160,8 @@ ve_result_flag_store_store_carry_ram11e_bit3:     MB      off(0011eh).3, C      
                 MOVB    r1, #014h              ; 1678 0 100 280 9914
                 MOVB    r2, off(001d3h)        ; 167A 0 100 280 C4D34A
                 MOV     X2, off(001d6h)        ; 167D 0 100 280 B4D679
-                MOVB    r3, off(001d9h)        ; 1680 0 100 280 C4D94B
-                MOV     er3, off(001dch)       ; 1683 0 100 280 B4DC4B
-                MOV     X1, #ve_result_flag_store_tbl          ; 1686 0 100 280 601475
-                RB      PSWL.5                 ; 1689 0 100 280 A30D
-                JBS     off(0011fh).1, ve_table_result_store_call_table2d_lookup_interp ; 168B 0 100 280 E91F0F
-                J       ve_table_result_store ; (skeleton: fault flags are always clear)
+; (skeleton: one VE table for both cams, as HTS - the low-cam table and axis)
+                RB      PSWL.5                 ; 1689
 ve_table_result_store:     MOVB    r3, off(001d8h)        ; 1694 0 100 280 C4D84B
                 MOV     er3, off(001dah)       ; 1697 0 100 280 B4DA4B
                 MOV     X1, #ve_table_result_store_tbl          ; 169A 0 100 280 604C74
@@ -9568,4 +9564,4 @@ crank_edge_flag_store_tbl_3:       DB  000h,000h,000h,000h,000h,000h,000h,000h,0
 ; This byte, at a fixed address, is what the build (and the feature editor) adjusts.
 ; ------------------------------------------------------------------------------------------------
                 org 07FFFh
-checksum_fix:   DB  013h ; CHECKSUM correction
+checksum_fix:   DB  00Fh ; CHECKSUM correction
