@@ -6,13 +6,17 @@
 ; stock P30 at 14 operating points (cranking, cold/warm idle, cruise, part load, WOT low and VTEC,
 ; rev limit, decel, hot WOT, key-on prime, stall, tip-in).
 ;
-; Kept: boot and self-tests, ROM checksum, crank/TDC/CYP sync, sensors, fuel (maps, cranking,
-;   warm-up, IAT/baro/battery corrections, tip-in, decel cut), ignition, rev limiter, VTEC (with its
-;   oil-pressure check), idle air control (IACV), fuel pump, and the stock calibration at 6000h-7649h.
+; Kept: boot, ROM checksum, crank/TDC/CYP sync, sensors, fuel (one VE map for both cams, cranking,
+;   warm-up, IAT/baro/battery corrections, tip-in, decel cut), ignition, rev limiter, VTEC (solenoid
+;   only), idle air control (IACV), fuel pump, A/C clutch, radiator fan, alternator control, O2 heater.
 ; Removed: serial datalog/diagnostic link, trouble-code detection, storage and flashing, check-engine
-;   lamp, closed-loop O2 (fuel is always open loop), EGR, automatic transmission control and lock-up.
-; Added: module hooks at 5F00h, module requests (fuel cut, ignition retard), a 2.048 ms tick, and a
-;   checksum byte at 7FFFh. Free for modules: skel_free_start-5EFFh and 764Ah-7FFEh.
+;   lamp, fail-safe sensor substitution, closed-loop O2 (fuel is always open loop), EGR, knock control
+;   unit interface, VTEC oil-pressure monitoring, speed limiter, automatic transmission control and
+;   lock-up, EVAP purge control, the register/RAM/stack/clock self-tests, and every calibration table
+;   only those used. The calibration is packed straight after the code, so stock P30 definitions do
+;   not line up with it.
+; Added: module hooks at 7F00h, module requests (fuel cut, ignition retard), a 2.048 ms tick, an info
+;   block at 7FE0h and a checksum byte at 7FFFh. Free for modules: skel_free_start-7EFFh.
 ;
 ; Not bench-tested on a car. Treat it like any new ROM: emulator and wideband first.
 ;==================================================================================================
