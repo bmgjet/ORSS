@@ -17,16 +17,18 @@ Treat it like any new ROM: use the emulator, a wideband and a bench before drivi
 | Crank/TDC/CYP sync, sensors and their conditioning | Serial datalog / diagnostic link (receive handler, command handler, transmitter) |
 | Fuel: one VE map for both cams (the low-cam map, as HTS does), cranking, warm-up, IAT/baro/battery, tip-in, decel cut | Trouble-code detection, debounce, storage, the stored-code checksum, the scan-tool snapshot, fail-safe sensor substitution |
 | Ignition maps and corrections | Check-engine lamp and code flashing (the lamp and ECU LED stay off) |
-| Rev limiter | Closed-loop O2: fuel always takes the open-loop path (O2 correction 1.0) |
+| Rev limiter | O2 control: no closed loop (fuel always takes the open-loop path, O2 correction 1.0), the O2 sensor is not read, and the closed-loop enable flag (219h.0) stays clear |
 | VTEC solenoid control | VTEC oil-pressure switch monitoring |
 | Idle air control (IACV) and the fuel pump | Knock control unit interface and knock retard |
-| A/C clutch cut, radiator fan, alternator control, O2 heater | Speed limiter |
+| Radiator fan, alternator control | Speed limiter |
 | | EGR (the valve duty stays at its power-up value, closed), and the EGR maps |
 | | Automatic transmission: shift and lock-up control (P0.4, P4.3) |
 | | EVAP purge control (P0.1 stays at its power-up level: solenoid off, the stock warm-engine state) |
+| | O2 heater (P1.2 stays at its power-up level: heater off) and its feedback check |
+| | A/C clutch control (P0.0 stays at its power-up level: clutch off). The A/C switch is ignored, so there is no A/C idle-up or A/C compensation either |
 | | Every calibration table only the removed code read |
 
-Size: 21,470 of 32,768 bytes used (stock P30: 30,894), with **11,098 bytes free** for modules in one
+Size: 20,729 of 32,768 bytes used (stock P30: 30,894), with **11,839 bytes free** for modules in one
 block, plus 200 bytes between the hook table and the info block.
 
 ### What that means on the car
@@ -39,22 +41,25 @@ block, plus 200 bytes between the hook table and the info block.
 - **The calibration moved.** Tables are packed straight after the code, so stock P30 definitions and
   XDFs do not line up. Make definitions for this ROM (for example with `cal_detect` / `cal_save`).
 - **Open loop only.** Fuel is the map value with no O2 trim, so tune the VE map with a wideband.
+  The narrowband sensor is not read and its heater is off, so it can come out (or be replaced by a
+  wideband that a module reads).
+- **No A/C.** The compressor never engages, whatever the dash switch says.
 
 ## Memory map
 
 | Address | What |
 | --- | --- |
 | 0000h-0037h | Vectors (the serial receive vector goes to the spurious-interrupt trap) |
-| 0038h-4254h | Skeleton code (this build) |
-| 4255h-53A5h | Calibration, packed straight after the code (this build) |
-| `skel_free_start`-7EFFh | **Free for modules** (53A6h-7EFFh in this build, 11,098 bytes) |
+| 0038h-3FA5h | Skeleton code (this build) |
+| 3FA6h-50C0h | Calibration, packed straight after the code (this build) |
+| `skel_free_start`-7EFFh | **Free for modules** (50C1h-7EFFh in this build, 11,839 bytes) |
 | 7F00h-7F17h | **Hook table**: eight 3-byte slots |
 | 7F18h-7FDFh | Free (200 bytes) |
 | 7FE0h-7FFEh | **Skeleton info block** (see below) |
 | 7FFFh | **Checksum byte**: the 8-bit sum of the image must be 0, and the ROM checks it while running (BRK 48h) |
 
 Everything from 7F00h up is pinned with `org`, so it stays put when the code above it changes size.
-Read `skel_free_start` from the info block rather than hard-coding 53A6h.
+Read `skel_free_start` from the info block rather than hard-coding 50C1h.
 
 ### Info block (7FE0h)
 
@@ -121,8 +126,11 @@ keeps running. 2FDh=20h moves the spark 8 degrees later at cruise.
   still initialises parts of it.
 - Outputs: **P1.4** (dash check-engine lamp, 1 = on) and **P1.5** (ECU board LED). The crank
   interrupt copies P1 to the board's output port (8255 port C), so `SB P1.4` / `RB P1.4` is all a
-  module needs to do. **P0.4** (A/T) and **P0.1** (purge) are no longer driven by the skeleton; a
-  module can take them over (P0 bits are active low, and reach 8255 port B).
+  module needs to do. **P0.0** (A/C clutch), **P0.1** (purge), **P0.4** (A/T) and **P1.2** (O2 heater)
+  are no longer driven by the skeleton; a module can take them over (they are active low; P0 reaches
+  8255 port B, P1 port C).
+- Inputs: the A/C switch (211h bit 2) is read into RAM but nothing uses it, so a module can give it
+  another job (a launch-control or map-switch button, for example).
 
 ## Feature files
 
@@ -163,12 +171,14 @@ Some caveats about that comparison:
 - **Closed-loop O2 is intentionally gone.** At warm idle, 1100 rpm idle, cruise and part load the
   skeleton runs the map value with no O2 trim (5-15% less fuel than stock at the simulator's fixed
   0.45 V O2 reading). Those four points are compared against the skeleton's own open-loop values.
+  With the closed-loop enable flag now always clear, fuel, spark and idle at those points came out
+  the same as before.
 - **Long injector pulses.** Above about 4300 rpm at high load, the pulse is longer than 180 degrees
   of crank. In that regime the simulator reports odd pulse widths (for example 0.4 ms at 3000 rpm
   WOT) for stock and skeleton alike. The comparison still holds because both behave the same, but
   absolute fuel numbers there are not trustworthy in the simulator.
-- **Paths the test points do not reach** (a failed sensor, very cold starts, A/C on, a hot fan
-  cycle) were checked by reading the code, not by running it.
+- **Paths the test points do not reach** (a failed sensor, very cold starts, a hot fan cycle) were
+  checked by reading the code, not by running it.
 
 ## Still in there
 
@@ -179,10 +189,6 @@ depends on them:
   the start of the calibration, or, when those say so, the board's configuration resistors
   (ADC readings at 3BFh/3C7h), into the feature flags at 216h/217h/219h/227h. The result depends
   on the ECU hardware, so it was not folded into constants.
-- **O2 heater (P1.2).** Its drive and feedback check are wound into the crank-edge code and into
-  the flags (219h.3, 223h.x) the injector timing code still reads.
 - **P0.5, P0.6, P1.1, P1.6.** Driven by the scheduler and the output block (P0.5 from the
   electrical load detector and the brake switch, P0.6 toggled in a coolant window). The P28 pin
   map used here does not name them.
-- The main-loop block that sets the closed-loop enable flags (219h.0, 223h.x) stays, because the
-  injector timing, tip-in and dead-time code still reads those flags.
