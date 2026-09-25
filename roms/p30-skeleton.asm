@@ -44,6 +44,23 @@
 ;   share comes back when either needs it; code that belongs to two (a fault check inside the purge
 ;   logic, say) only when both are defined. The checksum byte is set by the assembler for any mix.
 ;==================================================================================================
+; ---------------------------------------------------------------------------------------------------
+; Extension points. roms/p30-features/features.inc is included at each one, and every feature module
+; in it assembles only its part for that point, and only when its FEAT_ name is defined. With no
+; feature defined none of them emits a byte.
+XP_DEFS         EQU     1       ; defines, RAM and requirements, before any code
+XP_BOOT         EQU     2       ; once at power-up, after the module requests are cleared (main loop)
+XP_MAIN         EQU     3       ; once per main-loop pass
+XP_FUEL         EQU     4       ; every fuel calculation: final pulse width in word 146h (crank interrupt)
+XP_IGN          EQU     5       ; every spark calculation: final advance in 246h/247h (main loop)
+XP_TICK         EQU     6       ; every 2.048 ms (timer 1 interrupt, bank page 0)
+XP_OUT          EQU     7       ; after the output block (main loop)
+XP_CAL          EQU     8       ; calibration tables (after the stock ones)
+XP_CODE         EQU     9       ; module code, at the start of the free space
+undef XP
+define XP XP_DEFS
+include "p30-features/features.inc"
+; ---------------------------------------------------------------------------------------------------
                 org 0000h
 int_start_vec:            DW  int_start        ; 0000 E221
 int_break_vec:            DW  int_break        ; 0002 E921
@@ -219,6 +236,9 @@ timer1_tmr1_reload:     ORB     off(TCON1), #008h      ; 013E 0 0C8 ??? C441E008
                 JNE     timer1_tick_done
                 INCB    0ffh
 timer1_tick_done:
+undef XP
+define XP XP_TICK
+include "p30-features/features.inc"
                 INCB    r6                     ; 0142 0 0C8 ??? AE
                 L       A, #00a00h             ; 0143 1 0C8 ??? 67000A
                 SUB     A, er0                 ; 0146 1 0C8 ??? 28
@@ -245,7 +265,12 @@ timer2_state1_check:     JEQ     timer2_state2_check             ; 0177 0 0D0 ??
                 JBR     off(ACC).0, timer2_tcon3_check2 ; 0179 0 0D0 ??? D80637
                 JBS     off(000d0h).3, timer2_tcon3_clear ; 017C 0 0D0 ??? EBD0E4
                 CLRB    A                      ; 017F 0 0D0 ??? FA
+if defined(NEED_SPARKCUT)
+                CMPB    0fch, #000h            ; (skeleton service) spark-cut request: any bit set, no spark
+                JNE     skel_sparkcut_1
+endif
                 ORB     off(TCON3), #004h      ; 0180 0 0D0 ??? C443E004
+skel_sparkcut_1:
                 SJ       timer2_state_dispatch            ; 0184 0 0D0 ??? 035E01
 timer2_state2_check:     LB      A, r0                  ; 0187 0 0D0 ??? 78
                 ADDB    A, #001h               ; 0188 0 0D0 ??? 8601
@@ -279,7 +304,12 @@ timer2_tcon3_check2:     JBS     off(TCON3).2, timer2_tcon3_check ; 01B3 0 0D0 ?
 timer3_reload_alt:     L       A, off(TM3)            ; 01C5 1 0D0 ??? E43C
                 ADD     A, #00004h             ; 01C7 1 0D0 ??? 860400
 timer3_reload_store:     ST      A, off(TMR3)           ; 01CA 1 0D0 ??? D43E
+if defined(NEED_SPARKCUT)
+                CMPB    0fch, #000h            ; (skeleton service) spark-cut request: any bit set, no spark
+                JNE     skel_sparkcut_2
+endif
                 ORB     off(TCON3), #008h      ; 01CC 1 0D0 ??? C443E008
+skel_sparkcut_2:
                 SJ       timer2_irq_clear            ; 01D0 1 0D0 ??? 036E01
 int_INT0:       L       A, 0f4h                ; 01D3 1 ??? ??? E5F4
                 ST      A, IE                  ; 01D5 1 ??? ??? D51A
@@ -441,6 +471,10 @@ int_timer_3:    L       A, 0f4h                ; 02FB 1 ??? ??? E5F4
                 JLT     timer3isr_return             ; 030A 0 0D0 ??? CA0A
                 JBS     off(TCON3).2, timer3isr_return ; 030C 0 0D0 ??? EA4307
                 MOV     off(TMR3), er3         ; 030F 0 0D0 ??? 477C3E
+if defined(NEED_SPARKCUT)
+                CMPB    0fch, #000h            ; (skeleton service) spark-cut request: any bit set, no spark
+                JNE     timer3isr_return
+endif
                 ORB     off(TCON3), #008h      ; 0312 0 0D0 ??? C443E008
 timer3isr_return:     L       A, off(000f2h)         ; 0316 1 0D0 ??? E4F2
                 ANDB    PSWH, #0feh            ; 0318 1 0D0 ??? A2D0FE
@@ -1720,9 +1754,6 @@ scale_shift_loop:
 scale_direction_toggle:
 scale_result_common:
 flags_pack_233_7:
-knock_244_table_select:
-knock_244_lookup:
-knock_244_store:
 endif
 if defined(FEAT_STOCK_KNOCK)
 knock_244_table_select:     LB      A, (001d9h-00180h)[USP] ; 0CF0 0 200 180 F359
@@ -1734,6 +1765,10 @@ knock_244_table_select:     LB      A, (001d9h-00180h)[USP] ; 0CF0 0 200 180 F35
                 MOV     DP, #tbl_knock244_b          ; 0D00 0 200 180 62486B
 knock_244_lookup:     CAL     knock_244_helper             ; 0D03 0 200 180 327950
 knock_244_store:     STB     A, off(00243h)         ; 0D06 0 200 180 D443
+else
+knock_244_table_select:
+knock_244_lookup:
+knock_244_store:
 endif
 flags_pack_sj:     LB      A, #03ah               ; 0D08 0 200 180 773A
                 MOVB    r0, #040h              ; 0D0A 0 200 180 9840
@@ -2123,6 +2158,9 @@ endif
                 AND     IE, #002a0h            ; 102D 1 100 280 B51AD0A002
                 RB      PSWH.0                 ; 1032 1 100 280 A208
                 LB      A, P1                  ; 1034 0 100 280 F522
+if defined(NEED_OUTPORT)
+                CAL     skel_ovr_p1         ; (skeleton service) module output overrides
+endif
                 MOV     DP, #02f00h            ; 1036 0 100 280 62002F
                 STB     A, [DP]                ; 1039 0 100 280 D2
                 SB      PSWH.0                 ; 103A 0 100 280 A218
@@ -2156,8 +2194,6 @@ endif
 vtec_state_clear:     CLRB    r1                     ; 1077 0 100 280 2115
 if defined(FEAT_STOCK_VTECPRESSURE)
                 J       vtec_state_finalize             ; 1079 0 100 280 035811
-else
-vtec_state_finalize:
 endif
 if defined(FEAT_STOCK_VTECPRESSURE)
 vtec_oilpressure_gate_check:     JBS     off(00115h).1, vtec_oilpressure_pin_check ; 107C 0 100 280 E9150C
@@ -2275,6 +2311,8 @@ vtec_retard_lookup_done:     SJ      vtec_state_store2_load_imm             ; 11
 endif
 if defined(FEAT_STOCK_VTECPRESSURE)
 vtec_state_finalize:     RB      off(0011dh).4          ; 1158 0 100 280 C41D0C
+else
+vtec_state_finalize:
 endif
                 CLRB    A                      ; 115B 0 100 280 FA
                 STB     A, off(001c8h)         ; 115C 0 100 280 D4C8
@@ -3713,6 +3751,9 @@ injtimer_mul_final:     L       A, off(00148h)         ; 1D6C 1 100 280 E448
 if defined(FEAT_STOCK_VTECPRESSURE)
                 JBS     off(0011dh).4, dwell_zero_result ; 1D73 1 100 280 EC1D4F
 endif
+undef XP
+define XP XP_FUEL
+include "p30-features/features.inc"
                 CAL     hook_fuel              ; (skeleton) module slot: final pulse width is the word at 146h
                 LB      A, off(0012dh)         ; 1D76 0 100 280 F42D
                 CMPB    A, #0c0h               ; 1D78 0 100 280 C6C0
@@ -4104,6 +4145,9 @@ if defined(FEAT_STOCK_O2HEATER)
                 AND     IE, #002a0h            ; 20A4 0 100 280 B51AD0A002
                 RB      PSWH.0                 ; 20A9 0 100 280 A208
                 LB      A, P1                  ; 20AB 0 100 280 F522
+if defined(NEED_OUTPORT)
+                CAL     skel_ovr_p1         ; (skeleton service) module output overrides
+endif
                 MOV     DP, #02f00h            ; 20AD 0 100 280 62002F
                 STB     A, [DP]                ; 20B0 0 100 280 D2
                 SB      PSWH.0                 ; 20B1 0 100 280 A218
@@ -4111,12 +4155,7 @@ if defined(FEAT_STOCK_O2HEATER)
                 ST      A, IE                  ; 20B5 1 100 280 D51A
                 SJ      crank_edge_direction_toggle             ; 20B7 1 100 280 CB02
 else
-crank_edge_sync_check:
-crank_edge_direction_toggle:
-crank_edge_carry_clear:
-crank_edge_carry_set:
                                                 ; 2087 (skeleton: no O2 heater drive / feedback check)
-dtc27_code27_latch:
 endif
 if defined(FEAT_STOCK_O2HEATER)
 crank_edge_sync_check:     JEQ     crank_edge_carry_set             ; 20B9 0 100 280 C90F
@@ -4126,10 +4165,17 @@ crank_edge_direction_toggle:     XORB    PSWH, #080h            ; 20BB 0 100 280
                 MOVB    off(00194h), #019h     ; 20C3 0 100 280 C4949819
 crank_edge_carry_clear:     RC                             ; 20C7 0 100 280 95
                 SJ      dtc27_code27_latch             ; 20C8 0 100 280 CB01
+else
+crank_edge_sync_check:
+crank_edge_direction_toggle:
+crank_edge_carry_clear:
 endif
 if defined(FEAT_STOCK_O2HEATER)
 crank_edge_carry_set:     SC                             ; 20CA 0 100 280 85
 dtc27_code27_latch:     MB      09bh.2, C              ; 20CB 0 100 280 C59B3A
+else
+crank_edge_carry_set:
+dtc27_code27_latch:
 endif
                 JBR     off(00116h).7, crank_edge_flag_store_clear_acc ; 20CE 0 100 280 DF1677
                 JBR     off(00116h).3, crank_edge_flag_store_clear_acc ; 20D1 0 100 280 DB1674
@@ -4652,6 +4698,10 @@ serial_baud_select_done:     MOVB    off(002b6h), #032h     ; 2558 1 208 180 C4B
                 NOP                            ; 255D 1 208 180 00
                 NOP                            ; 255E 1 208 180 00
                 NOP                            ; 255F 1 208 180 00
+else
+serial_baud_select_done:
+endif
+if defined(FEAT_STOCK_SERIAL)
                 MOVB    r0, #01ch              ; 2560 1 208 180 981C
                 MOVB    r1, #08ch              ; 2562 1 208 180 998C
                 LB      A, #0dfh               ; 2564 0 208 180 77DF
@@ -4668,8 +4718,6 @@ serial_baud_apply:     STB     A, STTM                ; 2573 0 208 180 D548
                 STB     A, STCON               ; 257C 0 208 180 D550
                 LB      A, r1                  ; 257E 0 208 180 79
                 STB     A, SRCON               ; 257F 0 208 180 D554
-else
-serial_baud_select_done:
 endif
                 MOV     DP, #04700h            ; 2581 0 208 180 620047
                 LB      A, [DP]                ; 2584 0 208 180 F2
@@ -5106,6 +5154,9 @@ idle_debounce_gate:     MB      C, 09fh.1              ; 28CE 0 208 180 C59F29
                 AND     IE, #002a0h            ; 28D9 0 208 180 B51AD0A002
                 RB      PSWH.0                 ; 28DE 0 208 180 A208
                 LB      A, P0                  ; 28E0 0 208 180 F520
+if defined(NEED_OUTPORT)
+                CAL     skel_ovr_p0         ; (skeleton service) module output overrides
+endif
                 STB     A, [DP]                ; 28E2 0 208 180 D2
                 STB     A, r0                  ; 28E3 0 208 180 88
                 MOVB    r1, [DP]               ; 28E4 0 208 180 C249
@@ -5119,6 +5170,9 @@ idle_debounce_gate:     MB      C, 09fh.1              ; 28CE 0 208 180 C59F29
                 AND     IE, #002a0h            ; 28F3 0 208 180 B51AD0A002
                 RB      PSWH.0                 ; 28F8 0 208 180 A208
                 LB      A, P1                  ; 28FA 0 208 180 F522
+if defined(NEED_OUTPORT)
+                CAL     skel_ovr_p1         ; (skeleton service) module output overrides
+endif
                 STB     A, [DP]                ; 28FC 0 208 180 D2
                 STB     A, r0                  ; 28FD 0 208 180 88
                 MOVB    r1, [DP]               ; 28FE 0 208 180 C249
@@ -6891,11 +6945,19 @@ learn_retry_store_cmp_acc:     CMPB    A, (00184h-00180h)[USP] ; 3747 0 208 180 
                 JLE     vcal3_task_a_return             ; 374A 0 208 180 CF03
                 INCB    (00184h-00180h)[USP]   ; 374C 0 208 180 C30416
 vcal3_task_a_return:     RT                             ; 374F 0 208 180 01
-if defined(FEAT_STOCK_SERIAL)
+if defined(FEAT_STOCK_SELFTEST)
+if defined(FEAT_STOCK_SERIAL) || defined(NEED_SERIAL_RX)
 regbank_selftest2_start:     L       A, #02babh             ; 3750 1 208 180 67AB2B
+else
+regbank_selftest2_start:     L       A, #02ba9h             ; 3750 1 208 180 67AB2B (serial receive off)
+endif
                 MOV     X1, #002a0h            ; 3753 1 208 180 60A002
                 JBR     off(00217h).2, regbank_selftest2_ie_check ; 3756 1 208 180 DA1706
+if defined(FEAT_STOCK_SERIAL) || defined(NEED_SERIAL_RX)
                 L       A, #0a9a3h             ; 3759 1 208 180 67A3A9
+else
+                L       A, #0a9a1h             ; 3759 1 208 180 67A3A9 (serial receive off)
+endif
                 MOV     X1, #000a0h            ; 375C 1 208 180 60A000
 regbank_selftest2_ie_check:     CMP     A, 0f2h                ; 375F 1 208 180 B5F2C2
                 JNE     selftest_fail_04f             ; 3762 1 208 180 CE0B
@@ -6909,9 +6971,8 @@ selftest_fail_04f:     MOVB    0ebh, #04fh            ; 376F 1 208 180 C5EB984F
 else
 ; (skeleton: no register-bank, interrupt-mask or RAM self-tests in the main loop)
 regbank_selftest2_start:
-irqmode_dispatch:
 endif
-if defined(FEAT_STOCK_SERIAL)
+if defined(FEAT_STOCK_SELFTEST)
 regbank_selftest2_range_check:     L       A, off(002eeh)         ; 3776 1 208 180 E4EE
                 CMP     A, #003fah             ; 3778 1 208 180 C6FA03
                 JGT     regbank_selftest2_default             ; 377B 1 208 180 C832
@@ -6938,12 +6999,14 @@ regbank_selftest2_range_check:     L       A, off(002eeh)         ; 3776 1 208 1
 selftest_fail_042_alt:     MOVB    0ebh, #042h            ; 37A5 1 208 180 C5EB9842
                 BRK                            ; 37A9 1 208 180 FF
 endif
-if defined(FEAT_STOCK_SERIAL)
+if defined(FEAT_STOCK_SELFTEST)
 regbank_selftest2_check3:     MOV     X2, A                  ; 37AA 1 208 180 51
                 CMP     A, X2                  ; 37AB 1 208 180 91C2
                 JNE     selftest_fail_042_alt             ; 37AD 1 208 180 CEF6
 regbank_selftest2_default:     L       A, #003fah             ; 37AF 1 208 180 67FA03
 irqmode_dispatch:     ST      A, off(002eeh)         ; 37B2 1 208 180 D4EE
+else
+irqmode_dispatch:
 endif
                 VCAL    4                      ; 37B4 1 208 180 14
                 AND     IE, #002a0h            ; 37B5 1 208 180 B51AD0A002
@@ -6965,7 +7028,7 @@ irqmode_check1:     SB      PSWH.0                 ; 37CD 1 208 180 A218
                 RB      PSWH.0                 ; 37D3 1 208 180 A208
                 JLT     irqmode_select_b             ; 37D5 1 208 180 CA2F
                 JBR     off(00217h).2, irqmode_done ; 37D7 1 208 180 DA1747
-if defined(FEAT_STOCK_SERIAL)
+if defined(FEAT_STOCK_SERIAL) || defined(NEED_SERIAL_RX)
                 L       A, #02babh             ; 37DA 1 208 180 67AB2B
 else
                 L       A, #02ba9h             ; 37DA (skeleton: serial receive interrupt off; stock 2BABh)
@@ -6984,7 +7047,7 @@ endif
                 MB      TCON3.4, C             ; 3801 1 208 180 C5433C
                 SJ      irqmode_done             ; 3804 1 208 180 CB1B
 irqmode_select_b:     JBS     off(00217h).2, irqmode_done ; 3806 1 208 180 EA1718
-if defined(FEAT_STOCK_SERIAL)
+if defined(FEAT_STOCK_SERIAL) || defined(NEED_SERIAL_RX)
                 L       A, #0a9a3h             ; 3809 1 208 180 67A3A9
 else
                 L       A, #0a9a1h             ; 3809 (skeleton: serial interrupts off; stock A9A3h)
@@ -7378,7 +7441,6 @@ if defined(FEAT_STOCK_DTC)
                 J       sensor_check_vcal3_if_ram217_bit5_set             ; 3B47 0 208 180 03FD76
 else
 ; (skeleton: no MAP sensor plausibility check)
-dtc05_map_range_latch:
 endif
 if defined(FEAT_STOCK_DTC)
 sensor_check_vcal3_cmp_ram236:     CMPB    off(00236h), #002h     ; 3B4A 0 208 180 C436C002
@@ -7399,6 +7461,8 @@ endif
 if defined(FEAT_STOCK_DTC)
 sensor_check_set:     SB      off(00230h).5          ; 3B6A 0 208 180 C4301D
 dtc05_map_range_latch:     MB      098h.3, C              ; 3B6D 0 208 180 C5983B
+else
+dtc05_map_range_latch:
 endif
                 MOV     DP, #003c8h            ; 3B70 0 208 180 62C803
                 LB      A, [DP]                ; 3B73 0 208 180 F2
@@ -8175,34 +8239,6 @@ if defined(FEAT_STOCK_O2)
                 RB      off(00223h).3          ; 416C 0 208 180 C4230B
                 SJ      injidx_flag_set             ; 416F 0 208 180 CB0C
 else
-injidx_gate1:
-injidx_gate2:
-injidx_flag_clear:
-injidx_flag_set:
-injidx_gate3:
-injidx_flag_set2:
-injidx_gate4:
-injidx_gate5:
-injidx_gate6:
-injidx_stamp_c2:
-injidx_c2_check:
-closeloopnarrow_check:
-closeloopnarrow_result:
-vss_ect_gate:
-vss_ect_stamp:
-idle_state_defaults:
-idle_state_defaults_if_ram21d_bit1_clr:
-idle_state_defaults_load_stk:
-idle_stage_b7_store:
-idle_stage_b7_load:
-idle_stage_alt_start:
-idle_stage_bf_store:
-idle_stage_bf_load:
-idle_stage_c0_start:
-idle_stage_c0_store:
-idle_stage_c0_load:
-idle_stage_c0_load_if_ne_goto_gio_fuelpump_dispatch:
-idle_stage_c0_load_clear_ram219_bit0:
                                                 ; 4155 (skeleton: no O2 control - closed loop never enables (219h.0 stays 0), no O2 switching timers)
 endif
 if defined(FEAT_STOCK_O2)
@@ -8212,6 +8248,11 @@ injidx_flag_clear:     RB      off(00219h).0          ; 4177 0 208 180 C41908
                 SB      off(00223h).3          ; 417A 0 208 180 C4231B
 injidx_flag_set:     SB      off(00223h).0          ; 417D 0 208 180 C42318
                 J       vss_ect_stamp             ; 4180 0 208 180 030A42
+else
+injidx_gate1:
+injidx_gate2:
+injidx_flag_clear:
+injidx_flag_set:
 endif
 if defined(FEAT_STOCK_O2)
 injidx_gate3:     JBS     off(00219h).4, injidx_flag_clear ; 4183 0 208 180 EC19F1
@@ -8223,6 +8264,9 @@ injidx_gate3:     JBS     off(00219h).4, injidx_flag_clear ; 4183 0 208 180 EC19
 injidx_flag_set2:     RB      off(00223h).0          ; 4193 0 208 180 C42308
                 MOVB    off(002b7h), #064h     ; 4196 0 208 180 C4B79864
                 SJ      vss_ect_stamp             ; 419A 0 208 180 CB6E
+else
+injidx_gate3:
+injidx_flag_set2:
 endif
 if defined(FEAT_STOCK_O2)
 injidx_gate4:     JBS     off(00217h).5, injidx_flag_set2 ; 419C 0 208 180 ED17F4
@@ -8243,12 +8287,19 @@ injidx_gate6:     JBR     off(00216h).6, closeloopnarrow_check ; 41B7 0 208 180 
                 JBS     off(0021dh).2, injidx_c2_check ; 41C9 0 208 180 EA1D06
 injidx_stamp_c2:     MOVB    off(002b7h), #064h     ; 41CC 0 208 180 C4B79864
                 SJ      closeloopnarrow_check             ; 41D0 0 208 180 CB08
+else
+injidx_gate4:
+injidx_gate5:
+injidx_gate6:
+injidx_stamp_c2:
 endif
 if defined(FEAT_STOCK_O2)
 injidx_c2_check:     LB      A, off(002b7h)         ; 41D2 0 208 180 F4B7
                 JNE     closeloopnarrow_check             ; 41D4 0 208 180 CE04
                 LB      A, #02eh               ; 41D6 0 208 180 772E
                 SJ      closeloopnarrow_result             ; 41D8 0 208 180 CB07
+else
+injidx_c2_check:
 endif
 if defined(FEAT_STOCK_O2)
 closeloopnarrow_check:     LB      A, #01ah               ; 41DA 0 208 180 771A
@@ -8269,6 +8320,10 @@ vss_ect_gate:     CMPB    0c1h, #028h            ; 41E9 0 208 180 C5C1C028
                 SB      off(00219h).0          ; 4202 0 208 180 C41918
                 RB      off(00223h).3          ; 4205 0 208 180 C4230B
                 SJ      idle_state_defaults             ; 4208 0 208 180 CB04
+else
+closeloopnarrow_check:
+closeloopnarrow_result:
+vss_ect_gate:
 endif
 if defined(FEAT_STOCK_O2)
 vss_ect_stamp:     MOVB    off(002aah), #004h     ; 420A 0 208 180 C4AA9804
@@ -8283,6 +8338,10 @@ idle_state_defaults_if_ram21d_bit1_clr:     JBR     off(0021dh).1, idle_stage_al
                 MOVB    off(002b4h), r1        ; 4221 0 208 180 217CB4
                 MOVB    off(002b5h), r2        ; 4224 0 208 180 227CB5
                 J       idle_state_defaults_if_ram219_bit0_clr             ; 4227 0 208 180 033D78
+else
+vss_ect_stamp:
+idle_state_defaults:
+idle_state_defaults_if_ram21d_bit1_clr:
 endif
 if defined(FEAT_STOCK_O2)
 idle_state_defaults_load_stk:     L       A, (00148h-00180h)[USP] ; 422A 1 208 180 E3C8
@@ -8296,6 +8355,10 @@ idle_state_defaults_load_stk:     L       A, (00148h-00180h)[USP] ; 422A 1 208 1
 idle_stage_b7_store:     MOVB    off(002abh), r0        ; 423C 0 208 180 207CAB
 idle_stage_b7_load:     LB      A, off(002abh)         ; 423F 0 208 180 F4AB
                 SJ      idle_stage_c0_load_if_ne_goto_gio_fuelpump_dispatch             ; 4241 0 208 180 CB27
+else
+idle_state_defaults_load_stk:
+idle_stage_b7_store:
+idle_stage_b7_load:
 endif
 if defined(FEAT_STOCK_O2)
 idle_stage_alt_start:     MOVB    off(002abh), r0        ; 4243 0 208 180 207CAB
@@ -8308,6 +8371,10 @@ idle_stage_alt_start:     MOVB    off(002abh), r0        ; 4243 0 208 180 207CAB
 idle_stage_bf_store:     MOVB    off(002b4h), r1        ; 4255 0 208 180 217CB4
 idle_stage_bf_load:     LB      A, off(002b4h)         ; 4258 0 208 180 F4B4
                 SJ      idle_stage_c0_load_if_ne_goto_gio_fuelpump_dispatch             ; 425A 0 208 180 CB0E
+else
+idle_stage_alt_start:
+idle_stage_bf_store:
+idle_stage_bf_load:
 endif
 if defined(FEAT_STOCK_O2)
 idle_stage_c0_start:     MOVB    off(002b4h), r1        ; 425C 0 208 180 217CB4
@@ -8318,6 +8385,12 @@ idle_stage_c0_load:     LB      A, off(002b5h)         ; 4268 0 208 180 F4B5
 idle_stage_c0_load_if_ne_goto_gio_fuelpump_dispatch:     JNE     gio_fuelpump_dispatch             ; 426A 0 208 180 CE06
 idle_stage_c0_load_clear_ram219_bit0:     RB      off(00219h).0          ; 426C 0 208 180 C41908
                 SB      off(00223h).3          ; 426F 0 208 180 C4231B
+else
+idle_stage_c0_start:
+idle_stage_c0_store:
+idle_stage_c0_load:
+idle_stage_c0_load_if_ne_goto_gio_fuelpump_dispatch:
+idle_stage_c0_load_clear_ram219_bit0:
 endif
 gio_fuelpump_dispatch:     VCAL    4                      ; 4272 0 208 180 14
                 RC                             ; 4273 0 208 180 95
@@ -8348,6 +8421,12 @@ fuelpump_state_check:     RC                             ; 42A8 0 208 180 95
 fuelpump_state_active:     SC                             ; 42AD 0 208 180 85
 if defined(FEAT_STOCK_DTC)
 fuelpump_state_active_store_carry_p1_bit4:     MB      P1.4, C                ; 42AE 0 208 180 C5223C
+else
+; (skeleton: the stock key-on bulb check wrote P1.4 here; the lamp output is left to feature modules)
+fuelpump_state_active_store_carry_p1_bit4:
+                                                ; 42B1 (skeleton: no A/C clutch control - P0.0 stays at its power-up level, clutch off; the A/C request is ignored)
+endif
+if defined(FEAT_STOCK_AC)
 fuelpump_state_active_cmp_ram0e9:     CMPB    0e9h, #014h            ; 42B1 0 208 180 C5E9C014
                 JLT     accut_reset_c3             ; 42B5 0 208 180 CA63
                 CMPB    0c1h, #015h            ; 42B7 0 208 180 C5C1C015
@@ -8382,8 +8461,6 @@ rpm_threshold_226_1:     CMPB    A, 0b4h                ; 42F3 0 208 180 C5B4C2
 accut_store_c3:     STB     A, off(002b8h)         ; 42FE 0 208 180 D4B8
                 SJ      accut_check_c3_if_ram211_bit2_clr             ; 4300 0 208 180 CB04
 else
-; (skeleton: the stock key-on bulb check wrote P1.4 here; the lamp output is left to feature modules)
-fuelpump_state_active_store_carry_p1_bit4:
 fuelpump_state_active_cmp_ram0e9:
 rpm_threshold_226_0:
 rpm_threshold_226_0_cmp_acc:
@@ -8391,17 +8468,8 @@ rpm_threshold_226_0_if_ram218_bit6_set:
 rpm_threshold_226_0_cmp_acc_2:
 rpm_threshold_226_1:
 accut_store_c3:
-accut_check_c3:
-accut_check_c3_if_ram211_bit2_clr:
-accut_delay_check:
-accut_reset_c3:
-accut_reset_f7:
-accut_common:
-accut_result_common:
-accut_output_drive:
-                                                ; 42B1 (skeleton: no A/C clutch control - P0.0 stays at its power-up level, clutch off; the A/C request is ignored)
 endif
-if defined(FEAT_STOCK_DTC)
+if defined(FEAT_STOCK_AC)
 accut_check_c3:     LB      A, off(002b8h)         ; 4302 0 208 180 F4B8
                 JNE     accut_reset_f7             ; 4304 0 208 180 CE17
 accut_check_c3_if_ram211_bit2_clr:     JBR     off(00211h).2, accut_common ; 4306 0 208 180 DA1117
@@ -8412,8 +8480,12 @@ accut_check_c3_if_ram211_bit2_clr:     JBR     off(00211h).2, accut_common ; 430
 accut_delay_check:     SB      off(0021bh).0          ; 4314 0 208 180 C41B18
                 RC                             ; 4317 0 208 180 95
                 SJ      accut_output_drive             ; 4318 0 208 180 CB15
+else
+accut_check_c3:
+accut_check_c3_if_ram211_bit2_clr:
+accut_delay_check:
 endif
-if defined(FEAT_STOCK_DTC)
+if defined(FEAT_STOCK_AC)
 accut_reset_c3:     CLRB    off(002b8h)            ; 431A 0 208 180 C4B815
 accut_reset_f7:     CLRB    off(002e3h)            ; 431D 0 208 180 C4E315
 accut_common:     RB      off(00226h).4          ; 4320 0 208 180 C4260C
@@ -8423,6 +8495,12 @@ accut_common:     RB      off(00226h).4          ; 4320 0 208 180 C4260C
 accut_result_common:     RB      off(0021bh).0          ; 432B 0 208 180 C41B08
                 SC                             ; 432E 0 208 180 85
 accut_output_drive:     MB      P0.0, C                ; 432F 0 208 180 C52038
+else
+accut_reset_c3:
+accut_reset_f7:
+accut_common:
+accut_result_common:
+accut_output_drive:
 endif
 if defined(FEAT_STOCK_PURGE)
                 JBS     off(00217h).5, purge_result_clear ; 4332 0 208 180 ED171F
@@ -8435,7 +8513,7 @@ if (defined(FEAT_STOCK_DTC) && defined(FEAT_STOCK_PURGE))
                 JGE     purge_result_clear             ; 433C 0 208 180 CD16
 accut_output_drive_goto_purge_counter_check:     J       purge_counter_check             ; 433E 0 208 180 034C78
 endif
-if (defined(FEAT_STOCK_DTC) && defined(FEAT_STOCK_PURGE))
+if defined(FEAT_STOCK_PURGE)
 purge_counter_check_if_lt_goto_purge_result_clear:     JLT     purge_result_clear             ; 4343 0 208 180 CA0F
                 CMPB    off(002a7h), #005h     ; 4345 0 208 180 C4A7C005
                 JNE     purge_result_set             ; 4349 0 208 180 CE06
@@ -8597,15 +8675,16 @@ flags_b8_2_set:     SB      0a0h.5                 ; 44AA 0 208 180 C5A01D
 else
 altc_normal_drive_nop_acc:
 flags_b8_2_set:
-altc_condition_check:
-gio_p1_2_check:
-flags_219_2_store:
                                                 ; 44A1 (skeleton: no O2 heater - 219h.3 stays 0)
 endif
 if defined(FEAT_STOCK_O2HEATER)
 altc_condition_check:     JBS     off(00215h).2, gio_p1_2_check ; 44B2 0 208 180 EA1514
                 JBS     off(00212h).5, gio_p1_2_check ; 44B5 0 208 180 ED1211
                 MB      C, 098h.1              ; 44B8 0 208 180 C59829
+else
+altc_condition_check:
+endif
+if defined(FEAT_STOCK_O2HEATER)
                 JLT     gio_p1_2_check             ; 44BB 0 208 180 CA0C
                 CMPB    0c1h, #0c5h            ; 44BD 0 208 180 C5C1C0C5
                 JGE     gio_p1_2_check             ; 44C1 0 208 180 CD06
@@ -8614,6 +8693,9 @@ altc_condition_check:     JBS     off(00215h).2, gio_p1_2_check ; 44B2 0 208 180
 gio_p1_2_check:     RC                             ; 44C9 0 208 180 95
                 SB      P1.2                   ; 44CA 0 208 180 C5221A
 flags_219_2_store:     MB      off(00219h).3, C       ; 44CD 0 208 180 C4193B
+else
+gio_p1_2_check:
+flags_219_2_store:
 endif
                 JBR     off(00227h).1, flags_219_2_store_clear_acc ; 44D0 0 208 180 D9270D
                 JBS     off(00216h).2, flags_219_2_store_clear_acc ; 44D3 0 208 180 EA160A
@@ -8632,6 +8714,9 @@ flags_219_2_store_cmp_ram0c0:     CMPB    0c0h, #001h            ; 44E4 0 208 18
 flags_219_2_store_clear_carry:     RC                             ; 44F2 0 208 180 95
 flags_219_2_store_store_carry_p1_bit6:     MB      P1.6, C                ; 44F3 0 208 180 C5223E
                 STB     A, off(002b1h)         ; 44F6 0 208 180 D4B1
+undef XP
+define XP XP_OUT
+include "p30-features/features.inc"
                 VCAL    4                      ; 44F8 0 208 180 14
 if defined(FEAT_STOCK_VTECPRESSURE)
                 JBS     off(0021ah).6, state_21a_7_dispatch ; 44F9 0 208 180 EE1A25
@@ -9462,7 +9547,7 @@ prep_lowpower_seq_load_carry_ram09f_bit1:     MB      C, 09fh.1              ; 4
                 CAL     port_debounce_helper             ; 4B13 1 208 180 32E451
                 MOVB    0edh, #020h            ; 4B16 1 208 180 C5ED9820
 prep_lowpower_ie_config:     MOV     0f4h, #002a0h          ; 4B1A 1 208 180 B5F498A002
-if defined(FEAT_STOCK_SERIAL)
+if defined(FEAT_STOCK_SERIAL) || defined(NEED_SERIAL_RX)
                 L       A, #02babh             ; 4B1F 1 208 180 67AB2B
 else
                 L       A, #02ba9h             ; 4B1F (skeleton: serial receive interrupt off; stock 2BABh)
@@ -9472,7 +9557,11 @@ endif
                 CLR     IRQ                    ; 4B27 1 208 180 B51815
                 RB      TCON0.2                ; 4B2A 1 208 180 C5400A
                 ST      A, IE                  ; 4B2D 1 208 180 D51A
-lowpower_trap_call:     CAL     hook_main              ; (skeleton) module slot: once per main-loop pass
+lowpower_trap_call:
+undef XP
+define XP XP_MAIN
+include "p30-features/features.inc"
+                CAL     hook_main              ; (skeleton) module slot: once per main-loop pass
                 J       regbank_selftest2_start             ; 4B2F 1 208 180 035037
 ; [CG] crank_helper2  @0x4B32
 ; [CG] VERIFIED: entry point that first checks off(120h).2; if set, skips straight to the
@@ -9858,6 +9947,9 @@ crank_a8_p1_output:
 endif
                 MOV     DP, #02f00h            ; 4E28 1 108 280 62002F
                 LB      A, P1                  ; 4E2B 0 108 280 F522
+if defined(NEED_OUTPORT)
+                CAL     skel_ovr_p1         ; (skeleton service) module output overrides
+endif
                 STB     A, [DP]                ; 4E2D 0 108 280 D2
                 RT                             ; 4E2E 0 108 280 01
 ign_angle_to_timer_convert:     CLRB    A                      ; 4E2F 0 200 180 FA
@@ -10469,9 +10561,15 @@ port_debounce_helper:     MOV     DP, #03f00h            ; 51E4 0 208 180 62003F
                 STB     A, [DP]                ; 51E9 0 208 180 D2
                 MOV     DP, #01f00h            ; 51EA 0 208 180 62001F
                 LB      A, P0                  ; 51ED 0 208 180 F520
+if defined(NEED_OUTPORT)
+                CAL     skel_ovr_p0         ; (skeleton service) module output overrides
+endif
                 STB     A, [DP]                ; 51EF 0 208 180 D2
                 MOV     DP, #02f00h            ; 51F0 0 208 180 62002F
                 LB      A, P1                  ; 51F3 0 208 180 F522
+if defined(NEED_OUTPORT)
+                CAL     skel_ovr_p1         ; (skeleton service) module output overrides
+endif
                 STB     A, [DP]                ; 51F5 0 208 180 D2
                 MOV     DP, #00f00h            ; 51F6 0 208 180 62000F
                 LB      A, [DP]                ; 51F9 0 208 180 F2
@@ -10575,7 +10673,7 @@ timer_or_counter_helper_load_r0:     LB      A, r0                  ; 5289 0 208
                 DECB    r1                     ; 528F 0 208 180 B9
                 JNE     timer_or_counter_helper             ; 5290 0 208 180 CEE5
                 RT                             ; 5292 0 208 180 01
-if defined(FEAT_STOCK_SELFTEST) || defined(FEAT_STOCK_SERIAL)
+if defined(FEAT_STOCK_SELFTEST)
 selftest_regbank_verify:     MOV     X2, A                  ; 5293 1 200 ??? 51
                 SB      off(00230h).7          ; 5294 1 200 ??? C4301F
                 AND     IE, #002a0h            ; 5297 1 200 ??? B51AD0A002
@@ -10593,7 +10691,7 @@ selftest_regbank_verify:     MOV     X2, A                  ; 5293 1 200 ??? 51
                 MOVB    0ebh, #042h            ; 52B5 1 200 ??? C5EB9842
                 BRK                            ; 52B9 1 200 ??? FF
 endif
-if defined(FEAT_STOCK_SELFTEST) || defined(FEAT_STOCK_SERIAL)
+if defined(FEAT_STOCK_SELFTEST)
 selftest_regbank_verify_return:     RT                             ; 52BA 1 200 ??? 01
 endif
 idle_helper1:     JBR     off(00230h).3, idle_helper1_alt ; 52BB 1 208 180 DB3016
@@ -12455,10 +12553,6 @@ if defined(FEAT_STOCK_O2)
 idle_state_defaults_if_ram219_bit0_clr:     JBR     off(00219h).0, idle_state_defaults_goto_idle_stage_b7_store ; 783D 0 208 180 D81906
                 JBR     off(0021eh).4, idle_state_defaults_goto_426c ; 7840 0 208 180 DC1E06
                 J       idle_state_defaults_load_stk             ; 7843 0 208 180 032A42
-else
-if !(defined(FEAT_STOCK_DTC))
-crank_tooth_counter_reset_if_ram113_bit0_set:
-endif
 endif
 if defined(FEAT_STOCK_O2)
 idle_state_defaults_goto_idle_stage_b7_store:     J       idle_stage_b7_store             ; 7846 0 208 180 033C42
@@ -12487,6 +12581,8 @@ endif
 if defined(FEAT_STOCK_DTC)
 crank_tooth_counter_reset_if_ram113_bit0_set:     JBS     off(00113h).0, crank_tooth_counter_reset_clear_ram11d_bit6 ; 786C 1 108 280 E81303
                 J       crank_tooth_counter_reset_clear_ram09f_bit2             ; 786F 1 108 280 036C04
+else
+crank_tooth_counter_reset_if_ram113_bit0_set:
 endif
 if defined(FEAT_STOCK_DTC)
 crank_tooth_counter_reset_clear_ram11d_bit6:     RB      off(0011dh).6          ; 7872 1 108 280 C41D0E
@@ -12529,8 +12625,19 @@ skel_boot_modules:
                 CLRB    A                      ; nothing is requested until a module asks
                 STB     A, 001f0h[X1]          ; fuel-cut request
                 STB     A, off(002fdh)         ; ignition retard request
+if defined(NEED_SPARKCUT)
+                STB     A, 0fch                ; spark-cut request
+endif
+if defined(NEED_OUTPORT)
+                L       A, #000ffh             ; output overrides off: AND masks FFh, OR masks 00h
+                ST      A, 003dch[X1]
+                ST      A, 003deh[X1]
+endif
                 POPS    A
                 MOV     X1, A
+undef XP
+define XP XP_BOOT
+include "p30-features/features.inc"
                 J       hook_init              ; module slot: once at power-up (tail call)
 skel_ign_service:
                 LB      A, off(002fdh)         ; ignition retard requested by the modules, in advance-byte units
@@ -12548,7 +12655,66 @@ skel_ign_service_store1:
 skel_ign_service_store2:
                 STB     A, off(00247h)
 skel_ign_service_hook:
+undef XP
+define XP XP_IGN
+include "p30-features/features.inc"
                 J       hook_ign               ; module slot (tail call)
+if defined(NEED_OUTPORT)
+; Output overrides. A module takes a P0/P1 output by clearing its bit in the AND mask and putting the
+; level it wants in the OR mask: 3DCh/3DDh for P0, 3DEh/3DFh for P1 (r4-r7 of bank 7Bh). They are
+; applied where the latches are copied to the 8255, so the skeleton's own writes never reach the pin.
+; In: A = the latch being copied. Out: A (and the latch) with the overrides applied.
+skel_ovr_p0:    PUSHS   LRB
+                MOV     LRB, #0007bh
+                ANDB    A, r4
+                ORB     A, r5
+                STB     A, P0                 ; the latch too, so reading the bit back gives what goes out
+                POPS    LRB
+                RT
+skel_ovr_p1:    PUSHS   LRB
+                MOV     LRB, #0007bh
+                ANDB    A, r6
+                ORB     A, r7
+                STB     A, P1                 ; the latch too, so reading the bit back gives what goes out
+                POPS    LRB
+                RT
+endif
+if defined(NEED_INPUTS)
+; Switch inputs the way the HTS pages select them. In: A = one-hot input byte (01h power steering B8,
+; 02h service check connector D4, 04h start B9, 08h VTEC pressure D6, 10h A/C request B5, 20h brake D2,
+; 40h park/neutral B7, 80h always on; 00h never). Out: C = the input is on (before any invert).
+; Main-loop context (off page 200h: 210h/211h are the port A and 4700h switch copies).
+skel_input:     SLLB    A
+                JLT     skel_input_ret         ; 80h: always on
+                SLLB    A
+                JGE     skel_input_5
+                MB      C, off(00211h).5       ; park/neutral
+                RT
+skel_input_5:   SLLB    A
+                JGE     skel_input_4
+                MB      C, off(00211h).4       ; brake
+                RT
+skel_input_4:   SLLB    A
+                JGE     skel_input_3
+                MB      C, off(00211h).2       ; A/C request
+                RT
+skel_input_3:   SLLB    A
+                JGE     skel_input_2
+                MB      C, off(00211h).1       ; VTEC pressure switch
+                RT
+skel_input_2:   SLLB    A
+                JGE     skel_input_1
+                MB      C, off(00211h).0       ; start signal
+                RT
+skel_input_1:   SLLB    A
+                JGE     skel_input_0
+                MB      C, off(00210h).7       ; service check connector
+                RT
+skel_input_0:   SLLB    A
+                JGE     skel_input_ret         ; 00h: never (C is clear)
+                MB      C, off(00210h).3       ; power steering pressure switch
+skel_input_ret: RT
+endif
 
 ; ------------------------------------------------------------------------------------------------
 ; Calibration: stock P30 values. Tables only the removed functions used are gone and the rest is packed
@@ -13382,6 +13548,12 @@ crank_edge_flag_store_tbl_3:       DB  000h,000h,000h,000h,000h,000h,000h,000h,0
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h ; 762C
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h ; 7636
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h ; 7640
+undef XP
+define XP XP_CAL
+include "p30-features/features.inc"
+undef XP
+define XP XP_CODE
+include "p30-features/features.inc"
 skel_free_start:                               ; everything from here to 7EFFh is free for modules
 
 ; ================================================================================================
