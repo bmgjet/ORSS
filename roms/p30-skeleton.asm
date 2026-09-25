@@ -69,10 +69,16 @@ int_NMI_vec:              DW  int_NMI          ; 0006 3C00
 int_INT0_vec:             DW  int_INT0         ; 0008 D301
 if defined(FEAT_STOCK_SERIAL)
 int_serial_rx_vec:        DW  int_serial_rx    ; 000A FD01
+elseif defined(NEED_SERIAL_RX)
+int_serial_rx_vec:        DW  mod_serial_rx    ; 000A serial receive: a feature module (datalog)
 else
 int_serial_rx_vec:        DW  int_spurious_irq_trap    ; 000A (skeleton: no serial)
 endif
+if defined(NEED_SERIAL_TX)
+int_serial_tx_vec:        DW  mod_serial_tx    ; 000C serial transmit complete: a feature module (datalog)
+else
 int_serial_tx_vec:        DW  int_spurious_irq_trap    ; 000C CB21
+endif
 if defined(FEAT_STOCK_SERIAL)
 int_serial_rx_BRG_vec:    DW  int_crank_sync; 000E DC03
 else
@@ -6946,14 +6952,18 @@ learn_retry_store_cmp_acc:     CMPB    A, (00184h-00180h)[USP] ; 3747 0 208 180 
                 INCB    (00184h-00180h)[USP]   ; 374C 0 208 180 C30416
 vcal3_task_a_return:     RT                             ; 374F 0 208 180 01
 if defined(FEAT_STOCK_SELFTEST)
-if defined(FEAT_STOCK_SERIAL) || defined(NEED_SERIAL_RX)
+if defined(NEED_SERIAL_TX)
+regbank_selftest2_start:     L       A, #02bafh             ; 3750 1 208 180 67AB2B (serial receive and transmit)
+elseif defined(FEAT_STOCK_SERIAL) || defined(NEED_SERIAL_RX)
 regbank_selftest2_start:     L       A, #02babh             ; 3750 1 208 180 67AB2B
 else
 regbank_selftest2_start:     L       A, #02ba9h             ; 3750 1 208 180 67AB2B (serial receive off)
 endif
                 MOV     X1, #002a0h            ; 3753 1 208 180 60A002
                 JBR     off(00217h).2, regbank_selftest2_ie_check ; 3756 1 208 180 DA1706
-if defined(FEAT_STOCK_SERIAL) || defined(NEED_SERIAL_RX)
+if defined(NEED_SERIAL_TX)
+                L       A, #0a9a7h             ; 3759 1 208 180 67A3A9 (serial receive and transmit)
+elseif defined(FEAT_STOCK_SERIAL) || defined(NEED_SERIAL_RX)
                 L       A, #0a9a3h             ; 3759 1 208 180 67A3A9
 else
                 L       A, #0a9a1h             ; 3759 1 208 180 67A3A9 (serial receive off)
@@ -7028,7 +7038,9 @@ irqmode_check1:     SB      PSWH.0                 ; 37CD 1 208 180 A218
                 RB      PSWH.0                 ; 37D3 1 208 180 A208
                 JLT     irqmode_select_b             ; 37D5 1 208 180 CA2F
                 JBR     off(00217h).2, irqmode_done ; 37D7 1 208 180 DA1747
-if defined(FEAT_STOCK_SERIAL) || defined(NEED_SERIAL_RX)
+if defined(NEED_SERIAL_TX)
+                L       A, #02bafh             ; 37DA 1 208 180 67AB2B (serial receive and transmit)
+elseif defined(FEAT_STOCK_SERIAL) || defined(NEED_SERIAL_RX)
                 L       A, #02babh             ; 37DA 1 208 180 67AB2B
 else
                 L       A, #02ba9h             ; 37DA (skeleton: serial receive interrupt off; stock 2BABh)
@@ -7047,7 +7059,9 @@ endif
                 MB      TCON3.4, C             ; 3801 1 208 180 C5433C
                 SJ      irqmode_done             ; 3804 1 208 180 CB1B
 irqmode_select_b:     JBS     off(00217h).2, irqmode_done ; 3806 1 208 180 EA1718
-if defined(FEAT_STOCK_SERIAL) || defined(NEED_SERIAL_RX)
+if defined(NEED_SERIAL_TX)
+                L       A, #0a9a7h             ; 3809 1 208 180 67A3A9 (serial receive and transmit)
+elseif defined(FEAT_STOCK_SERIAL) || defined(NEED_SERIAL_RX)
                 L       A, #0a9a3h             ; 3809 1 208 180 67A3A9
 else
                 L       A, #0a9a1h             ; 3809 (skeleton: serial interrupts off; stock A9A3h)
@@ -9547,7 +9561,9 @@ prep_lowpower_seq_load_carry_ram09f_bit1:     MB      C, 09fh.1              ; 4
                 CAL     port_debounce_helper             ; 4B13 1 208 180 32E451
                 MOVB    0edh, #020h            ; 4B16 1 208 180 C5ED9820
 prep_lowpower_ie_config:     MOV     0f4h, #002a0h          ; 4B1A 1 208 180 B5F498A002
-if defined(FEAT_STOCK_SERIAL) || defined(NEED_SERIAL_RX)
+if defined(NEED_SERIAL_TX)
+                L       A, #02bafh             ; 4B1F 1 208 180 67AB2B (serial receive and transmit)
+elseif defined(FEAT_STOCK_SERIAL) || defined(NEED_SERIAL_RX)
                 L       A, #02babh             ; 4B1F 1 208 180 67AB2B
 else
                 L       A, #02ba9h             ; 4B1F (skeleton: serial receive interrupt off; stock 2BABh)

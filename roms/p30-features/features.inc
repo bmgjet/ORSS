@@ -46,3 +46,4 @@ endif
 endif
 
 include "shiftlight.asm"
+include "datalog.asm"
