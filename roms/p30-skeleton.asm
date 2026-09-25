@@ -5534,19 +5534,7 @@ accut_common:     RB      off(00226h).4          ; 4320 0 208 180 C4260C
 accut_result_common:     RB      off(0021bh).0          ; 432B 0 208 180 C41B08
                 SC                             ; 432E 0 208 180 85
 accut_output_drive:     MB      P0.0, C                ; 432F 0 208 180 C52038
-                JBS     off(00217h).5, purge_result_clear ; 4332 0 208 180 ED171F
-                CMPB    0c1h, #035h            ; 4338 0 208 180 C5C1C035
-                JGE     purge_result_clear             ; 433C 0 208 180 CD16
-accut_output_drive_goto_purge_counter_check:     J       purge_counter_check             ; 433E 0 208 180 034C78
-purge_counter_check_if_lt_goto_purge_result_clear:     JLT     purge_result_clear             ; 4343 0 208 180 CA0F
-                CMPB    off(002a7h), #005h     ; 4345 0 208 180 C4A7C005
-                JNE     purge_result_set             ; 4349 0 208 180 CE06
-                CMPB    off(002c1h), #019h     ; 434B 0 208 180 C4C1C019
-                JLT     purge_result_clear             ; 434F 0 208 180 CA03
-purge_result_set:     SC                             ; 4351 0 208 180 85
-                SJ      purge_result_clear_goto_vss_band_dispatch             ; 4352 0 208 180 CB01
-purge_result_clear:     RC                             ; 4354 0 208 180 95
-purge_result_clear_goto_vss_band_dispatch:     J       vss_band_dispatch             ; 4355 0 208 180 03C35F
+                VCAL    4                      ; 4332 (skeleton: no EVAP purge control - P0.1 stays at its power-up level, solenoid off, the stock warm-engine state)
 vss_band_dispatch_load_r2:     MOVB    r2, off(00236h)        ; 4358 0 208 180 C4364A
                 LB      A, #046h               ; 435B 0 208 180 7746
                 MOVB    r1, #046h              ; 435D 0 208 180 9946
@@ -7577,9 +7565,6 @@ gear_detect_store_load_stk:     MOV     (0017ah-00180h)[USP], A ; 5FB5 0 208 180
 gear_detect_store_load_stk_2:     MOV     (001eah-00180h)[USP], A ; 5FBC 0 208 180 B36A8A
                 VCAL    4                      ; 5FBF 0 208 180 14
                 J       threshold_bank_223_2             ; 5FC0 0 208 180 03293F
-vss_band_dispatch:     MB      P0.1, C                ; 5FC3 0 208 180 C52039
-                VCAL    4                      ; 5FC6 0 208 180 14
-                J       vss_band_dispatch_load_r2             ; 5FC7 0 208 180 035843
 altc_gio_override_check_vcal_4:     VCAL    4                      ; 5FCA 0 208 180 14
                 JBS     off(00227h).3, altc_gio_override_check_goto_4491 ; 5FCB 0 208 180 EB2703
                 J       altc_gio_override_check_if_ram216_bit3_clr             ; 5FCE 0 208 180 036844
@@ -7704,11 +7689,6 @@ idle_state_defaults_if_ram219_bit0_clr:     JBR     off(00219h).0, idle_state_de
                 J       idle_state_defaults_load_stk             ; 7843 0 208 180 032A42
 idle_state_defaults_goto_idle_stage_b7_store:     J       idle_stage_b7_store             ; 7846 0 208 180 033C42
 idle_state_defaults_goto_426c:     J       idle_stage_c0_load_clear_ram219_bit0             ; 7849 0 208 180 036C42
-purge_counter_check:     JBR     off(00218h).0, purge_counter_check_cmp_stk ; 784C 0 208 180 D81803
-                JBR     off(0021eh).4, purge_counter_check_goto_purge_result_clear ; 784F 0 208 180 DC1E08
-purge_counter_check_cmp_stk:     CMP     (001b4h-00180h)[USP], #005dch ; 7852 0 208 180 B334C0DC05
-                J       purge_counter_check_if_lt_goto_purge_result_clear             ; 7857 0 208 180 034343
-purge_counter_check_goto_purge_result_clear:     J       purge_result_clear             ; 785A 0 208 180 035443
 crank_tooth_counter_reset_if_ram113_bit0_set:
 tps_hysteresis_reentry_if_ram116_bit3_clr:     JBR     off(00116h).3, tps_hysteresis_reentry_goto_postig_gate_chain2 ; 7878 0 100 280 DB1603
                 JBS     off(00111h).5, tps_hysteresis_reentry_goto_postig_result_default ; 787B 0 100 280 ED1103
@@ -8416,4 +8396,4 @@ skel_reserved:  DB  0FFh, 0FFh, 0FFh, 0FFh, 0FFh, 0FFh ; 7FF9
 ; This byte, at a fixed address, is what the build (and the feature editor) adjusts.
 ; ------------------------------------------------------------------------------------------------
                 org 07FFFh
-checksum_fix:   DB  0FCh ; CHECKSUM correction
+checksum_fix:   DB  0FAh ; CHECKSUM correction
