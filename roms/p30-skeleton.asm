@@ -3106,57 +3106,12 @@ breset_reason_46_or_47_common:     CLRB    off(000e7h)            ; 220B 0 080 ?
                 MOVB    off(000ech), #020h     ; 2219 0 080 ??? C4EC9820
 breset_check_p4_1:     JBR     off(P4).1, selftest_reg_stuckbit_check  ; 221D 0 080 ??? D92C03
                 J       int_NMI                ; 2220 0 080 ??? 033C00
-selftest_reg_stuckbit_check:     L       A, #05555h             ; 2223 1 080 ??? 675555
-                XCHG    A, SSP                 ; 2226 1 080 ??? A010
-                XCHG    A, SSP                 ; 2228 1 080 ??? A010
-                CMP     A, #05555h             ; 222A 1 080 ??? C65555
-                JNE     selftest_fail_041             ; 222D 1 080 ??? CE5E
-                ST      A, IE                  ; 222F 1 080 ??? D51A
-                CMP     A, IE                  ; 2231 1 080 ??? B51AC2
-                JNE     selftest_fail_041             ; 2234 1 080 ??? CE57
-                L       A, #01555h             ; 2236 1 080 ??? 675515
-                MOV     LRB, A                 ; 2239 1 080 ??? A48A
-                CMP     A, LRB                 ; 223B 1 080 ??? A4C2
-                JNE     selftest_fail_041             ; 223D 1 080 ??? CE4E
-                L       A, #0aaaah             ; 223F 1 080 ??? 67AAAA
-                XCHG    A, SSP                 ; 2242 1 080 ??? A010
-                XCHG    A, SSP                 ; 2244 1 080 ??? A010
-                CMP     A, #0aaaah             ; 2246 1 080 ??? C6AAAA
-                JNE     selftest_fail_041             ; 2249 1 080 ??? CE42
-                ST      A, IE                  ; 224B 1 080 ??? D51A
-                CMP     A, IE                  ; 224D 1 080 ??? B51AC2
-                JNE     selftest_fail_041             ; 2250 1 080 ??? CE3B
-                L       A, #00aaah             ; 2252 1 080 ??? 67AA0A
-                MOV     LRB, A                 ; 2255 1 080 ??? A48A
-                CMP     A, LRB                 ; 2257 1 080 ??? A4C2
-                JNE     selftest_fail_041             ; 2259 1 080 ??? CE32
-                CLR     A                      ; 225B 1 080 ??? F9
-                ST      A, IE                  ; 225C 1 080 ??? D51A
-                ST      A, 0f2h                ; 225E 1 080 ??? D5F2
-                ST      A, 0f4h                ; 2260 1 080 ??? D5F4
-                MOV     LRB, #00010h           ; 2262 1 080 ??? 571000
-                LB      A, #055h               ; 2265 0 080 ??? 7755
-                XCHGB   A, PSWL                ; 2267 0 080 ??? A310
-                XCHGB   A, PSWL                ; 2269 0 080 ??? A310
-                CMPB    A, #0ddh               ; 226B 0 080 ??? C6DD
-                JNE     selftest_fail_041             ; 226D 0 080 ??? CE1E
-                LB      A, #0aah               ; 226F 0 080 ??? 77AA
-                XCHGB   A, PSWL                ; 2271 0 080 ??? A310
-                XCHGB   A, PSWL                ; 2273 0 080 ??? A310
-                CMPB    A, #0eah               ; 2275 0 080 ??? C6EA
-                JNE     selftest_fail_041             ; 2277 0 080 ??? CE14
-                SB      PSWH.0                 ; 2279 0 080 ??? A218
-                MB      C, PSWH.0              ; 227B 0 080 ??? A228
-                MB      PSWH.6, C              ; 227D 0 080 ??? A23E
-                JGE     selftest_fail_041             ; 227F 0 080 ??? CD0C
-                JNE     selftest_fail_041             ; 2281 0 080 ??? CE0A
-                RB      PSWH.0                 ; 2283 0 080 ??? A208
-                MB      C, PSWH.0              ; 2285 0 080 ??? A228
-                MB      PSWH.6, C              ; 2287 0 080 ??? A23E
-                JLT     selftest_fail_041             ; 2289 0 080 ??? CA02
-                JNE     periph_init_start             ; 228B 0 080 ??? CE05
-selftest_fail_041:     MOVB    0ebh, #041h            ; 228D 0 080 ??? C5EB9841
-                BRK                            ; 2291 0 080 ??? FF
+; (skeleton: no stuck-bit self-test on SSP/IE/LRB/PSW - just the initialisation it ended with)
+selftest_reg_stuckbit_check:     CLR     A
+                ST      A, IE
+                ST      A, 0f2h
+                ST      A, 0f4h
+                MOV     LRB, #00010h
 periph_init_start:     CLRB    off(PRPHF)             ; 2292 0 080 ??? C41215
                 LB      A, #0ffh               ; 2295 0 080 ??? 77FF
                 MOVB    off(P0), #0ebh         ; 2297 0 080 ??? C42098EB
@@ -3228,31 +3183,7 @@ periph_init_delay_loop_load_imm:     L       A, #0ffffh             ; 234A 1 080
                 ST      A, off(PWMR0)          ; 234D 1 080 ??? D472
                 ST      A, off(PWMR1)          ; 234F 1 080 ??? D476
                 RB      off(P4SF).3            ; 2351 1 080 ??? C42E0B
-                L       A, #05555h             ; 2354 1 080 ??? 675555
-                MOV     X1, A                  ; 2357 1 080 ??? 50
-                CMP     A, X1                  ; 2358 1 080 ??? 90C2
-                JNE     selftest_fail_042             ; 235A 1 080 ??? CE10
-                MOV     X2, A                  ; 235C 1 080 ??? 51
-                CMP     A, X2                  ; 235D 1 080 ??? 91C2
-                JNE     selftest_fail_042             ; 235F 1 080 ??? CE0B
-                SLL     A                      ; 2361 1 080 ??? 53
-                MOV     X1, A                  ; 2362 1 080 ??? 50
-                CMP     A, X1                  ; 2363 1 080 ??? 90C2
-                JNE     selftest_fail_042             ; 2365 1 080 ??? CE05
-                MOV     X2, A                  ; 2367 1 080 ??? 51
-                CMP     A, X2                  ; 2368 1 080 ??? 91C2
-                JEQ     ram_clear_loop1             ; 236A 1 080 ??? C905
-selftest_fail_042:     MOVB    off(000ebh), #042h     ; 236C 1 080 ??? C4EB9842
-                BRK                            ; 2370 1 080 ??? FF
-ram_clear_loop1:     MOV     LRB, #00040h           ; 2371 1 200 ??? 574000
-                MOV     X1, #003fah            ; 2374 1 200 ??? 60FA03
-ram_clear_loop1_body:     MOV     DP, 00084h[X1]         ; 2377 1 200 ??? B084007A
-                L       A, #05555h             ; 237B 1 200 ??? 675555
-                CAL     selftest_regbank_verify             ; 237E 1 200 ??? 329352
-                SLL     A                      ; 2381 1 200 ??? 53
-                CAL     selftest_regbank_verify             ; 2382 1 200 ??? 329352
-                SUB     X1, #00002h            ; 2385 1 200 ??? 90A00200
-                JGE     ram_clear_loop1_body             ; 2389 1 200 ??? CDEC
+; (skeleton: no index-register or RAM march self-test)
                 MOV     LRB, #00041h           ; 238B 1 208 ??? 574100
 ; (skeleton: no stored trouble codes to restore at power-up, no stored-code checksum)
 cfgvariant_check_232h_bits01:     JBR     off(00232h).0, restore_trapstate_after_ramclear ; 23D8 1 208 ??? D83208
@@ -5142,50 +5073,9 @@ learn_retry_store_cmp_acc:     CMPB    A, (00184h-00180h)[USP] ; 3747 0 208 180 
                 JLE     vcal3_task_a_return             ; 374A 0 208 180 CF03
                 INCB    (00184h-00180h)[USP]   ; 374C 0 208 180 C30416
 vcal3_task_a_return:     RT                             ; 374F 0 208 180 01
-regbank_selftest2_start:     L       A, #02ba9h             ; 3750 (skeleton: serial receive interrupt off; stock 2BABh)
-                MOV     X1, #002a0h            ; 3753 1 208 180 60A002
-                JBR     off(00217h).2, regbank_selftest2_ie_check ; 3756 1 208 180 DA1706
-                L       A, #0a9a1h             ; 3759 (skeleton: serial interrupts off; stock A9A3h)
-                MOV     X1, #000a0h            ; 375C 1 208 180 60A000
-regbank_selftest2_ie_check:     CMP     A, 0f2h                ; 375F 1 208 180 B5F2C2
-                JNE     selftest_fail_04f             ; 3762 1 208 180 CE0B
-                CMP     A, IE                  ; 3764 1 208 180 B51AC2
-                JNE     selftest_fail_04f             ; 3767 1 208 180 CE06
-                L       A, X1                  ; 3769 1 208 180 40
-                CMP     A, 0f4h                ; 376A 1 208 180 B5F4C2
-                JEQ     regbank_selftest2_range_check             ; 376D 1 208 180 C907
-selftest_fail_04f:     MOVB    0ebh, #04fh            ; 376F 1 208 180 C5EB984F
-                J       fault_retry_check             ; 3773 1 208 180 03D521
-regbank_selftest2_range_check:     L       A, off(002eeh)         ; 3776 1 208 180 E4EE
-                CMP     A, #003fah             ; 3778 1 208 180 C6FA03
-                JGT     regbank_selftest2_default             ; 377B 1 208 180 C832
-                MOV     X1, A                  ; 377D 1 208 180 50
-                MOV     DP, 00084h[X1]         ; 377E 1 208 180 B084007A
-                L       A, #05555h             ; 3782 1 208 180 675555
-                CAL     selftest_regbank_verify             ; 3785 1 208 180 329352
-                SLL     A                      ; 3788 1 208 180 53
-                CAL     selftest_regbank_verify             ; 3789 1 208 180 329352
-                L       A, X1                  ; 378C 1 208 180 40
-                SUB     A, #00002h             ; 378D 1 208 180 A60200
-                JGE     irqmode_dispatch             ; 3790 1 208 180 CD20
-                L       A, #05555h             ; 3792 1 208 180 675555
-                MOV     X1, A                  ; 3795 1 208 180 50
-                CMP     A, X1                  ; 3796 1 208 180 90C2
-                JNE     selftest_fail_042_alt             ; 3798 1 208 180 CE0B
-                MOV     X2, A                  ; 379A 1 208 180 51
-                CMP     A, X2                  ; 379B 1 208 180 91C2
-                JNE     selftest_fail_042_alt             ; 379D 1 208 180 CE06
-                SLL     A                      ; 379F 1 208 180 53
-                MOV     X1, A                  ; 37A0 1 208 180 50
-                CMP     A, X1                  ; 37A1 1 208 180 90C2
-                JEQ     regbank_selftest2_check3             ; 37A3 1 208 180 C905
-selftest_fail_042_alt:     MOVB    0ebh, #042h            ; 37A5 1 208 180 C5EB9842
-                BRK                            ; 37A9 1 208 180 FF
-regbank_selftest2_check3:     MOV     X2, A                  ; 37AA 1 208 180 51
-                CMP     A, X2                  ; 37AB 1 208 180 91C2
-                JNE     selftest_fail_042_alt             ; 37AD 1 208 180 CEF6
-regbank_selftest2_default:     L       A, #003fah             ; 37AF 1 208 180 67FA03
-irqmode_dispatch:     ST      A, off(002eeh)         ; 37B2 1 208 180 D4EE
+; (skeleton: no register-bank, interrupt-mask or RAM self-tests in the main loop)
+regbank_selftest2_start:
+irqmode_dispatch:
                 VCAL    4                      ; 37B4 1 208 180 14
                 AND     IE, #002a0h            ; 37B5 1 208 180 B51AD0A002
                 RB      PSWH.0                 ; 37BA 1 208 180 A208
@@ -5226,136 +5116,8 @@ irqmode_done:     SB      PSWH.0                 ; 3821 1 208 180 A218
                 L       A, 0f2h                ; 3823 1 208 180 E5F2
                 ST      A, IE                  ; 3825 1 208 180 D51A
                 NOP                            ; 3827 1 208 180 00
-stack_sanity_check:     CMP     SSP, #0047eh           ; 3828 1 208 180 A0C07E04
-; [H] --- Post-init peripheral verification: re-reads SSP, LRB, every port direction/special-
-; [H] function register, all four timer control regs, PWM control regs, A/D select/scan, and the
-; [H] diagnostic-serial baud/control regs, comparing each against the exact values int_break's
-; [H] init sequence (0x235F periph_init_start onward) programmed them to. Any mismatch -> stamps
-; [H] trapReasonCode=0x50 (selftest_fail_050) and BRKs, forcing a full re-init retry. This is a
-; [H] "did my own initialization actually stick" check, not a fresh self-test of new hardware.
-                JNE     selftest_fail_050             ; 382C 1 208 180 CE64
-                MOV     DP, #00400h            ; 382E 1 208 180 620004
-                L       A, [DP]                ; 3831 1 208 180 E2
-                JNE     selftest_fail_050             ; 3832 1 208 180 CE5E
-                L       A, PSW                 ; 3834 1 208 180 E504
-                AND     A, #01107h             ; 3836 1 208 180 D60711
-                CMP     A, #01100h             ; 3839 1 208 180 C60011
-                JNE     selftest_fail_050             ; 383C 1 208 180 CE54
-                CMP     LRB, #00041h           ; 383E 1 208 180 A4C04100
-                JNE     selftest_fail_050             ; 3842 1 208 180 CE4E
-                CMPB    P0IO, #0ffh            ; 3844 1 208 180 C521C0FF
-                JNE     selftest_fail_050             ; 3848 1 208 180 CE48
-                CMPB    P1IO, #0ffh            ; 384A 1 208 180 C523C0FF
-                JNE     selftest_fail_050             ; 384E 1 208 180 CE42
-                CMPB    P2IO, #0ffh            ; 3850 1 208 180 C525C0FF
-                JNE     selftest_fail_050             ; 3854 1 208 180 CE3C
-                CMPB    P2SF, #007h            ; 3856 1 208 180 C526C007
-                JNE     selftest_fail_050             ; 385A 1 208 180 CE36
-                CMPB    P3IO, #0b1h            ; 385C 1 208 180 C529C0B1
-                JNE     selftest_fail_050             ; 3860 1 208 180 CE30
-                CMPB    P3SF, #0ffh            ; 3862 1 208 180 C52AC0FF
-                JNE     selftest_fail_050             ; 3866 1 208 180 CE2A
-                CMPB    P4IO, #00dh            ; 3868 1 208 180 C52DC00D
-                JNE     selftest_fail_050             ; 386C 1 208 180 CE24
-                CMPB    P4SF, #0f4h            ; 386E 1 208 180 C52EC0F4
-                JNE     selftest_fail_050             ; 3872 1 208 180 CE1E
-                LB      A, TCON0               ; 3874 0 208 180 F540
-                MOVB    r0, #0f3h              ; 3876 0 208 180 98F3
-                ANDB    A, r0                  ; 3878 0 208 180 58
-                CMPB    A, #093h               ; 3879 0 208 180 C693
-                JNE     selftest_fail_050             ; 387B 0 208 180 CE15
-                LB      A, TCON1               ; 387D 0 208 180 F541
-                ANDB    A, r0                  ; 387F 0 208 180 58
-                CMPB    A, #053h               ; 3880 0 208 180 C653
-                JNE     selftest_fail_050             ; 3882 0 208 180 CE0E
-                LB      A, TCON2               ; 3884 0 208 180 F542
-                ANDB    A, r0                  ; 3886 0 208 180 58
-                CMPB    A, #092h               ; 3887 0 208 180 C692
-                JNE     selftest_fail_050             ; 3889 0 208 180 CE07
-                LB      A, TCON3               ; 388B 0 208 180 F543
-                ANDB    A, r0                  ; 388D 0 208 180 58
-                CMPB    A, #093h               ; 388E 0 208 180 C693
-                JEQ     periph_init_verify_pwm_adc             ; 3890 0 208 180 C905
-selftest_fail_050:     MOVB    0ebh, #050h            ; 3892 0 208 180 C5EB9850
-                BRK                            ; 3896 0 208 180 FF
-periph_init_verify_pwm_adc:     LB      A, PWCON0              ; 3897 0 208 180 F578
-                ANDB    A, #07bh               ; 3899 0 208 180 D67B
-                CMPB    A, #03ah               ; 389B 0 208 180 C63A
-                JNE     selftest_fail_050             ; 389D 0 208 180 CEF3
-                LB      A, PWCON1              ; 389F 0 208 180 F57A
-                ANDB    A, #07bh               ; 38A1 0 208 180 D67B
-                CMPB    A, #07ah               ; 38A3 0 208 180 C67A
-                JNE     selftest_fail_050             ; 38A5 0 208 180 CEEB
-                LB      A, ADSEL               ; 38A7 0 208 180 F559
-                ANDB    A, #05fh               ; 38A9 0 208 180 D65F
-                JNE     selftest_fail_050             ; 38AB 0 208 180 CEE5
-                LB      A, ADSCAN              ; 38AD 0 208 180 F558
-                ANDB    A, #05fh               ; 38AF 0 208 180 D65F
-                CMPB    A, #010h               ; 38B1 0 208 180 C610
-                JNE     selftest_fail_050             ; 38B3 0 208 180 CEDD
-                J       periph_init_verify_pwm_adc_and_ie ; 38B5 (skeleton: no serial registers to verify)
-periph_init_verify_pwm_adc_and_ie:     AND     IE, #002a0h            ; 38D8 0 208 180 B51AD0A002
-                RB      PSWH.0                 ; 38DD 0 208 180 A208
-                MOV     er0, TM0               ; 38DF 0 208 180 B53048
-                MOV     er1, TM1               ; 38E2 0 208 180 B53449
-                MOV     er2, TM2               ; 38E5 0 208 180 B5384A
-                MOV     er3, TM3               ; 38E8 0 208 180 B53C4B
-                SB      PSWH.0                 ; 38EB 0 208 180 A218
-                NOP                            ; 38ED 0 208 180 00
-                RB      PSWH.0                 ; 38EE 0 208 180 A208
-                MOV     X1, TM0                ; 38F0 0 208 180 B53078
-                MOV     X2, TM1                ; 38F3 0 208 180 B53479
-                MOV     DP, TM2                ; 38F6 0 208 180 B5387A
-                SB      PSWH.0                 ; 38F9 0 208 180 A218
-                L       A, 0f2h                ; 38FB 1 208 180 E5F2
-                ST      A, IE                  ; 38FD 1 208 180 D51A
-                L       A, X1                  ; 38FF 1 208 180 40
-; [H] --- Oscillator/timer cross-check: snapshots TM0/TM1/TM2 into X1/X2/DP, re-enables
-; [H] interrupts briefly (IE/PSWH toggling), re-snapshots into er0/er1/er2, then verifies the
-; [H] deltas fall within expected ranges (0x22, 0x80, 0x22, a ratio check against er1>>2) --
-; [H] confirms the timers are actually counting at the rate the code expects (i.e. the clock
-; [H] source/oscillator is running correctly) before trusting any timing-dependent logic
-; [H] (ignition/injection scheduling) downstream. Out-of-range -> selftest_fail_04b.
-                SUB     A, er0                 ; 3900 1 208 180 28
-                ST      A, er0                 ; 3901 1 208 180 88
-                JEQ     selftest_fail_04b             ; 3902 1 208 180 C93D
-                CMP     A, #00021h             ; 3904 1 208 180 C62100
-                JGE     selftest_fail_04b             ; 3907 1 208 180 CD38
-                L       A, X2                  ; 3909 1 208 180 41
-                SUB     A, er1                 ; 390A 1 208 180 29
-                ST      A, er1                 ; 390B 1 208 180 89
-                JEQ     selftest_fail_04b             ; 390C 1 208 180 C933
-                CMP     A, #0007fh             ; 390E 1 208 180 C67F00
-                JGE     selftest_fail_04b             ; 3911 1 208 180 CD2E
-                L       A, DP                  ; 3913 1 208 180 42
-                SUB     A, er2                 ; 3914 1 208 180 2A
-                MOV     X2, A                  ; 3915 1 208 180 51
-                JEQ     selftest_fail_04b             ; 3916 1 208 180 C929
-                CMP     A, #00021h             ; 3918 1 208 180 C62100
-                JGE     selftest_fail_04b             ; 391B 1 208 180 CD24
-                L       A, er3                 ; 391D 1 208 180 37
-                SUB     A, er2                 ; 391E 1 208 180 2A
-                MB      C, ACCH.7              ; 391F 1 208 180 C5072F
-                JGE     clock_selftest_check2             ; 3922 1 208 180 CD01
-                VCAL    7                      ; 3924 1 208 180 17
-clock_selftest_check2:     CMP     A, #00002h             ; 3925 1 208 180 C60200
-                JGE     selftest_fail_04b             ; 3928 1 208 180 CD17
-                L       A, er1                 ; 392A 1 208 180 35
-                SRL     A                      ; 392B 1 208 180 63
-                SRL     A                      ; 392C 1 208 180 63
-                SUB     A, X2                  ; 392D 1 208 180 91A2
-                JGE     clock_selftest_check3             ; 392F 1 208 180 CD01
-                VCAL    7                      ; 3931 1 208 180 17
-clock_selftest_check3:     CMP     A, #00002h             ; 3932 1 208 180 C60200
-                JGE     selftest_fail_04b             ; 3935 1 208 180 CD0A
-                L       A, X2                  ; 3937 1 208 180 41
-                SUB     A, er0                 ; 3938 1 208 180 28
-                JGE     clock_selftest_check4             ; 3939 1 208 180 CD01
-                VCAL    7                      ; 393B 1 208 180 17
-clock_selftest_check4:     CMP     A, #00002h             ; 393C 1 208 180 C60200
-                JLT     clock_selftest_passed             ; 393F 1 208 180 CA05
-selftest_fail_04b:     MOVB    0ebh, #04bh            ; 3941 1 208 180 C5EB984B
-                BRK                            ; 3945 1 208 180 FF
+; (skeleton: no stack, peripheral-register or clock self-tests)
+stack_sanity_check:
 clock_selftest_passed:     VCAL    4                      ; 3946 1 208 180 14
                 CAL     boot_completion_helper             ; 3947 1 208 180 326055
                 MOVB    r0, #001h              ; 394A 1 208 180 9801
@@ -7563,23 +7325,6 @@ timer_or_counter_helper_load_r0:     LB      A, r0                  ; 5289 0 208
                 DECB    r1                     ; 528F 0 208 180 B9
                 JNE     timer_or_counter_helper             ; 5290 0 208 180 CEE5
                 RT                             ; 5292 0 208 180 01
-selftest_regbank_verify:     MOV     X2, A                  ; 5293 1 200 ??? 51
-                SB      off(00230h).7          ; 5294 1 200 ??? C4301F
-                AND     IE, #002a0h            ; 5297 1 200 ??? B51AD0A002
-                RB      PSWH.0                 ; 529C 1 200 ??? A208
-                XCHG    A, 00084h[X1]          ; 529E 1 200 ??? B0840010
-                XCHG    A, 00084h[X1]          ; 52A2 1 200 ??? B0840010
-                ST      A, er3                 ; 52A6 1 200 ??? 8B
-                SB      PSWH.0                 ; 52A7 1 200 ??? A218
-                L       A, 0f2h                ; 52A9 1 200 ??? E5F2
-                ST      A, IE                  ; 52AB 1 200 ??? D51A
-                RB      off(00230h).7          ; 52AD 1 200 ??? C4300F
-                L       A, er3                 ; 52B0 1 200 ??? 37
-                CMP     A, X2                  ; 52B1 1 200 ??? 91C2
-                JEQ     selftest_regbank_verify_return             ; 52B3 1 200 ??? C905
-                MOVB    0ebh, #042h            ; 52B5 1 200 ??? C5EB9842
-                BRK                            ; 52B9 1 200 ??? FF
-selftest_regbank_verify_return:     RT                             ; 52BA 1 200 ??? 01
 idle_helper1:     JBR     off(00230h).3, idle_helper1_alt ; 52BB 1 208 180 DB3016
                 AND     IE, #002a0h            ; 52BE 1 208 180 B51AD0A002
                 RB      PSWH.0                 ; 52C3 1 208 180 A208
@@ -9564,4 +9309,4 @@ crank_edge_flag_store_tbl_3:       DB  000h,000h,000h,000h,000h,000h,000h,000h,0
 ; This byte, at a fixed address, is what the build (and the feature editor) adjusts.
 ; ------------------------------------------------------------------------------------------------
                 org 07FFFh
-checksum_fix:   DB  00Fh ; CHECKSUM correction
+checksum_fix:   DB  0E7h ; CHECKSUM correction
