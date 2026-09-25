@@ -95,7 +95,7 @@ public sealed class AssemblyResult
         Symbols.Values.Where(s => s.Kind == SymbolKind.Label && s.Value == address).Select(s => s.Name).FirstOrDefault() ?? "";
 }
 
-/// Two-pass assembler for the OKI MSM66207, plus extensions for modular firmware: include, if/ifdef/else/endif, module/endmodule, ds, align, incbin, assert, error/warning, string DB, romsize.
+/// Two-pass assembler for the OKI MSM66207, plus extensions for modular firmware: include, if/ifdef/else/endif, module/endmodule, ds, align, incbin, assert, error/warning, string DB, romsize, checksum.
 public sealed class OkiAssembler
 {
     readonly AssemblerOptions _opt;
@@ -149,6 +149,7 @@ public sealed class OkiAssembler
     readonly Stack<string> _moduleStack = new();
     readonly HashSet<(string, int, string)> _diagSeen = [];
     int[] _owner = []; // line id that wrote each byte (final pass), for overlap detection
+    long _checksumAt = -1; // where a "checksum" directive put its byte (final pass)
     readonly List<string> _ownerDesc = [];
 
     public AssemblyResult AssembleFile(string path)
@@ -166,6 +167,7 @@ public sealed class OkiAssembler
     AssemblyResult Run(string root, string? rootText)
     {
         _romSize = _opt.RomSize;
+        _checksumAt = -1;
         _res = new AssemblyResult { Image = new byte[_romSize], Used = new bool[_romSize] };
         Array.Fill(_res.Image, _opt.FillByte);
         if (rootText != null) _files[root] = new Src { Path = root, Lines = SplitLines(rootText) };
@@ -194,6 +196,13 @@ public sealed class OkiAssembler
             }
             if (_moduleStack.Count > 0) Report(Severity.Error, root, 0, 0, $"module '{_module}' not closed with endmodule");
             if (_res.Diagnostics.Any(d => d.Severity == Severity.Error) && !_final) break;
+        }
+        // "checksum": the byte that makes the 8-bit sum of the whole image 0, filled in once everything else is final
+        if (_checksumAt >= 0 && !_res.Diagnostics.Any(d => d.Severity == Severity.Error))
+        {
+            int sum = 0;
+            foreach (var b in _res.Image) sum += b;
+            _res.Image[_checksumAt] = (byte)(_res.Image[_checksumAt] - sum);
         }
         foreach (var (k, info) in _symInfo) _res.Symbols[k] = info with { Value = _syms[k] };
         return _res;
@@ -256,7 +265,7 @@ public sealed class OkiAssembler
     static readonly HashSet<string> CondWords = new(StringComparer.OrdinalIgnoreCase)
     { "if", "ifdef", "ifndef", "elseif", "elif", "else", "endif" };
     static readonly HashSet<string> Directives = new(StringComparer.OrdinalIgnoreCase)
-    { "include", "incbin", "module", "endmodule", "ds", "align", "assert", "error", "warning", "define", "undef", "message" };
+    { "include", "incbin", "module", "endmodule", "ds", "align", "assert", "error", "warning", "define", "undef", "message", "checksum" };
 
     void ProcessLine(Src src, int line, string text, Stack<CondFrame> conds, int depth)
     {
@@ -484,6 +493,18 @@ public sealed class OkiAssembler
                     if (n < 0 || n > _romSize) throw new AsmException("bad ds size");
                     var b = new byte[n]; Array.Fill(b, (byte)fill);
                     Emit(b, src.Path, line);
+                    return;
+                }
+            case "checksum":
+                {
+                    // one byte, set after the final pass so that the 8-bit sum of the image is 0 (the Honda ROM check)
+                    ExpectEnd(toks, q);
+                    if (_final)
+                    {
+                        if (_checksumAt >= 0) throw new AsmException("only one checksum byte per image");
+                        _checksumAt = _pc;
+                    }
+                    Emit([0], src.Path, line);
                     return;
                 }
             case "align":
