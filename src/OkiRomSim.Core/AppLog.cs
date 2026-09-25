@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Collections.Concurrent;
 
 namespace OkiRomSim.Core;
@@ -38,7 +39,7 @@ public static class AppLog
         Write(LogKind.Error, source, ex == null ? message : $"{message}: {ex.GetType().Name}: {ex.Message}", ex?.ToString());
 
     /// Entries newer than `after` (by serial), oldest first.
-    public static List<LogEntry> Since(long after) => Entries.Where(e => e.Serial > after).ToList();
-    public static List<LogEntry> All() => Entries.ToList();
+    public static List<LogEntry> Since(long after) => [.. Entries.Where(e => e.Serial > after)];
+    public static List<LogEntry> All() => [.. Entries];
     public static void Clear() { while (Entries.TryDequeue(out _)) { } }
 }

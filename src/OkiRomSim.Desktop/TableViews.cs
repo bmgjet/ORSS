@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
@@ -16,37 +17,37 @@ public sealed class TableModel
     public required ItemDef Item { get; init; }
     public int Rows { get; init; }
     public int Cols { get; init; }
-    public double[] Values { get => _values; set { _values = value; Touch(); } }
-    double[] _values = Array.Empty<double>();
-    public double[] Raw { get; set; } = Array.Empty<double>();
-    public double[] RowAxis { get; init; } = Array.Empty<double>();
-    public double[] ColAxis { get; init; } = Array.Empty<double>();
+    public double[] Values { get; set { field = value; Touch(); } } = [];
+
+    public double[] Raw { get; set; } = [];
+    public double[] RowAxis { get; init; } = [];
+    public double[] ColAxis { get; init; } = [];
     public string RowUnit { get; init; } = "";
     public string ColUnit { get; init; } = "";
     public string Unit { get; init; } = "";
     public int Decimals { get; init; } = 1;
     /// cell index -> heat: 1 = read by the program just now, fading towards 0 = read a while ago.
-    public Dictionary<int, double> Heat { get; set; } = new();
+    public Dictionary<int, double> Heat { get; set; } = [];
     /// Where the engine is on this table from a datalog frame, as fractional (row, col); wins over the program's reads (Tuner mode: the trace comes from the car, not the simulator).
     public (double Row, double Col)? ExternalTrace { get; set; }
     /// A logged channel averaged per cell (AFR, knock...), drawn in the cell corner.
     public double[]? Overlay { get; set; }
     public int[]? OverlayCount { get; set; }
     public string OverlayName { get; set; } = "";
+
     // min / max are needed for every cell's colour: work them out once per change of values
-    double _min, _max;
-    public double Min => _min;
-    public double Max => _max;
+    public double Min { get; private set; }
+    public double Max { get; private set; }
     /// Call after changing Values in place.
     public void Touch()
     {
         double lo = double.MaxValue, hi = double.MinValue;
-        foreach (var v in _values) { if (double.IsNaN(v)) continue; if (v < lo) lo = v; if (v > hi) hi = v; }
+        foreach (var v in Values) { if (double.IsNaN(v)) continue; if (v < lo) lo = v; if (v > hi) hi = v; }
         if (lo > hi) lo = hi = 0;
-        _min = lo; _max = hi;
+        Min = lo; Max = hi;
     }
     [System.Runtime.CompilerServices.IndexerName("Cell")]
-    public double this[int r, int c] => Values[r * Cols + c];
+    public double this[int r, int c] => Values[(r * Cols) + c];
 
     public string Format(double v) => double.IsNaN(v) ? "" : v.ToString("F" + Math.Clamp(Decimals, 0, 4), CultureInfo.InvariantCulture);
     public static string Axis(double v) => double.IsNaN(v) ? "-" : Math.Abs(v) >= 100 ? v.ToString("0", CultureInfo.InvariantCulture) : v.ToString("0.##", CultureInfo.InvariantCulture);
@@ -68,14 +69,13 @@ public sealed class TableModel
         if (double.IsNaN(v) || hi <= lo) return C2;
         double t = Math.Clamp((v - lo) / (hi - lo), 0, 1);
         if (t < 0.08) return Mix(C1, C2, t / 0.08);
-        if (t < 0.5) return Mix(C2, C3, (t - 0.08) / 0.42);
-        return Mix(C3, C4, (t - 0.5) / 0.5);
+        return t < 0.5 ? Mix(C2, C3, (t - 0.08) / 0.42) : Mix(C3, C4, (t - 0.5) / 0.5);
     }
 
     public static Color Mix(Color a, Color b, double t)
     {
         t = Math.Clamp(t, 0, 1);
-        return Color.FromRgb((byte)(a.R + (b.R - a.R) * t), (byte)(a.G + (b.G - a.G) * t), (byte)(a.B + (b.B - a.B) * t));
+        return Color.FromRgb((byte)(a.R + ((b.R - a.R) * t)), (byte)(a.G + ((b.G - a.G) * t)), (byte)(a.B + ((b.B - a.B) * t)));
     }
 
     /// Where the reads are centred, as fractional (row, col), or null when nothing is hot.
@@ -95,15 +95,17 @@ public sealed class TableModel
 /// The table as the tuning software draws it: RPM rows down the left, load columns across the top, every cell coloured by its value, the cells the program is reading outlined in aqua with a lime trail. Click/drag/shift+arrows select; type a number (or double-click) to edit; Enter applies it to the whole selection.
 public sealed class TableGrid : Control
 {
-    public TableModel? Model { get => _model; set { _model = value; ClampSelection(); InvalidateMeasure(); InvalidateVisual(); } }
-    TableModel? _model;
+    public TableModel? Model { get; set { field = value; ClampSelection(); InvalidateMeasure(); InvalidateVisual(); } }
+
+    /// A grid that shows numbers it does not own (the O2 / knock tables read out of a datalog): selecting and copying still work, typing and nudging do nothing.
+    public bool ReadOnly { get; set; }
 
     public const double CellW = 46, CellH = 19, HeadW = 58, HeadH = 20;
     static readonly Typeface Face = new(MainWindow.MonoFont);
     static readonly Typeface Bold = new(MainWindow.MonoFont, FontStyle.Normal, FontWeight.Bold);
     const double FontSize = 11;
     // laid-out text is by far the most expensive part of drawing a map; keep it between frames
-    static readonly Dictionary<(string, bool, double, uint), FormattedText> TextCache = new();
+    static readonly Dictionary<(string, bool, double, uint), FormattedText> TextCache = [];
     static readonly Pen CellEdge = new(new SolidColorBrush(Color.FromRgb(120, 120, 120)), 0.5);
     static readonly IBrush HeadBg = new SolidColorBrush(Color.FromRgb(224, 224, 224));
     static readonly IBrush HeadSel = new SolidColorBrush(Color.FromRgb(190, 205, 235));
@@ -142,10 +144,10 @@ public sealed class TableGrid : Control
     public IReadOnlyList<int> Selection()
     {
         var list = new List<int>();
-        if (_model == null) return list;
+        if (Model == null) return list;
         int r0 = Math.Min(_anchor.r, _cursor.r), r1 = Math.Max(_anchor.r, _cursor.r);
         int c0 = Math.Min(_anchor.c, _cursor.c), c1 = Math.Max(_anchor.c, _cursor.c);
-        for (int r = r0; r <= r1; r++) for (int c = c0; c <= c1; c++) list.Add(r * _model.Cols + c);
+        for (int r = r0; r <= r1; r++) for (int c = c0; c <= c1; c++) list.Add((r * Model.Cols) + c);
         return list;
     }
     public (int R0, int C0, int R1, int C1) SelectionRect() =>
@@ -158,30 +160,41 @@ public sealed class TableGrid : Control
         InvalidateVisual();
     }
 
+    /// Select a cell and scroll it (with a cell of margin round it) into view.
+    public void FocusCell(int r, int c)
+    {
+        SelectCell(r, c);
+        RaiseEvent(new RequestBringIntoViewEventArgs
+        {
+            RoutedEvent = RequestBringIntoViewEvent, TargetObject = this,
+            TargetRect = new Rect(HeadW + ((c - 1) * CellW), HeadH + ((r - 1) * CellH), CellW * 3, CellH * 3),
+        });
+    }
+
     void ClampSelection()
     {
-        if (_model == null) return;
-        (int, int) Clamp((int r, int c) p) => (Math.Clamp(p.r, 0, Math.Max(0, _model.Rows - 1)), Math.Clamp(p.c, 0, Math.Max(0, _model.Cols - 1)));
+        if (Model == null) return;
+        (int, int) Clamp((int r, int c) p) => (Math.Clamp(p.r, 0, Math.Max(0, Model.Rows - 1)), Math.Clamp(p.c, 0, Math.Max(0, Model.Cols - 1)));
         _anchor = Clamp(_anchor); _cursor = Clamp(_cursor);
     }
 
     protected override Size MeasureOverride(Size availableSize) =>
-        _model == null ? new Size(0, 0) : new Size(HeadW + _model.Cols * CellW + 1, HeadH + _model.Rows * CellH + 1);
+        Model == null ? new Size(0, 0) : new Size(HeadW + (Model.Cols * CellW) + 1, HeadH + (Model.Rows * CellH) + 1);
 
     public override void Render(DrawingContext ctx)
     {
-        var m = _model;
+        var m = Model;
         if (m == null) return;
         var black = new Pen(Brushes.Black, 1);
         var headBg = HeadBg;
-        ctx.FillRectangle(Brushes.White, new Rect(0, 0, HeadW + m.Cols * CellW, HeadH + m.Rows * CellH));
+        ctx.FillRectangle(Brushes.White, new Rect(0, 0, HeadW + (m.Cols * CellW), HeadH + (m.Rows * CellH)));
         // corner
         ctx.FillRectangle(headBg, new Rect(0, 0, HeadW, HeadH));
         Text(ctx, $"{m.RowUnit}\\{m.ColUnit}", new Rect(0, 0, HeadW, HeadH), Brushes.Black, 9);
         var (sr0, sc0, sr1, sc1) = SelectionRect();
         for (int c = 0; c < m.Cols; c++)
         {
-            var rc = new Rect(HeadW + c * CellW, 0, CellW, HeadH);
+            var rc = new Rect(HeadW + (c * CellW), 0, CellW, HeadH);
             ctx.FillRectangle(c >= sc0 && c <= sc1 ? HeadSel : headBg, rc);
             Text(ctx, c < m.ColAxis.Length ? TableModel.Axis(m.ColAxis[c]) : c.ToString(), rc, Brushes.Black, FontSize, bold: true);
             ctx.DrawRectangle(null, black, rc);
@@ -189,17 +202,17 @@ public sealed class TableGrid : Control
         var ext = m.ExternalTrace;
         for (int r = 0; r < m.Rows; r++)
         {
-            var rh = new Rect(0, HeadH + r * CellH, HeadW, CellH);
+            var rh = new Rect(0, HeadH + (r * CellH), HeadW, CellH);
             ctx.FillRectangle(r >= sr0 && r <= sr1 ? HeadSel : headBg, rh);
             Text(ctx, r < m.RowAxis.Length ? TableModel.Axis(m.RowAxis[r]) : r.ToString(), rh, Brushes.Black, FontSize, bold: true);
             ctx.DrawRectangle(null, black, rh);
             for (int c = 0; c < m.Cols; c++)
             {
-                int i = r * m.Cols + c;
-                var rc = new Rect(HeadW + c * CellW, HeadH + r * CellH, CellW, CellH);
+                int i = (r * m.Cols) + c;
+                var rc = new Rect(HeadW + (c * CellW), HeadH + (r * CellH), CellW, CellH);
                 var color = m.CellColor(m.Values[i]);
                 if (m.Heat.TryGetValue(i, out var h))
-                    color = h >= 0.75 ? TableModel.TraceColor : TableModel.Mix(color, TableModel.TrailColor, h / 0.75 * 0.8 + 0.2);
+                    color = h >= 0.75 ? TableModel.TraceColor : TableModel.Mix(color, TableModel.TrailColor, (h / 0.75 * 0.8) + 0.2);
                 else if (ext is { } e && Math.Abs(e.Row - r) < 1 && Math.Abs(e.Col - c) < 1)
                     color = TableModel.Mix(color, TableModel.TraceColor, 1 - Math.Max(Math.Abs(e.Row - r), Math.Abs(e.Col - c)));
                 ctx.FillRectangle(new SolidColorBrush(color), rc);
@@ -213,13 +226,13 @@ public sealed class TableGrid : Control
             }
         }
         // selection outline (the tuning software draws a thick black frame)
-        var sel = new Rect(HeadW + sc0 * CellW, HeadH + sr0 * CellH, (sc1 - sc0 + 1) * CellW, (sr1 - sr0 + 1) * CellH);
+        var sel = new Rect(HeadW + (sc0 * CellW), HeadH + (sr0 * CellH), (sc1 - sc0 + 1) * CellW, (sr1 - sr0 + 1) * CellH);
         ctx.DrawRectangle(null, new Pen(Brushes.Black, 2.5), sel);
         ctx.DrawRectangle(null, new Pen(Brushes.White, 1), sel.Deflate(2));
         // where the program is reading, interpolated
         if (m.TraceCentre() is { } tc)
         {
-            var p = new Point(HeadW + (tc.Col + 0.5) * CellW, HeadH + (tc.Row + 0.5) * CellH);
+            var p = new Point(HeadW + ((tc.Col + 0.5) * CellW), HeadH + ((tc.Row + 0.5) * CellH));
             ctx.DrawEllipse(null, new Pen(Brushes.Black, 2), p, 5, 5);
             ctx.DrawEllipse(null, new Pen(Brushes.White, 1), p, 3, 3);
         }
@@ -235,34 +248,33 @@ public sealed class TableGrid : Control
             ft = new FormattedText(s, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, bold ? Bold : Face, size, brush);
             TextCache[key] = ft;
         }
-        ctx.DrawText(ft, new Point(rc.X + (rc.Width - ft.Width) / 2, rc.Y + (rc.Height - ft.Height) / 2));
+        ctx.DrawText(ft, new Point(rc.X + ((rc.Width - ft.Width) / 2), rc.Y + ((rc.Height - ft.Height) / 2)));
     }
 
     (int r, int c)? Hit(Point p)
     {
-        if (_model == null) return null;
+        if (Model == null) return null;
         int c = (int)Math.Floor((p.X - HeadW) / CellW), r = (int)Math.Floor((p.Y - HeadH) / CellH);
         if (p.X < HeadW && p.Y >= HeadH) c = -1;
         if (p.Y < HeadH && p.X >= HeadW) r = -1;
-        if (r >= _model.Rows || c >= _model.Cols) return null;
-        return (r, c);
+        return r >= Model.Rows || c >= Model.Cols ? null : (r, c);
     }
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);
         Focus();
-        if (_model == null || Hit(e.GetPosition(this)) is not { } h) return;
+        if (Model == null || Hit(e.GetPosition(this)) is not { } h) return;
         bool shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
-        if (h.r < 0 && h.c < 0) { _anchor = (0, 0); _cursor = (_model.Rows - 1, _model.Cols - 1); }       // corner: all
+        if (h.r < 0 && h.c < 0) { _anchor = (0, 0); _cursor = (Model.Rows - 1, Model.Cols - 1); }       // corner: all
         else if (h.r < 0)                                                                              // column header
         {
-            _anchor = (0, h.c); _cursor = (_model.Rows - 1, h.c);
+            _anchor = (0, h.c); _cursor = (Model.Rows - 1, h.c);
             if (e.ClickCount == 2) { HeaderActivated?.Invoke(false, h.c); return; }
         }
         else if (h.c < 0)                                                                              // row header
         {
-            _anchor = (h.r, 0); _cursor = (h.r, _model.Cols - 1);
+            _anchor = (h.r, 0); _cursor = (h.r, Model.Cols - 1);
             if (e.ClickCount == 2) { HeaderActivated?.Invoke(true, h.r); return; }
         }
         else
@@ -279,20 +291,20 @@ public sealed class TableGrid : Control
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         base.OnPointerMoved(e);
-        if (_model == null) return;
+        if (Model == null) return;
         var p = e.GetPosition(this);
         if (_dragging && Hit(p) is { } h && h.r >= 0 && h.c >= 0 && h != _cursor) { _cursor = h; InvalidateVisual(); Describe(); }
         if (Hit(p) is not { } over || over.r < 0 || over.c < 0)
             ToolTip.SetTip(this, null);       // off the cells (a short table leaves a lot of empty panel)
         if (Hit(p) is { } t && t.r >= 0 && t.c >= 0)
         {
-            int i = t.r * _model.Cols + t.c;
-            ToolTip.SetTip(this, $"[{t.r},{t.c}]  {TableModel.Axis(t.r < _model.RowAxis.Length ? _model.RowAxis[t.r] : t.r)} {_model.RowUnit} × " +
-                                 $"{TableModel.Axis(t.c < _model.ColAxis.Length ? _model.ColAxis[t.c] : t.c)} {_model.ColUnit}\n" +
-                                 $"value {_model.Format(_model.Values[i])} {_model.Unit}   raw {_model.Raw[i]:0} (0x{(long)_model.Raw[i]:X2})   at {_model.Item.CellAddress(i):X4}" +
-                                 (_model.Heat.TryGetValue(i, out var ht) ? $"\nread by the program {(ht >= 0.75 ? "just now" : "recently")}" : "") +
-                                 (_model.Overlay is { } ov && i < ov.Length && !double.IsNaN(ov[i])
-                                     ? $"\n{_model.OverlayName}: {ov[i]:0.###} (average of {(_model.OverlayCount is { } oc && i < oc.Length ? oc[i] : 0)} logged samples)" : ""));
+            int i = (t.r * Model.Cols) + t.c;
+            ToolTip.SetTip(this, $"[{t.r},{t.c}]  {TableModel.Axis(t.r < Model.RowAxis.Length ? Model.RowAxis[t.r] : t.r)} {Model.RowUnit} × " +
+                                 $"{TableModel.Axis(t.c < Model.ColAxis.Length ? Model.ColAxis[t.c] : t.c)} {Model.ColUnit}\n" +
+                                 $"value {Model.Format(Model.Values[i])} {Model.Unit}   raw {Model.Raw[i]:0} (0x{(long)Model.Raw[i]:X2})   at {Model.Item.CellAddress(i):X4}" +
+                                 (Model.Heat.TryGetValue(i, out var ht) ? $"\nread by the program {(ht >= 0.75 ? "just now" : "recently")}" : "") +
+                                 (Model.Overlay is { } ov && i < ov.Length && !double.IsNaN(ov[i])
+                                     ? $"\n{Model.OverlayName}: {ov[i]:0.###} (average of {(Model.OverlayCount is { } oc && i < oc.Length ? oc[i] : 0)} logged samples)" : ""));
         }
     }
 
@@ -300,24 +312,24 @@ public sealed class TableGrid : Control
 
     void Describe()
     {
-        if (_model == null) return;
+        if (Model == null) return;
         var sel = Selection();
         if (sel.Count == 1)
         {
             int i = sel[0];
-            Message?.Invoke($"[{i / _model.Cols},{i % _model.Cols}] = {_model.Format(_model.Values[i])} {_model.Unit}  (raw {_model.Raw[i]:0}, at {_model.Item.CellAddress(i):X4})");
+            Message?.Invoke($"[{i / Model.Cols},{i % Model.Cols}] = {Model.Format(Model.Values[i])} {Model.Unit}  (raw {Model.Raw[i]:0}, at {Model.Item.CellAddress(i):X4})");
         }
         else
         {
-            var vals = sel.Select(i => _model.Values[i]).ToList();
-            Message?.Invoke($"{sel.Count} cells selected: min {_model.Format(vals.Min())}  avg {_model.Format(vals.Average())}  max {_model.Format(vals.Max())}");
+            var vals = sel.Select(i => Model.Values[i]).ToList();
+            Message?.Invoke($"{sel.Count} cells selected: min {Model.Format(vals.Min())}  avg {Model.Format(vals.Average())}  max {Model.Format(vals.Max())}");
         }
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
-        if (_model == null || e.Handled) return;
+        if (Model == null || e.Handled) return;
         bool shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift), ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
         (int dr, int dc) move = e.Key switch
         {
@@ -333,17 +345,19 @@ public sealed class TableGrid : Control
         }
         switch (e.Key)
         {
-            case Key.A when ctrl: _anchor = (0, 0); _cursor = (_model.Rows - 1, _model.Cols - 1); InvalidateVisual(); Describe(); e.Handled = true; return;
+            case Key.A when ctrl: _anchor = (0, 0); _cursor = (Model.Rows - 1, Model.Cols - 1); InvalidateVisual(); Describe(); e.Handled = true; return;
             case Key.C when ctrl: Copy(); e.Handled = true; return;
             case Key.V when ctrl: Paste(); e.Handled = true; return;
             case Key.Z when ctrl: Undo?.Invoke(); e.Handled = true; return;
             case Key.Y when ctrl: Redo?.Invoke(); e.Handled = true; return;
             case Key.Add or Key.PageUp or Key.OemCloseBrackets:
                 _swallowText = true;
-                NudgeCells?.Invoke(Selection(), (e.Key == Key.PageUp ? 10 : 1) * (shift ? 10 : 1)); e.Handled = true; return;
+                if (!ReadOnly) NudgeCells?.Invoke(Selection(), (e.Key == Key.PageUp ? 10 : 1) * (shift ? 10 : 1));
+                e.Handled = true; return;
             case Key.Subtract or Key.PageDown or Key.OemOpenBrackets:
                 _swallowText = true;
-                NudgeCells?.Invoke(Selection(), -(e.Key == Key.PageDown ? 10 : 1) * (shift ? 10 : 1)); e.Handled = true; return;
+                if (!ReadOnly) NudgeCells?.Invoke(Selection(), -(e.Key == Key.PageDown ? 10 : 1) * (shift ? 10 : 1));
+                e.Handled = true; return;
             case Key.F2 or Key.Enter: BeginEdit(null); e.Handled = true; return;
         }
     }
@@ -352,7 +366,7 @@ public sealed class TableGrid : Control
     {
         base.OnTextInput(e);
         if (_swallowText) { _swallowText = false; e.Handled = true; return; }
-        if (_model == null || string.IsNullOrEmpty(e.Text) || e.Handled) return;
+        if (Model == null || string.IsNullOrEmpty(e.Text) || e.Handled) return;
         char ch = e.Text[0];
         if (char.IsDigit(ch) || ch is '.' or '-' or '+' or '*' or 'r') { BeginEdit(e.Text); e.Handled = true; }
         else if (ch == '=') { BeginEdit(""); e.Handled = true; }
@@ -360,12 +374,13 @@ public sealed class TableGrid : Control
 
     void BeginEdit(string? initial)
     {
-        if (_model == null || _host == null) return;
+        if (Model == null || _host == null) return;
+        if (ReadOnly) { Message?.Invoke("these numbers came from the log, not from the ROM: they cannot be edited here"); return; }
         var (r0, c0, _, _) = SelectionRect();
-        int i = r0 * _model.Cols + c0;
-        _editor.Text = initial ?? _model.Format(_model.Values[i]);
+        int i = (r0 * Model.Cols) + c0;
+        _editor.Text = initial ?? Model.Format(Model.Values[i]);
         _editor.Width = CellW + 20; _editor.Height = CellH + 2;
-        var p = this.TranslatePoint(new Point(HeadW + c0 * CellW - 2, HeadH + r0 * CellH - 1), _host) ?? new Point();
+        var p = this.TranslatePoint(new Point(HeadW + (c0 * CellW) - 2, HeadH + (r0 * CellH) - 1), _host) ?? new Point();
         Canvas.SetLeft(_editor, p.X); Canvas.SetTop(_editor, p.Y);
         _editor.IsVisible = true;
         _editor.Focus();
@@ -377,7 +392,7 @@ public sealed class TableGrid : Control
     void CommitEdit()
     {
         _editor.IsVisible = false;
-        if (_model == null) return;
+        if (Model == null) return;
         var t = (_editor.Text ?? "").Trim();
         if (t.Length == 0) return;
         var sel = Selection();
@@ -387,12 +402,12 @@ public sealed class TableGrid : Control
         else if ((t[0] is '+' or '-') && double.TryParse(t, NumberStyles.Float, inv, out var delta))
         {
             // "+2" / "-2" change every selected cell by that much ("=-2" sets -2)
-            foreach (var i in sel) SetCells?.Invoke(new[] { i }, _model.Values[i] + delta, false);
+            foreach (var i in sel) SetCells?.Invoke(new[] { i }, Model.Values[i] + delta, false);
             return;
         }
         if (t.StartsWith('*') && double.TryParse(t[1..], NumberStyles.Float, inv, out var factor))
         {
-            foreach (var i in sel) SetCells?.Invoke(new[] { i }, _model.Values[i] * factor, false);
+            foreach (var i in sel) SetCells?.Invoke(new[] { i }, Model.Values[i] * factor, false);
             return;
         }
         if (double.TryParse(t, NumberStyles.Float, inv, out var v)) SetCells?.Invoke(sel, v, false);
@@ -401,18 +416,18 @@ public sealed class TableGrid : Control
 
     async void Copy()
     {
-        if (_model == null) return;
+        if (Model == null) return;
         var (r0, c0, r1, c1) = SelectionRect();
         var sb = new System.Text.StringBuilder();
         for (int r = r0; r <= r1; r++)
-            sb.AppendLine(string.Join("\t", Enumerable.Range(c0, c1 - c0 + 1).Select(c => _model.Format(_model[r, c]))));
+            sb.AppendLine(string.Join("\t", Enumerable.Range(c0, c1 - c0 + 1).Select(c => Model.Format(Model[r, c]))));
         if (TopLevel.GetTopLevel(this)?.Clipboard is { } cb) await cb.SetTextAsync(sb.ToString());
         Message?.Invoke($"copied {(r1 - r0 + 1) * (c1 - c0 + 1)} cells");
     }
 
     async void Paste()
     {
-        if (_model == null || TopLevel.GetTopLevel(this)?.Clipboard is not { } cb) return;
+        if (Model == null || ReadOnly || TopLevel.GetTopLevel(this)?.Clipboard is not { } cb) return;
         var text = await cb.TryGetTextAsync();
         if (string.IsNullOrWhiteSpace(text)) return;
         var (r0, c0, _, _) = SelectionRect();
@@ -424,8 +439,8 @@ public sealed class TableGrid : Control
             for (int dc = 0; dc < parts.Length; dc++)
             {
                 int r = r0 + dr, c = c0 + dc;
-                if (r >= _model.Rows || c >= _model.Cols) continue;
-                if (double.TryParse(parts[dc], NumberStyles.Float, CultureInfo.InvariantCulture, out var v)) list.Add((r * _model.Cols + c, v));
+                if (r >= Model.Rows || c >= Model.Cols) continue;
+                if (double.TryParse(parts[dc], NumberStyles.Float, CultureInfo.InvariantCulture, out var v)) list.Add(((r * Model.Cols) + c, v));
             }
         }
         PasteCells?.Invoke(list);
@@ -435,11 +450,11 @@ public sealed class TableGrid : Control
 /// Line view: one line per row across the columns (or per column down the rows), the cell the program is reading marked, and points draggable to change a value.
 public sealed class TableGraph : Control
 {
-    public TableModel? Model { get => _model; set { _model = value; InvalidateVisual(); } }
-    TableModel? _model;
+    public TableModel? Model { get; set { field = value; InvalidateVisual(); } }
+
     /// false: x = columns, one line per row; true: x = rows, one line per column.
-    public bool Transpose { get => _transpose; set { _transpose = value; InvalidateVisual(); } }
-    bool _transpose;
+    public bool Transpose { get; set { field = value; InvalidateVisual(); } }
+
     public event Action<int, double>? SetCell;
     public event Action<int>? SelectCell;
     int _dragIndex = -1, _hoverIndex = -1;
@@ -447,13 +462,13 @@ public sealed class TableGraph : Control
 
     public TableGraph() { ClipToBounds = true; MinHeight = 240; }
 
-    int Lines => _model == null ? 0 : _transpose ? _model.Cols : _model.Rows;
-    int Points => _model == null ? 0 : _transpose ? _model.Rows : _model.Cols;
-    int Index(int line, int point) => _transpose ? point * _model!.Cols + line : line * _model!.Cols + point;
+    int Lines => Model == null ? 0 : Transpose ? Model.Cols : Model.Rows;
+    int Points => Model == null ? 0 : Transpose ? Model.Rows : Model.Cols;
+    int Index(int line, int point) => Transpose ? (point * Model!.Cols) + line : (line * Model!.Cols) + point;
 
     (double lo, double hi) Range()
     {
-        var m = _model!;
+        var m = Model!;
         double lo = m.Min, hi = m.Max;
         if (hi - lo < 1e-9) { lo -= 1; hi += 1; }
         double pad = (hi - lo) * 0.08;
@@ -465,14 +480,14 @@ public sealed class TableGraph : Control
         var (lo, hi) = Range();
         double w = Bounds.Width - Pad - 12, h = Bounds.Height - Pad - 10;
         double x = Pad + (Points <= 1 ? w / 2 : point * w / (Points - 1));
-        double y = 10 + h - (v - lo) / (hi - lo) * h;
+        double y = 10 + h - ((v - lo) / (hi - lo) * h);
         return new Point(x, y);
     }
 
     public override void Render(DrawingContext ctx)
     {
         ctx.FillRectangle(Dark.Back, new Rect(Bounds.Size));
-        var m = _model;
+        var m = Model;
         if (m == null || Points == 0) return;
         var (lo, hi) = Range();
         var grid = new Pen(Dark.Grid, 1);
@@ -480,12 +495,12 @@ public sealed class TableGraph : Control
         double h = Bounds.Height - Pad - 10;
         for (int k = 0; k <= 5; k++)
         {
-            double v = lo + (hi - lo) * k / 5;
-            double y = 10 + h - h * k / 5;
+            double v = lo + ((hi - lo) * k / 5);
+            double y = 10 + h - (h * k / 5);
             ctx.DrawLine(grid, new Point(Pad, y), new Point(Bounds.Width - 12, y));
             Label(ctx, m.Format(v), new Point(2, y - 7), 10);
         }
-        var axis = _transpose ? m.RowAxis : m.ColAxis;
+        var axis = Transpose ? m.RowAxis : m.ColAxis;
         int every = Math.Max(1, Points / 12);
         for (int p = 0; p < Points; p += every)
         {
@@ -493,17 +508,16 @@ public sealed class TableGraph : Control
             ctx.DrawLine(grid, new Point(at.X, 10), new Point(at.X, 10 + h));
             Label(ctx, p < axis.Length ? TableModel.Axis(axis[p]) : p.ToString(), new Point(at.X - 12, 10 + h + 4), 10);
         }
-        Label(ctx, (_transpose ? m.RowUnit : m.ColUnit) + "  →", new Point(Bounds.Width - 90, Bounds.Height - 16), 10);
+        Label(ctx, (Transpose ? m.RowUnit : m.ColUnit) + "  →", new Point(Bounds.Width - 90, Bounds.Height - 16), 10);
         ctx.DrawLine(axisPen, new Point(Pad, 10), new Point(Pad, 10 + h));
         ctx.DrawLine(axisPen, new Point(Pad, 10 + h), new Point(Bounds.Width - 12, 10 + h));
 
-        // where the engine is: a band down the chart at the traced x, the traced line drawn
-        // thick and bright, the others dimmed, and a large marker on the interpolated value
+        // where the engine is: a band down the chart at the traced x, the traced line drawn thick and bright, the others dimmed, and a large marker on the interpolated value
         var tc = m.TraceCentre();
         double? traceX = null, traceLine = null;
         if (tc is { } t)
         {
-            double pointPos = _transpose ? t.Row : t.Col, linePos = _transpose ? t.Col : t.Row;
+            double pointPos = Transpose ? t.Row : t.Col, linePos = Transpose ? t.Col : t.Row;
             traceLine = linePos;
             double w = Bounds.Width - Pad - 12;
             traceX = Pad + (Points <= 1 ? w / 2 : Math.Clamp(pointPos, 0, Points - 1) * w / (Points - 1));
@@ -542,7 +556,7 @@ public sealed class TableGraph : Control
             int r0 = (int)Math.Floor(Math.Clamp(tt.Row, 0, m.Rows - 1)), c0 = (int)Math.Floor(Math.Clamp(tt.Col, 0, m.Cols - 1));
             int r1 = Math.Min(r0 + 1, m.Rows - 1), c1 = Math.Min(c0 + 1, m.Cols - 1);
             double fr = Math.Clamp(tt.Row - r0, 0, 1), fc = Math.Clamp(tt.Col - c0, 0, 1);
-            double v = m[r0, c0] * (1 - fr) * (1 - fc) + m[r0, c1] * (1 - fr) * fc + m[r1, c0] * fr * (1 - fc) + m[r1, c1] * fr * fc;
+            double v = (m[r0, c0] * (1 - fr) * (1 - fc)) + (m[r0, c1] * (1 - fr) * fc) + (m[r1, c0] * fr * (1 - fc)) + (m[r1, c1] * fr * fc);
             var p = new Point(tx, Pos(0, v).Y);
             ctx.DrawEllipse(null, new Pen(Brushes.White, 3), p, 10, 10);
             ctx.DrawEllipse(new SolidColorBrush(TableModel.TraceColor), new Pen(Brushes.Black, 1.5), p, 7, 7);
@@ -558,13 +572,13 @@ public sealed class TableGraph : Control
 
     static Color HsvLine(int i, int n)
     {
-        double hue = 220.0 - 220.0 * i / Math.Max(1, n - 1);     // blue (low rows) to red (high rows)
-        double x = 1 - Math.Abs(hue / 60 % 2 - 1);
+        double hue = 220.0 - (220.0 * i / Math.Max(1, n - 1));     // blue (low rows) to red (high rows)
+        double x = 1 - Math.Abs((hue / 60 % 2) - 1);
         var (r, g, b) = hue switch
         {
             < 60 => (1.0, x, 0.0), < 120 => (x, 1.0, 0.0), < 180 => (0.0, 1.0, x), _ => (0.0, x, 1.0),
         };
-        return Color.FromRgb((byte)(80 + r * 175), (byte)(80 + g * 160), (byte)(80 + b * 175));
+        return Color.FromRgb((byte)(80 + (r * 175)), (byte)(80 + (g * 160)), (byte)(80 + (b * 175)));
     }
 
     static void Label(DrawingContext ctx, string s, Point at, double size) =>
@@ -572,13 +586,13 @@ public sealed class TableGraph : Control
 
     int Nearest(Point p)
     {
-        if (_model == null) return -1;
+        if (Model == null) return -1;
         int best = -1; double bd = 100;
         for (int line = 0; line < Lines; line++)
             for (int q = 0; q < Points; q++)
             {
                 int i = Index(line, q);
-                var pt = Pos(q, _model.Values[i]);
+                var pt = Pos(q, Model.Values[i]);
                 double d = Math.Abs(pt.X - p.X) + Math.Abs(pt.Y - p.Y);
                 if (d < bd) { bd = d; best = i; }
             }
@@ -595,15 +609,15 @@ public sealed class TableGraph : Control
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         base.OnPointerMoved(e);
-        if (_model == null) return;
+        if (Model == null) return;
         var p = e.GetPosition(this);
         if (_dragIndex >= 0 && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
             var (lo, hi) = Range();
             double h = Bounds.Height - Pad - 10;
-            double v = lo + (10 + h - p.Y) / h * (hi - lo);
-            _model.Values[_dragIndex] = v;       // preview; the host writes and refreshes on release
-            _model.Touch();
+            double v = lo + ((10 + h - p.Y) / h * (hi - lo));
+            Model.Values[_dragIndex] = v;       // preview; the host writes and refreshes on release
+            Model.Touch();
             InvalidateVisual();
             return;
         }
@@ -614,7 +628,7 @@ public sealed class TableGraph : Control
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         base.OnPointerReleased(e);
-        if (_dragIndex >= 0 && _model != null) SetCell?.Invoke(_dragIndex, _model.Values[_dragIndex]);
+        if (_dragIndex >= 0 && Model != null) SetCell?.Invoke(_dragIndex, Model.Values[_dragIndex]);
         _dragIndex = -1;
     }
 }
@@ -622,8 +636,8 @@ public sealed class TableGraph : Control
 /// 3D view: the table as a coloured surface. Drag to turn it, wheel to zoom; the program's current read position is marked.
 public sealed class TableSurface : Control
 {
-    public TableModel? Model { get => _model; set { _model = value; InvalidateVisual(); } }
-    TableModel? _model;
+    public TableModel? Model { get; set { field = value; InvalidateVisual(); } }
+
     double _yaw = -0.7, _pitch = 0.55, _zoom = 1;
     Point? _last;
 
@@ -633,23 +647,23 @@ public sealed class TableSurface : Control
     {
         // x, y in [-1,1] (columns, rows), z in [0,1] (value)
         double cx = Math.Cos(_yaw), sx = Math.Sin(_yaw), cp = Math.Cos(_pitch), sp = Math.Sin(_pitch);
-        double X = x * cx - y * sx;
-        double Y = x * sx + y * cx;
+        double X = (x * cx) - (y * sx);
+        double Y = (x * sx) + (y * cx);
         double Z = (z - 0.5) * 1.1;
-        double py = Y * sp - Z * cp;
-        double depth = Y * cp + Z * sp;
+        double py = (Y * sp) - (Z * cp);
+        double depth = (Y * cp) + (Z * sp);
         double scale = Math.Min(Bounds.Width, Bounds.Height) * 0.36 * _zoom;
-        return (new Point(Bounds.Width / 2 + X * scale, Bounds.Height / 2 + py * scale), depth);
+        return (new Point((Bounds.Width / 2) + (X * scale), (Bounds.Height / 2) + (py * scale)), depth);
     }
 
     public override void Render(DrawingContext ctx)
     {
         ctx.FillRectangle(Dark.Back, new Rect(Bounds.Size));
-        var m = _model;
+        var m = Model;
         if (m == null || m.Rows < 1 || m.Cols < 1) return;
         double lo = m.Min, hi = m.Max, span = hi - lo < 1e-9 ? 1 : hi - lo;
-        double X(int c) => m.Cols == 1 ? 0 : c * 2.0 / (m.Cols - 1) - 1;
-        double Y(int r) => m.Rows == 1 ? 0 : r * 2.0 / (m.Rows - 1) - 1;
+        double X(int c) => m.Cols == 1 ? 0 : (c * 2.0 / (m.Cols - 1)) - 1;
+        double Y(int r) => m.Rows == 1 ? 0 : (r * 2.0 / (m.Rows - 1)) - 1;
         double Z(int r, int c) => (m[r, c] - lo) / span;
         var quads = new List<(double depth, Point[] pts, Color color, bool hot)>();
         int rr = Math.Max(1, m.Rows - 1), cc = Math.Max(1, m.Cols - 1);
@@ -660,7 +674,7 @@ public sealed class TableSurface : Control
                 var a = Project(X(c), Y(r), Z(r, c)); var b = Project(X(c1), Y(r), Z(r, c1));
                 var d = Project(X(c1), Y(r1), Z(r1, c1)); var e = Project(X(c), Y(r1), Z(r1, c));
                 double v = (m[r, c] + m[r, c1] + m[r1, c1] + m[r1, c]) / 4;
-                bool hot = new[] { r * m.Cols + c, r * m.Cols + c1, r1 * m.Cols + c, r1 * m.Cols + c1 }.Any(i => m.Heat.TryGetValue(i, out var h) && h >= 0.75);
+                bool hot = new[] { (r * m.Cols) + c, (r * m.Cols) + c1, (r1 * m.Cols) + c, (r1 * m.Cols) + c1 }.Any(i => m.Heat.TryGetValue(i, out var h) && h >= 0.75);
                 quads.Add(((a.depth + b.depth + d.depth + e.depth) / 4, new[] { a.p, b.p, d.p, e.p }, m.CellColor(v), hot));
             }
         var edge = new Pen(new SolidColorBrush(Color.FromArgb(140, 20, 20, 24)), 0.6);
@@ -685,7 +699,7 @@ public sealed class TableSurface : Control
         Lbl($"{m.Format(hi)} {m.Unit}", Project(-1.05, -1, 1));
         if (m.TraceCentre() is { } tc)
         {
-            double x = m.Cols == 1 ? 0 : tc.Col * 2 / (m.Cols - 1) - 1, y = m.Rows == 1 ? 0 : tc.Row * 2 / (m.Rows - 1) - 1;
+            double x = m.Cols == 1 ? 0 : (tc.Col * 2 / (m.Cols - 1)) - 1, y = m.Rows == 1 ? 0 : (tc.Row * 2 / (m.Rows - 1)) - 1;
             int r0 = (int)Math.Round(tc.Row), c0 = (int)Math.Round(tc.Col);
             var p = Project(x, y, Z(Math.Clamp(r0, 0, m.Rows - 1), Math.Clamp(c0, 0, m.Cols - 1)) + 0.03);
             ctx.DrawEllipse(Brushes.White, new Pen(Brushes.Black, 1.5), p.p, 5, 5);
@@ -701,7 +715,7 @@ public sealed class TableSurface : Control
         if (_last is not { } l) return;
         var p = e.GetPosition(this);
         _yaw += (p.X - l.X) * 0.01;
-        _pitch = Math.Clamp(_pitch + (p.Y - l.Y) * 0.01, 0.05, 1.5);
+        _pitch = Math.Clamp(_pitch + ((p.Y - l.Y) * 0.01), 0.05, 1.5);
         _last = p;
         InvalidateVisual();
     }

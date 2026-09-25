@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
@@ -11,14 +12,13 @@ using OkiRomSim.Core;
 
 namespace OkiRomSim.Desktop;
 
-/// Datalog page: every value the ECU sends in a parameter list (plus the wideband and aux channels), the raw packets going back and forth, and playback of saved logs. The port, protocol, wideband and aux channels are set in Settings.
-/// With a simulator behind it the page also drives the simulated engine with the log and compares what the simulated ECU does with what the car's did, listing the code that ran. In Tuner mode it sits beside the Calibration page in a compact form and marks the cell the car is in on the map.
+/// Datalog page: every value the ECU sends in a parameter list (plus the wideband and aux channels), the raw packets going back and forth, and playback of saved logs. The port, protocol, wideband and aux channels are set in Settings. With a simulator behind it the page also drives the simulated engine with the log and compares what the simulated ECU does with what the car's did, listing the code that ran. In Tuner mode it sits beside the Calibration page in a compact form and marks the cell the car is in on the map.
 public sealed class DatalogView : UserControl
 {
     readonly SimHost _host;
     readonly Func<TopLevel?> _top;
     public readonly DatalogEngine Engine;
-    List<LogFrame> _loaded = new();
+    List<LogFrame> _loaded = [];
     string _loadedName = "";
     bool _compact;
 
@@ -32,7 +32,15 @@ public sealed class DatalogView : UserControl
     readonly TextBlock _compare = new() { FontFamily = MainWindow.MonoFont, FontSize = 11.5 };
     readonly ListBox _code = UiStyles.Compact(new ListBox { FontFamily = MainWindow.MonoFont, FontSize = 11 });
     readonly ContentControl _body = new();
-    List<int> _codeAddrs = new();
+    /// The top of the panel: the frame's parameters, or the log as a graph (Datalogging > Parameters / Graph).
+    readonly ContentControl _paramHost = new();
+    DatalogGraphPanel? _graphPanel;
+    bool _showGraph;
+    /// How fast a replay runs against the log's own clock (Datalogging > Play rate).
+    double _rate = 1;
+    public static readonly double[] Rates = [0.2, 0.5, 1, 2, 5, 10];
+    int _fedIndex = -1;
+    List<int> _codeAddrs = [];
     ulong _codeSince;
     bool _settingPos;
     DateTime _lastCode, _lastParams;
@@ -54,7 +62,6 @@ public sealed class DatalogView : UserControl
         _host = host; _top = top;
         Engine = new DatalogEngine(host);
         Gauges = new GaugePanel(Channels, top);
-        Gauges.LoadLast();
         _connect = Btn("Connect", ToggleConnect, "Start or stop logging on the port set in Settings > Datalog ('simulator' logs the ROM running here, through its own serial port).");
         Engine.Frame += OnLiveFrame;
         _playTimer.Tick += (_, _) => PlayTick();
@@ -101,17 +108,29 @@ public sealed class DatalogView : UserControl
     public void SetCompact(bool compact)
     {
         _compact = compact;
-        foreach (var c in new Control[] { _connect, _pos, _posText, _status, _params, Gauges, _compare, _code }) Detach(c);
+        // Tuner mode and the simulator keep their own gauges: the dashboard on screen (and where its floating widgets sit) is written out, and the other mode's is put back as it was left
+        Gauges.UseProfile(compact ? "tuner" : "simulator");
+        foreach (var c in new Control[] { _connect, _pos, _posText, _status, _paramHost, Gauges, _compare, _code }) Detach(c);
+        UiStyles.Adopt(_params);
+        if (_graphPanel != null) UiStyles.Adopt(_graphPanel);
+        _paramHost.Content = _showGraph ? GraphPanel() : _params;
         var row1 = new WrapPanel { Margin = new Thickness(4, 4, 4, 2) };
+        // beside the map (Tuner mode) these live in the calibration bar's Datalogging menu
+        if (!compact)
+        {
         row1.Children.Add(_connect);
         row1.Children.Add(Btn("Load log…", LoadLog,
             "Open a log: an .rlog (the datalog, the ROM it ran on and the tuning settings in one file), a binary datalog (DATALOGGER header) or a CSV " +
             "(rpm, map_kpa, tps_pct, ect_c, iat_c, o2_v, batt_v, speed_kmh, afr, ...)."));
         row1.Children.Add(Btn("Save log…", SaveLog, "Write the frames logged from the car (or the loaded log) to a CSV file, every channel and the raw frame included."));
         row1.Children.Add(Btn("Clear", ClearAll, "Stop logging and put the page back to how it started: no frames, no loaded log, no packets."));
+        row1.Children.Add(Btn("Graph…", OpenGraph,
+            "The whole log as a graph: any set of channels against time on one set of axes, each on its own scale, with a cursor " +
+            "that reads them all at the moment it sits on and moves the position here with it. Channel sets can be saved as templates."));
         row1.Children.Add(Btn("Detect layout", DetectLayout,
             "Work out how this ROM datalogs, from the ROM itself: its serial code is read for the command bytes it answers, each is tried in a simulator " +
             "until one returns a checksummed frame, and then every engine input is changed in turn to see which byte of the frame follows it."));
+        }
         var row2 = new WrapPanel { Margin = new Thickness(4, 2) };
         row2.Children.Add(Lbl("Log"));
         row2.Children.Add(Btn("▶ Play", Play, compact ? "Replay the loaded log in real time: the map marks where the engine was, frame by frame." :
@@ -125,17 +144,14 @@ public sealed class DatalogView : UserControl
 
         if (compact)
         {
-            // controls and the frame's values on top, gauges below them, with a splitter between:
-            // the gauges start a little under half the panel and can be dragged as large as the
-            // screen allows, which matters on a big monitor where the rest is empty space
+            // controls and the frame's values on top, gauges below them, with a splitter between: the gauges start a little under half the panel and can be dragged as large as the screen allows, which matters on a big monitor where the rest is empty space
             var top = new StackPanel();
             top.Children.Add(new TextBlock { Text = "DATALOG", FontSize = 11, FontWeight = FontWeight.Bold, Margin = new Thickness(6, 4, 0, 0) });
-            top.Children.Add(row1); top.Children.Add(row2); top.Children.Add(_status);
-            top.Children.Add(Head("  parameters"));
+            top.Children.Add(row2); top.Children.Add(_status);
             var upper = new DockPanel();
             DockPanel.SetDock(top, Dock.Top);
             upper.Children.Add(top);
-            upper.Children.Add(_params);
+            upper.Children.Add(_paramHost);
 
             var lower = new DockPanel();
             var gaugeHead = Head("  gauges");
@@ -157,7 +173,7 @@ public sealed class DatalogView : UserControl
             row1.Children.Add(Btn("Clear code list", () => { _codeSince = _host.Sim.Cpu.Cycles; _code.ItemsSource = null; }, "Start the 'code that ran' list afresh from now."));
             var body = new Grid { ColumnDefinitions = new ColumnDefinitions("300,6,*,6,Auto,6,*") };
             var p1 = new DockPanel();
-            var h1 = Head("parameters"); DockPanel.SetDock(h1, Dock.Top); p1.Children.Add(h1); p1.Children.Add(_params);
+            p1.Children.Add(_paramHost);
             Grid.SetColumn(p1, 0); body.Children.Add(p1);
             var p2 = new DockPanel();
             var h2 = Head("gauges");
@@ -209,8 +225,7 @@ public sealed class DatalogView : UserControl
         _connect.Content = "Connecting…";
         _status.Text = $"opening {port}…";
         AppLog.Action("datalog", $"connect {port} ({Protocol}, {Baud})");
-        // opening a serial port, the handshake and protocol detection all wait on the cable:
-        // none of it happens on the UI thread
+        // opening a serial port, the handshake and protocol detection all wait on the cable: none of it happens on the UI thread
         Task.Run(() =>
         {
             string? error = null;
@@ -226,6 +241,92 @@ public sealed class DatalogView : UserControl
         });
     }
     bool _connecting;
+
+    DatalogGraphWindow? _graph;
+
+    /// The log as a graph. One window at a time: opening it again brings the one that is up to the front rather than stacking another on it.
+    void OpenGraph()
+    {
+        if (_top() is not Window owner) return;
+        if (_graph is { } open)
+        {
+            try { open.Activate(); return; }
+            catch { _graph = null; }      // it had been closed
+        }
+        var w = new DatalogGraphWindow(GraphFrames, Seek);
+        _graph = w;
+        w.Closed += (_, _) => { if (ReferenceEquals(_graph, w)) _graph = null; };
+        w.Show(owner);
+    }
+
+    /// What the graphs draw: the live recording while logging, else the log the slider works on.
+    IReadOnlyList<LogFrame> GraphFrames() => Engine.Running ? Engine.Frames() : Log();
+
+    /// The graph for the top of the panel, made the first time it is asked for.
+    DatalogGraphPanel GraphPanel() => _graphPanel ??= new DatalogGraphPanel(GraphFrames, Seek, compact: true);
+
+    /// A graph cursor moved: take the rest of the page with it, so the map's trace marker follows.
+    void Seek(int i)
+    {
+        var log = Log();
+        if (i < 0 || i >= log.Count) return;
+        _settingPos = true;
+        _pos.Value = i;
+        _settingPos = false;
+        ShowFrame(i);
+        SetCurrent(log[i]);
+    }
+
+    /// Put the graph (true) or the parameter list at the top of the panel.
+    public void ShowGraph(bool graph)
+    {
+        _showGraph = graph;
+        UiStyles.Adopt(_params);
+        if (_graphPanel != null) UiStyles.Adopt(_graphPanel);
+        _paramHost.Content = graph ? GraphPanel() : _params;
+        if (!graph && Current != null) _params.ItemsSource = Parameters(Current);
+    }
+
+    /// Replay speed against the log's clock; a replay running now carries on from where it is.
+    public void SetRate(double rate)
+    {
+        var log = _loaded;
+        if (_playTimer.IsEnabled && _playIndex >= 0 && _playIndex < log.Count)
+        {
+            _playWallStart = DateTime.Now;
+            _playLogStart = log[_playIndex].T;
+        }
+        _rate = rate;
+        _status.Text = $"replay speed {rate:0.#}x";
+        AppLog.Action("datalog", $"play rate {rate}x");
+    }
+
+    public double Rate => _rate;
+
+    /// The Datalogging menu (on the calibration bar beside the map): everything that used to be buttons along the top of this panel.
+    public Toolbar.Entry[] MenuEntries(Func<bool> liveTrace, Action<bool> setLiveTrace) =>
+    [
+        new Toolbar.Entry(Toolbar.Log, Engine.Running ? "Disconnect" : "Connect",
+            "Start or stop logging on the port set in Settings > Datalog ('simulator' logs the ROM running here, through its own serial port).", ToggleConnect),
+        Toolbar.Entry.Line,
+        new Toolbar.Entry(Toolbar.Open, "Load log…",
+            "Open a log: an .rlog (the datalog, the ROM it ran on and the tuning settings in one file), a binary datalog or a CSV.", LoadLog),
+        new Toolbar.Entry(Toolbar.Save, "Save log…", "Write the frames logged from the car (or the loaded log) to a CSV file.", SaveLog),
+        new Toolbar.Entry(Toolbar.Clear, "Clear", "Stop logging and put the panel back to how it started: no frames, no loaded log, no packets.", ClearAll),
+        Toolbar.Entry.Line,
+        new Toolbar.Entry(Toolbar.Log, "Graph", "Show the log as a graph at the top of the datalog panel, with a bar where the replay is (live, it draws as it logs).",
+            () => ShowGraph(true), Checked: () => _showGraph),
+        new Toolbar.Entry(Toolbar.Log, "Parameters", "Show every value of the current frame at the top of the datalog panel.",
+            () => ShowGraph(false), Checked: () => !_showGraph),
+        new Toolbar.Entry(Toolbar.Log, "Graph window…", "The graph in a window of its own, as large as you like.", OpenGraph),
+        Toolbar.Entry.Line,
+        Toolbar.Entry.Submenu(Toolbar.Run, "Play rate", "How fast Play replays the log against its own clock.",
+            () => [.. Rates.Select(r => new Toolbar.Entry("", $"{r:0.#}x", $"Replay at {r:0.#} times real time.", () => SetRate(r), Checked: () => Math.Abs(_rate - r) < 1e-9))]),
+        new Toolbar.Entry("", "Live trace", "Mark the cell the engine is in on the map on screen.", () => setLiveTrace(!liveTrace()), Checked: liveTrace),
+        Toolbar.Entry.Line,
+        new Toolbar.Entry(Toolbar.Detect, "Detect layout",
+            "Work out how this ROM datalogs, from the ROM itself: the serial code is read for the command bytes it answers, each is tried in a simulator.", DetectLayout),
+    ];
 
     /// Work the protocol out from the ROM itself (in a simulator, off the UI thread).
     void DetectLayout()
@@ -318,11 +419,11 @@ public sealed class DatalogView : UserControl
         _host.StopPlayback();
         Engine.Stop();
         Engine.ClearFrames();
-        _loaded = new();
+        _loaded = [];
         _loadedName = "";
         Gauges.ClearHistory();
         _params.ItemsSource = null;
-        _codeAddrs = new();
+        _codeAddrs = [];
         _code.ItemsSource = null;
         _codeSince = 0;
         _settingPos = true;
@@ -346,7 +447,7 @@ public sealed class DatalogView : UserControl
         var rec = Engine.Frames();
         if (_loaded.Count == 0 && rec.Count > 0)
         {
-            _loaded = rec.ToList();                 // a copy, so the next connection cannot move it under the slider
+            _loaded = [.. rec];                 // a copy, so the next connection cannot move it under the slider
             _loadedName = "live recording";
         }
         var log = Log();
@@ -376,7 +477,7 @@ public sealed class DatalogView : UserControl
         _status.Text = "replay stopped";
     }
 
-    public IEnumerable<string> Channels() => (Engine.Latest ?? Current ?? _loaded.FirstOrDefault())?.Channels() ?? Array.Empty<string>();
+    public IEnumerable<string> Channels() => (Engine.Latest ?? Current ?? _loaded.FirstOrDefault())?.Channels() ?? [];
 
     // ------------------------------------------------------------------ files
 
@@ -461,15 +562,14 @@ public sealed class DatalogView : UserControl
         if (log.Count == 0) { _status.Text = "nothing to replay: load a log, or log from the car first"; return; }
         if (Engine.Running) { _status.Text = "stop logging first (Stop), then Play replays what was recorded"; return; }
         int from = Math.Clamp((int)_pos.Value, 0, log.Count - 1);
-        // replay in wall time; when the simulator is behind it, each frame's readings go onto
-        // its inputs as they come (that also works when the ROM is not running)
+        // replay in wall time; when the simulator is behind it, each frame's readings go onto its inputs as they come (that also works when the ROM is not running)
         _playIndex = from;
         _playWallStart = DateTime.Now;
         _playLogStart = log[from].T;
         _codeSince = _host.Sim.Cpu.Cycles;
         if (DriveSimulator && !_compact && _host.LoadedPath != null && !_host.IsRunning) _host.Control("run");
         _playTimer.Start();
-        _status.Text = $"replaying from frame {from + 1} of {log.Count}" + (DriveSimulator && !_compact ? " through the simulator" : "");
+        _status.Text = $"replaying from frame {from + 1} of {log.Count} at {_rate:0.#}x" + (DriveSimulator && !_compact ? " through the simulator" : "");
         AppLog.Action("datalog", $"play from frame {from}");
     }
 
@@ -479,7 +579,7 @@ public sealed class DatalogView : UserControl
     {
         var log = _loaded;
         if (_playIndex < 0 || log.Count == 0) { _playTimer.Stop(); return; }
-        double t = (DateTime.Now - _playWallStart).TotalSeconds + _playLogStart;
+        double t = ((DateTime.Now - _playWallStart).TotalSeconds * _rate) + _playLogStart;
         while (_playIndex + 1 < log.Count && log[_playIndex + 1].T <= t) _playIndex++;
         _settingPos = true; _pos.Value = _playIndex; _settingPos = false;
         ShowFrame(_playIndex);
@@ -544,10 +644,17 @@ public sealed class DatalogView : UserControl
         if ((DateTime.UtcNow - _lastParams).TotalMilliseconds > 120)
         {
             _lastParams = DateTime.UtcNow;
-            if (f != null) _params.ItemsSource = Parameters(f);
-            Gauges.Show(f);
+            if (f != null && !_showGraph) _params.ItemsSource = Parameters(f);
+            // a replay (or the slider) feeds the gauges every frame it passed, not just the one it landed on, so a fast replay draws the same line a slow one does
+            int at = Engine.Running || _loaded.Count == 0 ? -1 : Math.Clamp((int)_pos.Value, 0, _loaded.Count - 1);
+            if (at >= 0 && f != null && ReferenceEquals(f, _loaded[at])) { Gauges.Feed(_loaded, _fedIndex, at); _fedIndex = at; }
+            else { Gauges.Show(f); _fedIndex = -1; }
         }
         if (!_compact && s != null && f != null) _compare.Text = Compare(f, s, source);
+        // the graphs mark where the log is (the replay, the slider) or run live with the logger
+        int where = Math.Clamp((int)_pos.Value, 0, Math.Max(0, _loaded.Count - 1));
+        if (_showGraph) _graphPanel?.Follow(where, Engine.Running);
+        _graph?.Panel.Follow(where, Engine.Running);
         if (!_compact && (DateTime.UtcNow - _lastCode).TotalMilliseconds > 700 && (_host.PlaybackActive || Engine.Running || _codeSince > 0))
         {
             _lastCode = DateTime.UtcNow;
@@ -628,7 +735,7 @@ public sealed class DatalogView : UserControl
             addrs.Add((int)l.Value);
         }
         _codeAddrs = addrs;
-        _code.ItemsSource = rows.Count == 0 ? new List<string> { "(nothing yet: play a log or connect)" } : rows;
+        _code.ItemsSource = rows.Count == 0 ? ["(nothing yet: play a log or connect)"] : rows;
     }
 
     public void Shutdown() => Engine.Dispose();

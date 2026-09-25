@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Diagnostics;
 using System.Globalization;
 using System.IO.Ports;
@@ -12,10 +13,23 @@ public sealed class SerialLink : IByteLink, IDisposable
     readonly SerialPort _port;
     public string Name => _port.PortName;
 
+    /// Raise DTR and RTS when the port is opened. Most OBD1 cables do not care; a few take their power from those lines and read nothing at all without it (Settings > Datalog).
+    public static bool RaiseDtrRts;
+    public static int WriteTimeoutMs = 300;
+
     public SerialLink(string port, int baud)
     {
-        _port = new SerialPort(port, baud, Parity.None, 8, StopBits.One) { ReadTimeout = 300, WriteTimeout = 500 };
+        _port = new SerialPort(port, baud, Parity.None, 8, StopBits.One)
+        {
+            ReadTimeout = 300, WriteTimeout = Math.Max(50, WriteTimeoutMs),
+            // a 51-byte frame arriving while the last one is still being decoded needs somewhere to sit; the established tuning software asks for a buffer of this size for the same reason
+            ReadBufferSize = 4352, WriteBufferSize = 1024,
+            Handshake = Handshake.None, DtrEnable = RaiseDtrRts, RtsEnable = RaiseDtrRts,
+            // the bytes are bytes, not text: a code page that folds 0x80-0xFF would corrupt a frame
+            Encoding = System.Text.Encoding.Latin1,
+        };
         _port.Open();
+        try { _port.DiscardInBuffer(); _port.DiscardOutBuffer(); } catch { }
     }
 
     public void Write(byte[] data) => _port.Write(data, 0, data.Length);
@@ -25,12 +39,20 @@ public sealed class SerialLink : IByteLink, IDisposable
         _port.ReadTimeout = Math.Max(1, timeoutMs);
         try { return _port.Read(buffer, offset, count); }
         catch (TimeoutException) { return 0; }
+        // the cable was unplugged mid-frame: the engine above treats 0 as a timeout and retries
+        catch (InvalidOperationException) { return 0; }
+        catch (IOException) { return 0; }
     }
 
     public void Discard() { try { _port.DiscardInBuffer(); } catch { } }
+    public void SetBaud(int baud)
+    {
+        try { if (_port.BaudRate != baud) { _port.BaudRate = baud; Discard(); } }
+        catch (Exception ex) { AppLog.Warn("datalog", $"could not set {_port.PortName} to {baud} baud: {ex.Message}"); }
+    }
     public void Dispose() { try { _port.Close(); _port.Dispose(); } catch { } }
 
-    public static string[] Ports() => SerialPort.GetPortNames().OrderBy(p => p.Length).ThenBy(p => p).ToArray();
+    public static string[] Ports() => [.. SerialPort.GetPortNames().OrderBy(p => p.Length).ThenBy(p => p)];
 }
 
 /// The simulated ROM's own serial port: the datalog talks to the ROM's datalogging code exactly as it would to a car (a "virtual ECU"). Bytes travel at the cable's baud rate in simulated time, so the simulator must be running for answers to come back.
@@ -41,6 +63,15 @@ public sealed class SimLink : IByteLink
     public string Name => "simulator";
     public void Write(byte[] data) => _host.SerialToRom(data);
     public void Discard() => _host.SerialDiscard();
+    int _plainBaud;
+    /// The stock tester link is a 9600-baud K-line; back to the logger's own speed when it is switched off.
+    public void SetBaud(int baud) { if (_plainBaud == 0) _host.SerialBaud = baud; else _plainBaud = baud; }
+    public void SetKLine(bool on)
+    {
+        if (on && _plainBaud == 0) { _plainBaud = _host.SerialBaud; _host.SerialBaud = 9600; }
+        else if (!on && _plainBaud != 0) { _host.SerialBaud = _plainBaud; _plainBaud = 0; }
+        _host.SerialKLine = on;
+    }
 
     public int Read(byte[] buffer, int offset, int count, int timeoutMs)
     {
@@ -135,8 +166,8 @@ public sealed class WidebandReader : IDisposable
                             if (B(p) != 0x5A || B(p) != 0xA5) break;
                             var f = new byte[26];
                             for (int i = 0; i < 26; i++) f[i] = B(p);
-                            int word = f[3] << 8 | f[4];                 // frame bytes 5-6
-                            if (f[23] == 3 && f[24] == 0) Set((word / 8192.0 + 0.5) * Stoich);
+                            int word = (f[3] << 8) | f[4];                 // frame bytes 5-6
+                            if (f[23] == 3 && f[24] == 0) Set(((word / 8192.0) + 0.5) * Stoich);
                             break;
                         }
                     case "PLX":
@@ -144,7 +175,7 @@ public sealed class WidebandReader : IDisposable
                             if (B(p) != 0xFF) break;
                             var f = new byte[9];
                             for (int i = 0; i < 9; i++) f[i] = B(p);
-                            if (f[8] == 0xFF) Set((f[7] * 0.0026667 + 0.68) * Stoich);
+                            if (f[8] == 0xFF) Set(((f[7] * 0.0026667) + 0.68) * Stoich);
                             break;
                         }
                     case "Innovate":
@@ -194,7 +225,7 @@ public sealed class DatalogEngine : IDisposable
     volatile bool _stop;
     readonly Stopwatch _clock = new();
     readonly object _lock = new();
-    readonly List<LogFrame> _frames = new();
+    readonly List<LogFrame> _frames = [];
     readonly Queue<Packet> _packets = new();
     long _packetSerial;
     public readonly WidebandReader Wideband = new();
@@ -207,7 +238,7 @@ public sealed class DatalogEngine : IDisposable
     public string Source { get; private set; } = "";
     public LogFrame? Latest { get; private set; }
     public double FramesPerSecond { get; private set; }
-    public List<AuxChannel> AuxChannels { get; set; } = new();
+    public List<AuxChannel> AuxChannels { get; set; } = [];
     public int KeepFrames { get; set; } = 50_000;
     public int IntervalMs { get; set; }
     public bool PausePackets { get; set; }
@@ -216,7 +247,7 @@ public sealed class DatalogEngine : IDisposable
 
     public DatalogEngine(SimHost host) { _host = host; }
 
-    public List<LogFrame> Frames() { lock (_lock) return _frames.ToList(); }
+    public List<LogFrame> Frames() { lock (_lock) return [.. _frames]; }
     public int FrameCount { get { lock (_lock) return _frames.Count; } }
     public void ClearFrames() { lock (_lock) _frames.Clear(); }
 
@@ -226,7 +257,7 @@ public sealed class DatalogEngine : IDisposable
         lock (_packets)
         {
             long first = _packetSerial - _packets.Count + 1;
-            return _packets.Select((p, i) => (first + i, p)).Where(x => x.Item1 > after).ToList();
+            return [.. _packets.Select((p, i) => (first + i, p)).Where(x => x.Item1 > after)];
         }
     }
 
@@ -256,6 +287,9 @@ public sealed class DatalogEngine : IDisposable
     public void Start(string port, string protocol, int baud)
     {
         Stop();
+        // a protocol with a line speed of its own (the stock tester link) uses it unless one was set in Settings
+        var named = protocol.Equals("auto", StringComparison.OrdinalIgnoreCase) ? null : DatalogProtocol.ByName(protocol);
+        if (named != null && named.Baud != 38400 && baud == 38400) baud = named.Baud;
         _link = port.Equals("simulator", StringComparison.OrdinalIgnoreCase) ? new SimLink(_host) : new SerialLink(port, baud);
         Source = _link.Name;
         if (_link is SimLink) { _host.SerialBaud = baud; if (!_host.IsRunning && _host.LoadedPath != null) _host.Control("run"); }
@@ -292,7 +326,7 @@ public sealed class DatalogEngine : IDisposable
                 AppLog.Write(LogKind.Serial, "datalog", "protocol detection:\n" + report.TrimEnd());
                 if (p == null)
                 {
-                    Status = "no datalog protocol answered (see the packet monitor and the Debug page). The ROM needs datalogging code; stock ROMs have none.";
+                    Status = "no datalog protocol answered (see the packet monitor and the Debug page).";
                     return;
                 }
                 Protocol = p;
@@ -311,6 +345,7 @@ public sealed class DatalogEngine : IDisposable
             Status = $"logging {Protocol.Name} from {Source}";
             AppLog.Write(LogKind.Serial, "datalog", Status);
             int timeouts = 0;
+            int retries = Math.Max(1, Protocol.Retries);
             var rate = Stopwatch.StartNew(); int inWindow = 0;
             while (!_stop)
             {
@@ -319,11 +354,28 @@ public sealed class DatalogEngine : IDisposable
                 if (f == null)
                 {
                     Bad++;
-                    if (++timeouts == 10) { Status = $"{Protocol.Name}: {note} - no answers from the ECU"; AppLog.Warn("datalog", Status); }
-                    if (timeouts > 30 && !Protocol.Handshake(link, out _)) Thread.Sleep(200);
+                    timeouts++;
+                    // a missed frame is normal now and then; a run of them means the conversation has fallen out of step, and the way back is the handshake, not more waiting
+                    if (timeouts % retries == 0)
+                    {
+                        link.Discard();
+                        if (Protocol.Handshake(link, out var again))
+                        {
+                            Status = $"logging {Protocol.Name} from {Source} (re-shook hands after {timeouts} missed frame(s))";
+                            AppLog.Write(LogKind.Serial, "datalog", Status);
+                            timeouts = 0;
+                            continue;
+                        }
+                        if (timeouts >= retries * 3)
+                        {
+                            Status = $"{Protocol.Name}: {note}; the handshake says {again} - no answers from the ECU";
+                            AppLog.Warn("datalog", Status);
+                            Thread.Sleep(200);
+                        }
+                    }
                     continue;
                 }
-                if (timeouts >= 10) Status = $"logging {Protocol.Name} from {Source}";
+                if (timeouts > 0) Status = $"logging {Protocol.Name} from {Source}";
                 timeouts = 0;
                 Good++;
                 Enrich(f);
@@ -363,6 +415,8 @@ public sealed class DatalogEngine : IDisposable
         _stop = true;
         try { _thread?.Join(800); } catch { }
         _thread = null;
+        // the simulated line goes back to a plain serial port for the next protocol
+        try { _link?.SetKLine(false); } catch { }
         if (_link is IDisposable d) d.Dispose();
         _link = null;
         if (Status.StartsWith("logging")) Status = $"stopped: {Good} frames, {Bad} missed";

@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -14,7 +15,7 @@ public sealed class ZoomHost : LayoutTransformControl
 {
     public string Key { get; }
     readonly Action<double>? _apply;
-    double _zoom = 1;
+
     public event Action<string, double>? ZoomChanged;
 
     public ZoomHost(string key, Control child, Action<double>? apply = null)
@@ -27,20 +28,20 @@ public sealed class ZoomHost : LayoutTransformControl
 
     public double Zoom
     {
-        get => _zoom;
+        get;
         set
         {
-            _zoom = Math.Round(Math.Clamp(value, 0.5, 3), 2);
-            if (_apply != null) _apply(_zoom);
-            else LayoutTransform = Math.Abs(_zoom - 1) < 0.001 ? null : new ScaleTransform(_zoom, _zoom);
+            field = Math.Round(Math.Clamp(value, 0.5, 3), 2);
+            if (_apply != null) _apply(field);
+            else LayoutTransform = Math.Abs(field - 1) < 0.001 ? null : new ScaleTransform(field, field);
         }
-    }
+    } = 1;
 
     void OnWheel(object? sender, PointerWheelEventArgs e)
     {
         if (!e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.Delta.Y == 0) return;
         Zoom += e.Delta.Y > 0 ? 0.1 : -0.1;
-        ZoomChanged?.Invoke(Key, _zoom);
+        ZoomChanged?.Invoke(Key, Zoom);
         e.Handled = true;
     }
 }
@@ -51,11 +52,11 @@ public sealed class DebugView : UserControl
     readonly ListBox _list = UiStyles.Compact(new ListBox { FontFamily = MainWindow.MonoFont, FontSize = 11 });
     readonly TextBox _detail = new() { IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, FontFamily = MainWindow.MonoFont, FontSize = 11 };
     readonly TextBox _filter = new() { Watermark = "filter", Width = 220 };
-    readonly Dictionary<LogKind, CheckBox> _kinds = new();
+    readonly Dictionary<LogKind, CheckBox> _kinds = [];
     readonly CheckBox _follow = new() { Content = "follow newest", IsChecked = true, FontSize = 11 };
     readonly TextBlock _count = new() { FontSize = 11, Opacity = 0.75, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0) };
-    readonly List<LogEntry> _all = new();
-    List<LogEntry> _shown = new();
+    readonly List<LogEntry> _all = [];
+    List<LogEntry> _shown = [];
     long _last;
     bool _dirty = true;
     readonly Func<TopLevel?> _top;
@@ -122,9 +123,9 @@ public sealed class DebugView : UserControl
         if (!_dirty) return;
         _dirty = false;
         var f = (_filter.Text ?? "").Trim();
-        _shown = _all.Where(e => _kinds[e.Kind].IsChecked == true &&
+        _shown = [.. _all.Where(e => _kinds[e.Kind].IsChecked == true &&
                                  (f.Length == 0 || e.Message.Contains(f, StringComparison.OrdinalIgnoreCase) || e.Source.Contains(f, StringComparison.OrdinalIgnoreCase)))
-                     .TakeLast(3000).ToList();
+                     .TakeLast(3000)];
         int sel = _list.SelectedIndex;
         _list.ItemsSource = _shown.Select(Format).ToList();
         _count.Text = $"{_shown.Count} shown, {_all.Count} kept, {_all.Count(e => e.Kind == LogKind.Error)} errors";

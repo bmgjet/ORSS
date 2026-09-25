@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -7,8 +8,7 @@ using OkiRomSim.Core;
 
 namespace OkiRomSim.Desktop;
 
-/// Scaling a whole section at once: this table by a percentage, every fuel table for a different injector size, the load axis for a different MAP sensor, and the rescale that gives a fuel map that has run to the top of its scale room to grow again (each column's multiplier is raised and its cells divided to match, so the ECU delivers exactly what it did before).
-/// Nothing is written until Apply: the preview line says what would change first, and the whole scaling lands as a single undo step.
+/// Scaling a whole section at once: this table by a percentage, every fuel table for a different injector size, the load axis for a different MAP sensor, and the rescale that gives a fuel map that has run to the top of its scale room to grow again (each column's multiplier is raised and its cells divided to match, so the ECU delivers exactly what it did before). Nothing is written until Apply: the preview line says what would change first, and the whole scaling lands as a single undo step.
 public sealed class ScaleWindow : Window
 {
     readonly SimHost _host;
@@ -21,16 +21,24 @@ public sealed class ScaleWindow : Window
         _host = host;
         _item = item;
         Title = "Scale";
-        Width = 620; SizeToContent = SizeToContent.Height; CanResize = false;
+        // a fixed size that holds the tallest page (sizing to the content cut the inputs off under the dark title bar, and a page picked later could be taller than the first one); anything that still does not fit scrolls
+        Width = 620; Height = 470; MinWidth = 440; MinHeight = 380;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         var chrome = DarkChrome.Apply(this, "Scale");
 
         var tabs = new TabControl { Margin = new Thickness(8, 4) };
-        tabs.Items.Add(new TabItem { Header = "This table", Content = TablePage() });
-        tabs.Items.Add(new TabItem { Header = "Headroom", Content = HeadroomPage() });
-        tabs.Items.Add(new TabItem { Header = "Injectors", Content = InjectorPage() });
-        tabs.Items.Add(new TabItem { Header = "MAP sensor", Content = MapPage() });
+        // small tab headers: the theme's own large ones took a third of a small window
+        TabItem Tab(string header, Control page) => new()
+        {
+            Header = new TextBlock { Text = header, FontSize = 13 }, Tag = header, MinHeight = 30, Padding = new Thickness(10, 3),
+            Content = new ScrollViewer { Content = page, HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled },
+        };
+        tabs.Items.Add(Tab("This table", TablePage()));
+        tabs.Items.Add(Tab("Headroom", HeadroomPage()));
+        tabs.Items.Add(Tab("Injectors", InjectorPage()));
+        tabs.Items.Add(Tab("MAP sensor", MapPage()));
         tabs.SelectionChanged += (_, _) => Preview();
+        _tabs = tabs;
 
         var apply = new Button { Content = "Apply", IsDefault = true, MinWidth = 96 };
         apply.Click += (_, _) => Apply();
@@ -40,10 +48,10 @@ public sealed class ScaleWindow : Window
         var bar = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 6, Margin = new Thickness(12, 4, 12, 12) };
         bar.Children.Add(close); bar.Children.Add(apply);
 
-        var body = new StackPanel { Margin = new Thickness(12, 0) };
-        body.Children.Add(_preview);
+        // the preview can list every axis it would move: it scrolls in a box of its own instead of pushing the inputs and the buttons off the window
+        var body = new ScrollViewer { Content = _preview, Margin = new Thickness(12, 0), MaxHeight = 96, HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled };
 
-        var g = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto") };
+        var g = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto,Auto") };
         Grid.SetRow(chrome, 0); g.Children.Add(chrome);
         Grid.SetRow(tabs, 1); g.Children.Add(tabs);
         Grid.SetRow(body, 2); g.Children.Add(body);
@@ -70,10 +78,11 @@ public sealed class ScaleWindow : Window
 
     static Control Line(string label, Control editor, string? note = null)
     {
-        var sp = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 4) };
-        sp.Children.Add(new TextBlock { Text = label, Width = 190, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap });
+        // wraps rather than running off the side when the window is narrow
+        var sp = new WrapPanel { Margin = new Thickness(0, 4) };
+        sp.Children.Add(new TextBlock { Text = label, Width = 190, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 8, 0) });
         sp.Children.Add(editor);
-        if (note != null) sp.Children.Add(new TextBlock { Text = note, VerticalAlignment = VerticalAlignment.Center, FontSize = 11, Opacity = 0.7 });
+        if (note != null) sp.Children.Add(new TextBlock { Text = note, VerticalAlignment = VerticalAlignment.Center, FontSize = 11, Opacity = 0.7, Margin = new Thickness(8, 0, 0, 0) });
         return sp;
     }
 
@@ -92,7 +101,7 @@ public sealed class ScaleWindow : Window
         p.Children.Add(new TextBlock { Text = _item.Name + $"  ({_item.Rows} x {_item.Cols})", FontWeight = FontWeight.Bold });
         p.Children.Add(Line("Change every cell by", pct, "%"));
         p.Children.Add(keep);
-        _pages["This table"] = rom => Rescale.ScaleTable(_host.Defs(), rom, _item, 1 + (double)(pct.Value ?? 0) / 100, keep.IsChecked == true);
+        _pages["This table"] = rom => Rescale.ScaleTable(_host.Defs(), rom, _item, 1 + ((double)(pct.Value ?? 0) / 100), keep.IsChecked == true);
         return p;
     }
 
@@ -153,7 +162,7 @@ public sealed class ScaleWindow : Window
         return p;
     }
 
-    readonly Dictionary<string, Func<byte[], ScaleReport>> _pages = new();
+    readonly Dictionary<string, Func<byte[], ScaleReport>> _pages = [];
 
     IEnumerable<ItemDef> FuelTables() =>
         _host.Defs().Items.Where(i => i.IsTable && i.Count > 1 &&
@@ -163,8 +172,8 @@ public sealed class ScaleWindow : Window
 
     // ------------------------------------------------------------------ preview / apply
 
-    string Current => (Content as Grid)?.Children.OfType<TabControl>().FirstOrDefault()?.SelectedItem is TabItem t
-        ? t.Header as string ?? "" : "";
+    TabControl? _tabs;
+    string Current => _tabs?.SelectedItem is TabItem t ? t.Tag as string ?? "" : "";
 
     ScaleReport? Build()
     {

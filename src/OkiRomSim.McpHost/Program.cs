@@ -1,13 +1,11 @@
+// Copyright (c) bmgjet. All rights reserved.
 using OkiRomSim.Mcp;
 
 // okirom-mcp: MCP server for OKI MSM66207 ROM development.
 //
-//   okirom-mcp [--root DIR]...                         stdio (for local agent launchers)
-//   okirom-mcp --http [--port 8765] [--remote] [--password PW] [--cert file.pfx --cert-password PW] [--root DIR]...
-//   okirom-mcp --read-only ...                         refuse every write
+// okirom-mcp [--root DIR]... stdio (for local agent launchers) okirom-mcp --http [--port 8765] [--remote] [--password PW] [--cert file.pfx --cert-password PW] [--root DIR]... okirom-mcp --read-only ... refuse every write
 //
-// The password can also come from the OKIROMSIM_MCP_PASSWORD environment variable (keeps it
-// out of process listings). --remote listens on all interfaces and requires a password.
+// The password can also come from the OKIROMSIM_MCP_PASSWORD environment variable (keeps it out of process listings). --remote listens on all interfaces and requires a password.
 var roots = new List<string>();
 bool http = false, remote = false, readOnly = false;
 int port = 8765;
@@ -39,8 +37,7 @@ var server = new McpServer(new Workspace(roots) { ReadOnly = readOnly })
 };
 if (!http)
 {
-    // stdout carries the protocol and nothing else: anything else that writes to the console
-    // goes to stderr instead, so a stray message cannot corrupt a reply.
+    // stdout carries the protocol and nothing else: anything else that writes to the console goes to stderr instead, so a stray message cannot corrupt a reply.
     var protocolOut = new StreamWriter(Console.OpenStandardOutput(), new System.Text.UTF8Encoding(false)) { AutoFlush = false };
     Console.SetOut(Console.Error);
     await McpStdio.RunAsync(server, new StreamReader(Console.OpenStandardInput(), System.Text.Encoding.UTF8), protocolOut);

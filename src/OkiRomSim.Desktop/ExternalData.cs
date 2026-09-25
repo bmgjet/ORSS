@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Globalization;
 using System.Text.Json;
 using OkiRomSim.Core;
@@ -17,15 +18,14 @@ public sealed class ExternalFeedSettings
     public bool Enabled { get; set; } = true;
 }
 
-/// Polls the feeds in the background and keeps the last numbers each one produced, so gauges (and anything else that wants them) can read them without waiting on the network.
-/// Whatever the source returns is flattened to `name.key` numbers: nested objects join with dots, arrays use their index, true/false become 1/0, and a string that parses as a number counts. Anything else is ignored. A feed that fails is logged once and retried on its own timer, so a dead endpoint cannot stall the UI.
+/// Polls the feeds in the background and keeps the last numbers each one produced, so gauges (and anything else that wants them) can read them without waiting on the network. Whatever the source returns is flattened to `name.key` numbers: nested objects join with dots, arrays use their index, true/false become 1/0, and a string that parses as a number counts. Anything else is ignored. A feed that fails is logged once and retried on its own timer, so a dead endpoint cannot stall the UI.
 public sealed class ExternalData : IDisposable
 {
     readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(5) };
     readonly Dictionary<string, double> _values = new(StringComparer.OrdinalIgnoreCase);
     readonly object _lock = new();
     CancellationTokenSource? _stop;
-    List<ExternalFeedSettings> _feeds = new();
+    List<ExternalFeedSettings> _feeds = [];
 
     /// Channel -> value, as of the last poll.
     public IReadOnlyDictionary<string, double> Values
@@ -38,7 +38,7 @@ public sealed class ExternalData : IDisposable
     public void Start(IEnumerable<ExternalFeedSettings> feeds)
     {
         Stop();
-        _feeds = feeds.Where(f => f.Enabled && f.Source.Trim().Length > 0).ToList();
+        _feeds = [.. feeds.Where(f => f.Enabled && f.Source.Trim().Length > 0)];
         if (_feeds.Count == 0) { Status = "no external feeds"; return; }
         _stop = new CancellationTokenSource();
         var token = _stop.Token;

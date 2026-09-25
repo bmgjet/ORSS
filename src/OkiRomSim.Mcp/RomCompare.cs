@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Text;
 using OkiRomSim.Calibration;
 using OkiRomSim.Core;
@@ -36,7 +37,7 @@ public static class RomCompare
         var vec = new List<string>();
         for (int v = 0; v < 0x38 / 2; v++)
         {
-            int ta = a.Image[v * 2] | a.Image[v * 2 + 1] << 8, tb = b.Image[v * 2] | b.Image[v * 2 + 1] << 8;
+            int ta = a.Image[v * 2] | (a.Image[(v * 2) + 1] << 8), tb = b.Image[v * 2] | (b.Image[(v * 2) + 1] << 8);
             if (ta != tb) vec.Add($"{ProcessorProfile.Current.VectorNames.ElementAtOrDefault(v) ?? $"vector {v}"}: {a.Name(ta)} ({ta:X4}) -> {b.Name(tb)} ({tb:X4})");
         }
         if (vec.Count > 0) { sb.AppendLine(); sb.AppendLine("VECTORS CHANGED"); foreach (var x in vec) sb.AppendLine("  " + x); }
@@ -173,7 +174,7 @@ public static class RomCompare
         var todo = new Queue<int>();
         for (int v = 0; v < 0x38 / 2; v++)
         {
-            int t = p.Image[v * 2] | p.Image[v * 2 + 1] << 8;
+            int t = p.Image[v * 2] | (p.Image[(v * 2) + 1] << 8);
             if (t >= 0x38 && t < Bus.RomSize) todo.Enqueue(t);
         }
         while (todo.Count > 0 && result.Count < 3000)

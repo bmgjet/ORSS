@@ -1,6 +1,5 @@
-// A scripted trip through the engine's operating regions: coverage is limited by situations, not speed.
-// Each Phase holds the engine at one operating point for a number of instructions, interpolating toward
-// it so transitions also run. The default cycle runs cold conditions first, before the ECT model warms up.
+// Copyright (c) bmgjet. All rights reserved.
+// A scripted trip through the engine's operating regions: coverage is limited by situations, not speed. Each Phase holds the engine at one operating point for a number of instructions, interpolating toward it so transitions also run. The default cycle runs cold conditions first, before the ECT model warms up.
 
 namespace OkiRomSim.Core;
 
@@ -25,22 +24,20 @@ public sealed class Phase
 
 public sealed class DriveCycle
 {
-    public readonly List<Phase> Phases = new();
+    public readonly List<Phase> Phases = [];
     public bool Loop = true;
-
-    private int _index;
     private long _phaseInstructions;
     private Phase? _current;
     private Phase? _previous;
 
     public string CurrentPhaseName => _current?.Name ?? "(none)";
-    public int CurrentPhaseIndex => _index;
+    public int CurrentPhaseIndex { get; private set; }
     /// Phase names in the order they were first entered, for the run report.
-    public readonly List<string> PhasesVisited = new();
+    public readonly List<string> PhasesVisited = [];
 
     public void Reset()
     {
-        _index = 0;
+        CurrentPhaseIndex = 0;
         _phaseInstructions = 0;
         _current = null;
         _previous = null;
@@ -54,7 +51,7 @@ public sealed class DriveCycle
 
         if (_current == null)
         {
-            _current = Phases[_index];
+            _current = Phases[CurrentPhaseIndex];
             _phaseInstructions = 0;
             PhasesVisited.Add(_current.Name);
             _current.OnEnter?.Invoke(sim);
@@ -69,11 +66,11 @@ public sealed class DriveCycle
         if (++_phaseInstructions >= _current.Instructions)
         {
             _previous = _current;
-            _index++;
-            if (_index >= Phases.Count)
+            CurrentPhaseIndex++;
+            if (CurrentPhaseIndex >= Phases.Count)
             {
                 if (!Loop) { _current = null; return false; }
-                _index = 0;
+                CurrentPhaseIndex = 0;
             }
             _current = null;
         }
@@ -108,7 +105,7 @@ public sealed class DriveCycle
     {
         if (b == null) return current;
         double start = a ?? current;
-        return start + (b.Value - start) * t;
+        return start + ((b.Value - start) * t);
     }
 
     /// The default sweep: cold start through to key-off, ordered so each region is reachable when it runs.
@@ -117,8 +114,7 @@ public sealed class DriveCycle
         var dc = new DriveCycle();
         void Add(Phase p) { p.Instructions = scale; dc.Phases.Add(p); }
 
-        // Boot happens with the key on but the engine stopped. The ROM's
-        // self-test, RAM clear and A/D mux scan all run here.
+        // Boot happens with the key on but the engine stopped. The ROM's self-test, RAM clear and A/D mux scan all run here.
         Add(new Phase { Name = "key-on, engine off", Rpm = 0, MapKpa = 101, TpsPct = 0,
                         EctCelsius = -5, IatCelsius = -5, VbattVolts = 12.4, SpeedKmh = 0,
                         Cranking = false, RampFraction = 0 });
@@ -144,8 +140,7 @@ public sealed class DriveCycle
         Add(new Phase { Name = "part throttle accel", Rpm = 3600, MapKpa = 75, TpsPct = 40,
                         SpeedKmh = 80, O2Volts = 0.8, EgrLiftPct = 5 });
 
-        // Every VTEC crossover condition at once: rpm, throttle, temperature,
-        // road speed and the oil-pressure switch.
+        // Every VTEC crossover condition at once: rpm, throttle, temperature, road speed and the oil-pressure switch.
         Add(new Phase { Name = "WOT + VTEC", Rpm = 6200, MapKpa = 98, TpsPct = 100,
                         SpeedKmh = 140, O2Volts = 0.9, EgrLiftPct = 0,
                         VtecPressureSwitch = true });
@@ -156,16 +151,14 @@ public sealed class DriveCycle
         Add(new Phase { Name = "rev limit", Rpm = 7400, MapKpa = 99, TpsPct = 100,
                         KnockIntensity = 0 });
 
-        // Closed throttle at speed is decel fuel cut: injectors off, high
-        // vacuum, lean O2.
+        // Closed throttle at speed is decel fuel cut: injectors off, high vacuum, lean O2.
         Add(new Phase { Name = "decel fuel cut", Rpm = 3800, MapKpa = 18, TpsPct = 0,
                         SpeedKmh = 110, O2Volts = 0.05 });
 
         Add(new Phase { Name = "overrun to idle", Rpm = 850, MapKpa = 30, TpsPct = 0,
                         SpeedKmh = 0, O2Volts = 0.45, RampFraction = 0.7 });
 
-        // High altitude: the baro correction paths only run when the reading
-        // moves well away from sea level.
+        // High altitude: the baro correction paths only run when the reading moves well away from sea level.
         Add(new Phase { Name = "high altitude cruise", BaroKpa = 72, Rpm = 2600,
                         MapKpa = 40, TpsPct = 15, SpeedKmh = 60 });
 
@@ -175,8 +168,7 @@ public sealed class DriveCycle
         Add(new Phase { Name = "key-off shutdown", PowerGood = false, Rpm = 0,
                         TpsPct = 0, SpeedKmh = 0, Cranking = false, RampFraction = 0 });
 
-        // Back to power-good so a looping cycle reboots cleanly rather than
-        // sitting in the shutdown path forever.
+        // Back to power-good so a looping cycle reboots cleanly rather than sitting in the shutdown path forever.
         Add(new Phase { Name = "power restored", PowerGood = true, RampFraction = 0,
                         Rpm = 0 });
 

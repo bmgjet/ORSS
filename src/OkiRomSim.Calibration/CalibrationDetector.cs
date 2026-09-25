@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Text.RegularExpressions;
 using OkiRomSim.Assembler;
 using OkiRomSim.Core;
@@ -27,8 +28,7 @@ public static class CalibrationDetector
         {
             var e = asm.Lookup(a);
             if (e == null) return false;
-            if (!texts.TryGetValue(e.File, out var lines) || e.Line < 1 || e.Line > lines.Length) return true;
-            return !DataLine.IsMatch(lines[e.Line - 1]);
+            return !texts.TryGetValue(e.File, out var lines) || e.Line < 1 || e.Line > lines.Length ? true : !DataLine.IsMatch(lines[e.Line - 1]);
         }
         int added = 0, replaced = 0;
         var names = new List<string>();
@@ -37,8 +37,7 @@ public static class CalibrationDetector
             var same = defs.Items.FirstOrDefault(i => i.Address == item.Address);
             if (same == null) { defs.Items.Add(item); added++; names.Add(item.Name); return; }
             bool rough = same.Origin?.StartsWith("detected") == true && !(same.Origin?.Contains("2D") ?? false);
-            // a map found again with different geometry (a better column count, say) replaces
-            // the earlier detection - but never a hand-made or imported definition
+            // a map found again with different geometry (a better column count, say) replaces the earlier detection - but never a hand-made or imported definition
             bool restated = same.Origin?.StartsWith("detected") == true && item.Origin?.StartsWith("detected") == true &&
                             (same.Rows != item.Rows || same.Cols != item.Cols || same.Stride != item.Stride);
             if (restated)
@@ -130,7 +129,7 @@ public static class CalibrationDetector
     }
 
     static List<string> Split(string s) =>
-        s.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToList();
+        [.. s.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)];
 
     static bool IsNumber(string s) =>
         Regex.IsMatch(s, @"^(0[0-9A-Fa-f]*[hH]|[0-9][0-9A-Fa-f]*[hH]|[0-9]+|0x[0-9A-Fa-f]+|\$[0-9A-Fa-f]+)$");

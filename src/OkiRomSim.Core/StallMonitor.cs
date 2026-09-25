@@ -1,8 +1,5 @@
-// Detects the CPU spinning on a handful of addresses, works out what it waits for, and makes it happen if allowed.
-// Two kinds of spin, distinguished by watching reads while the loop runs (not from a fixed table):
-//   * A DELAY loop spins on a register the CPU decrements, so it always terminates; fast-forward it.
-//   * A POLL loop spins on a value the CPU never writes; nudge whatever it reads and report it, since a
-//     nudged address is a hardware signal this model does not yet understand.
+// Copyright (c) bmgjet. All rights reserved.
+// Detects the CPU spinning on a handful of addresses, works out what it waits for, and makes it happen if allowed. Two kinds of spin, distinguished by watching reads while the loop runs (not from a fixed table): * A DELAY loop spins on a register the CPU decrements, so it always terminates; fast-forward it. * A POLL loop spins on a value the CPU never writes; nudge whatever it reads and report it, since a nudged address is a hardware signal this model does not yet understand.
 
 namespace OkiRomSim.Core;
 
@@ -13,8 +10,8 @@ public sealed class StallEvent
     public ushort Pc;
     public string Kind = "";        // "delay" | "poll" | "unresolved"
     public string Action = "";      // what was done about it
-    public ushort[] LoopPcs = Array.Empty<ushort>();
-    public ushort[] PolledAddresses = Array.Empty<ushort>();
+    public ushort[] LoopPcs = [];
+    public ushort[] PolledAddresses = [];
 
     public override string ToString() =>
         $"{AtInstruction,12:N0}  {Pc:X4}  {Kind,-10}  {Action}";
@@ -37,7 +34,7 @@ public sealed class StallMonitor
     /// Last resort: if a poll loop survives several nudges and is stuck on a plain (non-port, non-modeled) SFR or RAM byte, invert that byte. This *will* diverge from real hardware, so it is off unless you are doing a coverage sweep and care more about reaching code than about the state being physical.
     public bool ForceUnstickMemory;
 
-    public readonly List<StallEvent> Events = new();
+    public readonly List<StallEvent> Events = [];
 
     /// Addresses StallMonitor must never write. Everything Bus actually simulates lives here: touching it would overwrite real modeled state with noise and make the run meaningless.
     private static readonly HashSet<ushort> Protected = BuildProtectedSet();
@@ -67,9 +64,9 @@ public sealed class StallMonitor
     }
 
     // ---- spin detection state ---------------------------------------------
-    private readonly Dictionary<ushort, int> _loopPcs = new();
-    private readonly HashSet<ushort> _readsDuringSpin = new();
-    private readonly Dictionary<ushort, int> _nudgeAttempts = new();
+    private readonly Dictionary<ushort, int> _loopPcs = [];
+    private readonly HashSet<ushort> _readsDuringSpin = [];
+    private readonly Dictionary<ushort, int> _nudgeAttempts = [];
     private int _spinLength;
     private bool _collecting;
 
@@ -111,8 +108,7 @@ public sealed class StallMonitor
             return false;
         }
 
-        // Once we are fairly sure this is a loop, start recording what it
-        // reads so we know what it is waiting on.
+        // Once we are fairly sure this is a loop, start recording what it reads so we know what it is waiting on.
         if (!_collecting && _spinLength > SpinThreshold / 2)
         {
             _collecting = true;
@@ -122,9 +118,7 @@ public sealed class StallMonitor
         if (_spinLength < SpinThreshold) return false;
 
         bool acted = Intervene(cpu, bus, board, instructionCount);
-        // Restart the window either way: if the intervention worked we will
-        // leave the loop; if it did not, we get another go one window later
-        // and escalate.
+        // Restart the window either way: if the intervention worked we will leave the loop; if it did not, we get another go one window later and escalate.
         ResetSpin(pc);
         return acted;
     }
@@ -146,7 +140,7 @@ public sealed class StallMonitor
             AtInstruction = instructionCount,
             Pc = cpu.Pc,
             LoopPcs = loop,
-            PolledAddresses = _readsDuringSpin.OrderBy(a => a).ToArray(),
+            PolledAddresses = [.. _readsDuringSpin.OrderBy(a => a)],
         };
 
         // --- 1. A counted delay loop? ---------------------------------------
@@ -214,7 +208,7 @@ public sealed class StallMonitor
         int slot = operand switch { "X1" => 0, "X2" => 2, "DP" => 4, "USP" => 6, _ => -1 };
         if (slot >= 0)
         {
-            bus.WriteDataU16((ushort)(0x0080 + cpu.Scb() * 8 + slot), value);
+            bus.WriteDataU16((ushort)(0x0080 + (cpu.Scb() * 8) + slot), value);
             return true;
         }
         if (operand.Length >= 2 && operand[0] == 'r' && char.IsDigit(operand[1]))
@@ -225,7 +219,7 @@ public sealed class StallMonitor
         if (operand.StartsWith("er", StringComparison.Ordinal) && operand.Length >= 3 &&
             char.IsDigit(operand[2]))
         {
-            bus.WriteDataU16((ushort)(cpu.BankBase() + (operand[2] - '0') * 2), value);
+            bus.WriteDataU16((ushort)(cpu.BankBase() + ((operand[2] - '0') * 2)), value);
             return true;
         }
         if (operand == "A") { cpu.A = value; return true; }

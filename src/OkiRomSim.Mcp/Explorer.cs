@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Text;
 using System.Text.RegularExpressions;
 using OkiRomSim.Assembler;
@@ -16,17 +17,17 @@ public sealed class Explorer
     {
         public int Entry;
         public string Name = "";
-        public SortedDictionary<int, (Decoded D, string Text)> Code = new();
-        public SortedSet<int> Calls = new();
-        public SortedSet<int> TailJumps = new();
-        public List<(int From, int To)> Loops = new();
-        public SortedSet<string> RamRead = new(), RamWrite = new(), Sfr = new(), RomData = new(), Bits = new();
+        public SortedDictionary<int, (Decoded D, string Text)> Code = [];
+        public SortedSet<int> Calls = [];
+        public SortedSet<int> TailJumps = [];
+        public List<(int From, int To)> Loops = [];
+        public SortedSet<string> RamRead = [], RamWrite = [], Sfr = [], RomData = [], Bits = [];
         public bool EndsRti, HasBrk, IndirectJump, Truncated;
-        public List<string> Evidence = new();
+        public List<string> Evidence = [];
         public string Purpose = "";
     }
 
-    static readonly HashSet<string> Terminal = new() { "RT", "RTI", "BRK" };
+    static readonly HashSet<string> Terminal = ["RT", "RTI", "BRK"];
     static readonly Regex Branchy = new(@"^(J|SJ|JEQ|JNE|JLT|JGE|JGT|JLE|JBS|JBR|JRNZ)\b");
 
     public Routine Walk(int entry, int maxInstructions)
@@ -76,15 +77,15 @@ public sealed class Explorer
     {
         string op = d.Mnemonic.Split(' ')[0];
         if (op == "VCAL" && int.TryParse(d.Mnemonic.Split(' ').Last(), out var n))
-            return _p.Image[0x28 + n * 2] | _p.Image[0x29 + n * 2] << 8;
+            return _p.Image[0x28 + (n * 2)] | (_p.Image[0x29 + (n * 2)] << 8);
         if (d.Mnemonic.Contains("rel8")) return pc + d.Len + d.Fields.Rel8;
         if (d.Mnemonic.Contains("addr16")) return d.Fields.Addr16;
         return null;      // indirect: [DP], [[DP]], [N16[X1]]...
     }
 
-    static readonly HashSet<string> Writers = new() { "ST", "STB", "MOV", "MOVB", "CLR", "CLRB", "INC", "INCB", "DEC", "DECB", "SB", "RB",
+    static readonly HashSet<string> Writers = [ "ST", "STB", "MOV", "MOVB", "CLR", "CLRB", "INC", "INCB", "DEC", "DECB", "SB", "RB",
         "ADD", "ADDB", "SUB", "SUBB", "ADC", "ADCB", "SBC", "SBCB", "AND", "ANDB", "OR", "ORB", "XOR", "XORB", "SLL", "SLLB", "SRL", "SRLB",
-        "SRA", "SRAB", "ROL", "ROLB", "ROR", "RORB", "XCHG", "XCHGB", "POPS", "SBR", "RBR" };
+        "SRA", "SRAB", "ROL", "ROLB", "ROR", "RORB", "XCHG", "XCHGB", "POPS", "SBR", "RBR" ];
 
     void Analyse(Routine r, int pc, Decoded d, string src)
     {
@@ -163,7 +164,7 @@ public sealed class Explorer
         (new(@"^P2\.[0-3]"), "selects injectors (P2.0-P2.3)"),
         (new(@"^P2\.4"), "toggles the board watchdog heartbeat (P2.4)"),
         (new(@"^P2 \(write|^P2\.[5-7]"), "sets the analog mux channel (P2.5-7)"),
-        (new(@"^P4\.6"), "reads the VTEC oil-pressure switch (P4.6)"),
+        (new(@"^P4\.6"), "reads the injector-driver test feedback (P4.6)"),
         (new(@"^WDT"), "services the watchdog (WDT)"),
         (new(@"^ADCR|^ADSCAN|^ADSEL"), "reads the A/D converter (sensors)"),
         (new(@"^TMR0|^TM0"), "schedules with timer 0 (injector pulse timing)"),

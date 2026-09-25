@@ -1,11 +1,9 @@
-// Top-level glue tying Cpu + Bus + EngineState + InterruptController into a runnable simulator.
-// The core step/tick/interrupt loop is:
+// Copyright (c) bmgjet. All rights reserved.
+// Top-level glue tying Cpu + Bus + EngineState + InterruptController into a runnable simulator. The core step/tick/interrupt loop is:
 //
-//   before = cpu.Cycles
-//   ExecStep.Step(cpu, bus)
-//   timerIrq = bus.TickTimers(cpu.Cycles - before)
-//   distIrq  = engine.CheckDistributorPulses(bus, cpu.Cycles, Bus.CpuHz)
-//   InterruptController.HandlePendingInterrupts(cpu, bus, timerIrq | distIrq)
+// before = cpu.Cycles ExecStep.Step(cpu, bus) timerIrq = bus.TickTimers(cpu.Cycles - before) distIrq = engine.CheckDistributorPulses(bus, cpu.Cycles, Bus.CpuHz) InterruptController.HandlePendingInterrupts(cpu, bus, timerIrq | distIrq)
+
+using System.Diagnostics.CodeAnalysis;
 
 namespace OkiRomSim.Core;
 
@@ -15,16 +13,16 @@ public enum RunState { Stopped, Running, Halted, Faulted }
 public readonly struct TraceEntry
 {
     public readonly ushort Pc;
-    private readonly string? _text;
-    private readonly Decoded? _decoded;
     private readonly ushort _pcAfter;
     private readonly string? _prefix;
-    public TraceEntry(ushort pc, string text) { Pc = pc; _text = text; _decoded = null; _pcAfter = 0; _prefix = null; }
+    public TraceEntry(ushort pc, string text) { Pc = pc; Text = text; Decoded = null; _pcAfter = 0; _prefix = null; }
     /// Lazily formatted: formatting every executed instruction cost more than executing it.
     public TraceEntry(ushort pc, Decoded d, ushort pcAfter, string? prefix = null)
-    { Pc = pc; _text = null; _decoded = d; _pcAfter = pcAfter; _prefix = prefix; }
-    public Decoded? Decoded => _decoded;
-    public string Text => _text ?? (_prefix + (_decoded == null ? "" : Decoder.Format(_decoded, _pcAfter)));
+    { Pc = pc; Text = null; Decoded = d; _pcAfter = pcAfter; _prefix = prefix; }
+    public Decoded? Decoded { get; }
+
+    [AllowNull]
+    public string Text => field ?? (_prefix + (Decoded == null ? "" : Decoder.Format(Decoded, _pcAfter)));
 }
 
 public sealed class Simulator
@@ -36,6 +34,9 @@ public sealed class Simulator
     /// The harness outside the chip. Without one, every pin the ROM configures as an input reads 0 forever and any poll on it hangs.
     public readonly Board Board = new();
 
+    /// The check-engine lamp and the codes it flashes, sampled as the ROM runs.
+    public readonly MilMonitor Mil = new();
+
     /// Executed-address and branch-edge coverage. Always collected -- it costs an array index per instruction.
     public readonly Coverage Coverage = new();
 
@@ -44,18 +45,27 @@ public sealed class Simulator
 
     /// Set true to let StallMonitor act. Off by default so existing runs behave exactly as before; the coverage harness turns it on.
     public bool StallInterventionEnabled;
+    /// Called for every data-space read an instruction makes (not the timer block's own reads) - for tools that map which RAM a ROM uses.
+    public Action<ushort>? DataReadHook;
 
     /// Byte-level ROM overrides applied after every load, as addr -> value. Survives reload, which is what makes it useful for working around a blanked region while you iterate on the .asm.
-    public readonly Dictionary<ushort, byte> RomPatches = new();
+    public readonly Dictionary<ushort, byte> RomPatches = [];
 
     /// Force a conditional branch at a given address to always go one way. The instruction still costs its normal cycles; only the outcome is decided for it. Use this to steer past a dead end whose real selecting condition you have not reconstructed yet.
-    public readonly Dictionary<ushort, bool> ForcedBranches = new();
+    public readonly Dictionary<ushort, bool> ForcedBranches = [];
 
     /// Every BRK the ROM executes, keyed by (site, trapReasonCode). The ROM writes a reason byte to 0xF5 immediately before most of its BRKs and int_break reads it back to choose a recovery path, so this table says not just "it trapped" but which self-test or guard rejected the run. That is usually the fastest route to why a boot never completes.
-    public readonly Dictionary<(ushort Pc, byte Reason), long> TrapLog = new();
+    public readonly Dictionary<(ushort Pc, byte Reason), long> TrapLog = [];
 
-    /// Zero-page byte the ROM uses as its trap reason sentinel.
-    public const ushort TrapReasonCodeAddr = 0x00F5;
+    /// Zero-page byte the ROM uses as its trap reason sentinel. Not the same in every ROM (0xF5 in HTS115 and p08, 0xEB in CromeGold and p30, 0xD4 in the P13), so it is read off the ROM's own watchdog handler on load: every one starts "MOVB reason, #44h/48h" (C5 nn 98 ii).
+    public ushort TrapReasonCodeAddr { get; private set; } = 0x00F5;
+
+    void DetectTrapReasonAddr()
+    {
+        int wdt = Bus.ReadCodeU16(0x0004);
+        TrapReasonCodeAddr = wdt + 3 < Bus.Rom.Length && Bus.Rom[wdt] == 0xC5 && Bus.Rom[wdt + 2] == 0x98
+            ? Bus.Rom[wdt + 1] : (ushort)0x00F5;
+    }
 
     private static readonly string[] ConditionalBranches =
         { "JEQ", "JNE", "JLT", "JLE", "JGT", "JGE", "JBS", "JBR", "JRNZ" };
@@ -66,37 +76,27 @@ public sealed class Simulator
     public bool LastStepInterrupted { get; private set; }
     public string? FaultMessage { get; private set; }
 
-    // ---- Hot-address tracking ------------------------------------------
-    // Detects "the CPU is stuck cycling through a small set of addresses"
-    // (e.g. a busy-wait it never escapes, or -- as with a ROM that has a
-    // redacted code region it BRK-traps into -- a boot sequence that keeps
-    // re-entering itself) by counting PC hits over a bounded, sliding
-    // window of the most recent instructions, rather than an all-time
-    // count that would dilute a loop that starts appearing partway through
-    // a long run. Address space is exactly 32,768 entries (RomSize), so a
-    // plain array is both the simplest and cheapest structure -- no need
-    // for a dictionary.
-    private uint[] _pcWindowCounts = new uint[0x10000];   // PC is 16 bit: a runaway ROM can execute outside ROM and the tracker must survive it
+    // ---- Hot-address tracking ------------------------------------------ Detects "the CPU is stuck cycling through a small set of addresses" (e.g. a busy-wait it never escapes, or -- as with a ROM that has a redacted code region it BRK-traps into -- a boot sequence that keeps re-entering itself) by counting PC hits over a bounded, sliding window of the most recent instructions, rather than an all-time count that would dilute a loop that starts appearing partway through a long run. Address space is exactly 32,768 entries (RomSize), so a plain array is both the simplest and cheapest structure -- no need for a dictionary.
+    private readonly uint[] _pcWindowCounts = new uint[0x10000];   // PC is 16 bit: a runaway ROM can execute outside ROM and the tracker must survive it
     private ushort[] _pcWindowRing = new ushort[50_000];
     private int _pcWindowHead;
     private int _pcWindowFilled;
 
-    private int _hotAddressWindowSize = 50_000;
     /// How many of the most recent instructions the hot-address detector considers. Changing this reallocates and resets the tracker.
     public int HotAddressWindowSize
     {
-        get => _hotAddressWindowSize;
+        get;
         set
         {
             int clamped = Math.Clamp(value, 100, 1_000_000);
-            if (clamped == _hotAddressWindowSize) return;
-            _hotAddressWindowSize = clamped;
+            if (clamped == field) return;
+            field = clamped;
             _pcWindowRing = new ushort[clamped];
             Array.Clear(_pcWindowCounts);
             _pcWindowHead = 0;
             _pcWindowFilled = 0;
         }
-    }
+    } = 50_000;
 
     private void RecordPcForHotAddressTracking(ushort pc)
     {
@@ -130,19 +130,10 @@ public sealed class Simulator
     public IReadOnlyDictionary<string, ushort>? Symbols { get; private set; }
 
     /// Addresses where Run should stop before executing the instruction there (Step always ignores breakpoints -- it means "execute exactly one instruction regardless"). Empty by default.
-    public HashSet<ushort> Breakpoints { get; } = new();
+    public HashSet<ushort> Breakpoints { get; } = [];
 
-    /// Addresses of jump/branch/call instructions to neutralize: when PC
-    /// reaches one, that single instruction is treated as if it weren't
-    /// there at all -- no PC redirect, no register/flag/stack side effects
-    /// -- and execution just falls through to the next instruction in
-    /// memory. Applies to Run *and* Step alike, unlike Breakpoints (which
-    /// Step always bypasses); ignoring a jump is a standing patch to how the
-    /// program behaves, not a one-shot pause. Meant for working around a
-    /// branch that traps you in a loop you don't want (e.g. a self-test
-    /// retry loop) -- it still costs the instruction's normal cycle count,
-    /// so timers/interrupts keep advancing normally through it.
-    public HashSet<ushort> IgnoredJumps { get; } = new();
+    /// Addresses of jump/branch/call instructions to neutralize: when PC reaches one, that single instruction is treated as if it weren't there at all -- no PC redirect, no register/flag/stack side effects -- and execution just falls through to the next instruction in memory. Applies to Run *and* Step alike, unlike Breakpoints (which Step always bypasses); ignoring a jump is a standing patch to how the program behaves, not a one-shot pause. Meant for working around a branch that traps you in a loop you don't want (e.g. a self-test retry loop) -- it still costs the instruction's normal cycle count, so timers/interrupts keep advancing normally through it.
+    public HashSet<ushort> IgnoredJumps { get; } = [];
 
     /// Resolve a breakpoint address the user typed: a hex address (with or without "0x"/"h"), or -- if a .asm was loaded -- a label name looked up in Symbols. Returns false with addr=0 if neither resolves.
     public bool TryResolveAddress(string text, out ushort addr)
@@ -160,8 +151,7 @@ public sealed class Simulator
             return true;
         }
 
-        if (Symbols != null && Symbols.TryGetValue(t, out addr)) return true;
-        return false;
+        return Symbols != null && Symbols.TryGetValue(t, out addr);
     }
 
     /// Symbol name for an address, if one is known ("" if not). For annotating the trace/breakpoint list, not for resolution.
@@ -176,6 +166,9 @@ public sealed class Simulator
     /// Reset vector fetched from ROM at 0x0000.
     public void Reset()
     {
+        Bus.PowerOnReset();
+        Engine.ResetTiming();
+        Mil.Reset();
         Board.Reset();
         Board.Apply(Bus);
         Stalls.Reset();
@@ -198,6 +191,7 @@ public sealed class Simulator
     {
         Bus.LoadRomBytes(romImage);
         ApplyRomPatches();
+        DetectTrapReasonAddr();
         Symbols = null;
         Reset();
     }
@@ -226,10 +220,7 @@ public sealed class Simulator
     {
         byte[] image = AsmAssembler.Assemble(path, out var realSymbols);
         LoadRom(image);
-        // Prefer the real assembler-derived symbol table: it comes from 
-        // the assembler's own two-pass label resolution, so it works even on a
-        // .asm with no per-line address comments at all. Fall back to the
-        // text-scraping parser only when no symbol table was produced.
+        // Prefer the real assembler-derived symbol table: it comes from the assembler's own two-pass label resolution, so it works even on a .asm with no per-line address comments at all. Fall back to the text-scraping parser only when no symbol table was produced.
         Symbols = realSymbols ?? AsmSymbols.Parse(path);
     }
 
@@ -276,20 +267,14 @@ public sealed class Simulator
         {
             var ignored = TryStepIgnoredJump(pcBefore);
             if (ignored != null) return ignored;
-            // Couldn't even decode an instruction here (e.g. the address
-            // points at garbage) -- fall through to the normal path below
-            // so the real undefined-opcode fault surfaces instead of
-            // silently doing nothing.
+            // Couldn't even decode an instruction here (e.g. the address points at garbage) -- fall through to the normal path below so the real undefined-opcode fault surfaces instead of silently doing nothing.
         }
 
         ulong before = Cpu.Cycles;
         Decoded d;
         bool branchTaken;
-        // Only reads the *instruction* makes are interesting to StallMonitor.
-        // TickTimers reads IRQ/IE/TM/PWM on every step, and letting those into
-        // the poll set would make every stall look like it was waiting on the
-        // timer block.
-        if (StallInterventionEnabled) Bus.OnDataRead = Stalls.NoteRead;
+        // Only reads the *instruction* makes are interesting to StallMonitor. TickTimers reads IRQ/IE/TM/PWM on every step, and letting those into the poll set would make every stall look like it was waiting on the timer block.
+        Bus.OnDataRead = StallInterventionEnabled ? DataReadHook + Stalls.NoteRead : DataReadHook;
         try
         {
             d = DecodeCached(pcBefore);
@@ -305,9 +290,10 @@ public sealed class Simulator
 
         finally
         {
-            Bus.OnDataRead = null;
+            Bus.OnDataRead = null;   // TickTimers' own reads stay out of both
         }
 
+        if ((Cpu.Instructions & 255) == 0) Mil.Sample(Bus, Cpu.Cycles);   // ~0.3 ms: the shortest flash is 310 ms
         if (IsConditionalBranch(d)) Coverage.RecordBranch(pcBefore, branchTaken);
         if (IsBrk(d))
         {
@@ -322,8 +308,7 @@ public sealed class Simulator
         LastStepInterrupted = InterruptController.HandlePendingInterrupts(Cpu, Bus, (ushort)(timerIrq | distIrq),
             accept: !d.Mnemonic.StartsWith("RTI", StringComparison.Ordinal));
 
-        // rel8 targets are relative to the address *after* the instruction,
-        // not to wherever a taken branch just landed.
+        // rel8 targets are relative to the address *after* the instruction, not to wherever a taken branch just landed.
         return new TraceEntry(pcBefore, d, (ushort)(pcBefore + d.Len));
     }
 
@@ -352,10 +337,10 @@ public sealed class Simulator
             a += b.Len;
         }
         // interrupts enabled and unmasked would run during the loop: leave those to real time
-        ushort ie = (ushort)(Bus.Ram[0x1A] | Bus.Ram[0x1B] << 8);
+        ushort ie = (ushort)(Bus.Ram[0x1A] | (Bus.Ram[0x1B] << 8));
         if (Cpu.Mie() && ie != 0) return;
-        int dpAddr = 0x80 + Cpu.Scb() * 8 + 4;
-        int dp = Bus.Ram[dpAddr] | Bus.Ram[dpAddr + 1] << 8;
+        int dpAddr = 0x80 + (Cpu.Scb() * 8) + 4;
+        int dp = Bus.Ram[dpAddr] | (Bus.Ram[dpAddr + 1] << 8);
         if (dp == 0) dp = 0x10000;
         if (dp <= 2) return;
         long n = dp - 1;                              // iterations to skip; DP ends at 1 so the JRNZ falls through
@@ -394,8 +379,7 @@ public sealed class Simulator
         return new TraceEntry(pc, text);
     }
 
-    // ---- decode cache ---------------------------------------------------
-    // ROM is immutable while running, so each (address, DD) decodes once.
+    // ---- decode cache --------------------------------------------------- ROM is immutable while running, so each (address, DD) decodes once.
     private readonly Decoded?[] _decodeCacheWord = new Decoded?[Bus.RomSize];
     private readonly Decoded?[] _decodeCacheByte = new Decoded?[Bus.RomSize];
     private static bool[]? _condByIndex;

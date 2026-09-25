@@ -1,9 +1,5 @@
-// Human-readable descriptions of each mnemonic Exec.cs implements, plus a
-// search helper over FullOpcodes.Table -- for the App's "Insert Instruction"
-// dialog and any future hover-help/tooltip feature. Descriptions are keyed
-// by the *base* mnemonic (byte-width "B" suffix stripped the same way
-// OperandParser.IsByteVariant does): ADD and ADDB share one description,
-// annotated with "(byte form: ...)" where the distinction matters.
+// Copyright (c) bmgjet. All rights reserved.
+// Human-readable descriptions of each mnemonic Exec.cs implements, plus a search helper over FullOpcodes.Table -- for the App's "Insert Instruction" dialog and any future hover-help/tooltip feature. Descriptions are keyed by the *base* mnemonic (byte-width "B" suffix stripped the same way OperandParser.IsByteVariant does): ADD and ADDB share one description, annotated with "(byte form: ...)" where the distinction matters.
 
 namespace OkiRomSim.Core;
 
@@ -78,12 +74,10 @@ public static class InstructionInfo
     public static string? Describe(string mnemonic)
     {
         if (Descriptions.TryGetValue(mnemonic, out var d)) return d;
-        if (mnemonic.Length > 1 && mnemonic.EndsWith('B') &&
-            Descriptions.TryGetValue(mnemonic[..^1], out var d2))
-        {
-            return d2;
-        }
-        return null;
+        return mnemonic.Length > 1 && mnemonic.EndsWith('B') &&
+            Descriptions.TryGetValue(mnemonic[..^1], out var d2)
+            ? d2
+            : null;
     }
 
     /// One row for the Insert Instruction picker: an addressing-mode form from FullOpcodes.Table, with its description resolved.
@@ -98,10 +92,7 @@ public static class InstructionInfo
         }
     }
 
-    /// Search FullOpcodes.Table for entries whose mnemonic text contains
-    /// `query` (case-insensitive), or return every entry for an empty query.
-    /// Ordered by base mnemonic then by syntax text, so every addressing
-    /// form of e.g. "ADD" sorts together instead of scattered by table index.
+    /// Search FullOpcodes.Table for entries whose mnemonic text contains `query` (case-insensitive), or return every entry for an empty query. Ordered by base mnemonic then by syntax text, so every addressing form of e.g. "ADD" sorts together instead of scattered by table index.
     public static IEnumerable<SearchResult> Search(string query)
     {
         var q = query.Trim();

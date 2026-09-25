@@ -1,5 +1,5 @@
-// Honda OBD1 ECU Complete Diagnostic Trouble Code (DTC / MIL) Subsystem.
-// Covers all 30 official Honda OBD1 fault codes (Code 0 through Code 92).
+// Copyright (c) bmgjet. All rights reserved.
+// Honda OBD1 ECU Complete Diagnostic Trouble Code (DTC / MIL) Subsystem. Covers all 30 official Honda OBD1 fault codes (Code 0 through Code 92).
 namespace OkiRomSim.Core;
 
 public enum DtcCode
@@ -56,12 +56,12 @@ public static class Dtc
     public static readonly DtcInfo[] AllHondaObd1Dtcs =
     {
         new(DtcCode.Dtc00_InternalEcuError, 0, "ECU Internal ROM / Processor", "Solid Check Engine Light / Corrupt Checksum", null),
-        new(DtcCode.Dtc01_PrimaryO2Sensor, 1, "Primary Oxygen Sensor (O2)", "Signal out of range or disconnected (0.0V / >1.1V)", Bus.P28MuxU5Adcr1),
+        new(DtcCode.Dtc01_PrimaryO2Sensor, 1, "Primary Oxygen Sensor (O2)", "Signal out of range or disconnected (0.0V / >1.1V)", Bus.P28MuxU6Adcr0),
         new(DtcCode.Dtc02_SecondaryO2Sensor, 2, "Secondary O2 Sensor", "Secondary O2 circuit fault (JDM / Lean spot)", null),
         new(DtcCode.Dtc03_MapSensorHighLow, 3, "MAP Sensor (Voltage High/Low)", "Manifold Absolute Pressure sensor out of bounds", Bus.P28AdcMap),
         new(DtcCode.Dtc04_CrankshaftPositionCkp, 4, "CKP Position Sensor", "Crankshaft pulse signal missing / interrupted", null),
         new(DtcCode.Dtc05_MapSensorCircuitRange, 5, "MAP Sensor Range/Performance", "Vacuum mismatch vs engine RPM/TPS", Bus.P28AdcMap),
-        new(DtcCode.Dtc06_EngineCoolantTempEct, 6, "ECT Temp Sensor", "Coolant temperature voltage open (<0.2V) or shorted (>4.8V)", Bus.P28MuxU6Adcr0),
+        new(DtcCode.Dtc06_EngineCoolantTempEct, 6, "ECT Temp Sensor", "Coolant temperature voltage open (<0.2V) or shorted (>4.8V)", Bus.P28MuxU5Adcr1),
         new(DtcCode.Dtc07_ThrottlePositionTps, 7, "TPS Throttle Sensor", "Throttle position voltage out of range (<0.3V or >4.8V)", Bus.P28AdcTps),
         new(DtcCode.Dtc08_TopDeadCenterTdc, 8, "TDC Sensor Pulses", "Top Dead Center distributor pulse sync fault", null),
         new(DtcCode.Dtc09_CylinderPositionCyp, 9, "CYP Sensor Pulses", "Cylinder position pulse phase fault", null),
@@ -88,15 +88,10 @@ public static class Dtc
     };
 }
 
-/// Drives fault stimuli into a live EngineState/Bus pair and reports whether the resulting sensor reading falls in the DTC's documented trip window.
-/// NOTE (ported behavior, unchanged): this mutates the engine/bus it's given
-/// -- exactly like the Rust `test_dtc_code(&mut Bus, &mut EngineState)` --
-/// so running a DTC test perturbs whatever simulation was live. Callers that
-/// want to probe a fault without disturbing an in-progress run should test
-/// against a scratch Simulator, not the one being displayed.
+/// Drives fault stimuli into a live EngineState/Bus pair and reports whether the resulting sensor reading falls in the DTC's documented trip window. NOTE (ported behavior, unchanged): this mutates the engine/bus it's given -- exactly like the Rust `test_dtc_code(&mut Bus, &mut EngineState)` -- so running a DTC test perturbs whatever simulation was live. Callers that want to probe a fault without disturbing an in-progress run should test against a scratch Simulator, not the one being displayed.
 public static class DtcEvaluator
 {
-    private static ushort Adcr(int channel) => (ushort)(Bus.SfrAdcr0 + channel * 2);
+    private static ushort Adcr(int channel) => (ushort)(Bus.SfrAdcr0 + (channel * 2));
 
     /// Drive the three shared CD4051 address lines without disturbing the lower P2 output latch. The stock P28 configures P2.5..P2.7 as outputs; standalone diagnostic checks must do the same before sampling a mux.
     private static void SelectP28Mux(Bus bus, int select)
@@ -116,22 +111,18 @@ public static class DtcEvaluator
         switch (info.Code)
         {
             case DtcCode.Dtc00_InternalEcuError:
-                // The 8-bit modulo ROM checksum only proves a ROM is
-                // byte-for-byte OEM and fails on any legitimately modified or
-                // tuned ROM, so it is not used as a pass/fail signal. Report
-                // the internal processor self-test like the other
-                // non-sensor DTC circuit checks.
+                // The 8-bit modulo ROM checksum only proves a ROM is byte-for-byte OEM and fails on any legitimately modified or tuned ROM, so it is not used as a pass/fail signal. Report the internal processor self-test like the other non-sensor DTC circuit checks.
                 return (true, "ECU internal ROM / processor self-test verified");
 
             case DtcCode.Dtc01_PrimaryO2Sensor:
                 {
                     engine.O2Volts = 0.0;
                     engine.SyncSensorsToBus(bus);
-                    SelectP28Mux(bus, Bus.P28U5HegoSelect);
+                    SelectP28Mux(bus, Bus.P28U6HegoSelect);
                     bus.TriggerAdcConversion();
-                    ushort adcr = AdcCount(bus, Adcr(Bus.P28MuxU5Adcr1));
+                    ushort adcr = AdcCount(bus, Adcr(Bus.P28MuxU6Adcr0));
                     return (adcr < 50,
-                        $"Primary O2 0.0V -> U5/X0 -> ADCR1: {adcr} (DTC {info.Number} stimulus)");
+                        $"Primary O2 0.0V -> U6/X0 -> ADCR0: {adcr} (DTC {info.Number} stimulus)");
                 }
 
             case DtcCode.Dtc03_MapSensorHighLow:
@@ -156,18 +147,17 @@ public static class DtcEvaluator
                 {
                     engine.EctCelsius = -40.0;
                     engine.SyncSensorsToBus(bus);
-                    SelectP28Mux(bus, Bus.P28U6EctSelect);
+                    SelectP28Mux(bus, Bus.P28U5EctSelect);
                     bus.TriggerAdcConversion();
-                    ushort adcr = AdcCount(bus, Adcr(Bus.P28MuxU6Adcr0));
-                    return (adcr > 900, $"ECT open stimulus -> U6/X0 -> ADCR0: {adcr}");
+                    ushort adcr = AdcCount(bus, Adcr(Bus.P28MuxU5Adcr1));
+                    return (adcr > 900, $"ECT open stimulus -> U5/X2 -> ADCR1: {adcr}");
                 }
 
             case DtcCode.Dtc07_ThrottlePositionTps:
                 {
                     engine.TpsPct = 0.0;
                     engine.SyncSensorsToBus(bus);
-                    // Closed throttle is a valid ~0.5V signal. A grounded fault
-                    // must override the physical AI7 pin after engine mapping.
+                    // Closed throttle is a valid ~0.5V signal. A grounded fault must override the physical AI7 pin after engine mapping.
                     bus.AdcInputs[Bus.P28AdcTps] = 0;
                     bus.TriggerAdcConversion();
                     ushort adcr = AdcCount(bus, Adcr(Bus.P28AdcTps));
@@ -181,7 +171,7 @@ public static class DtcEvaluator
                     SelectP28Mux(bus, Bus.P28U6IatSelect);
                     bus.TriggerAdcConversion();
                     ushort adcr = AdcCount(bus, Adcr(Bus.P28MuxU6Adcr0));
-                    return (adcr > 900, $"IAT open stimulus -> U6/X7 -> ADCR0: {adcr}");
+                    return (adcr > 900, $"IAT open stimulus -> U6/X2 -> ADCR0: {adcr}");
                 }
 
             case DtcCode.Dtc14_IdleAirControlIacv:

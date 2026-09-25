@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Globalization;
 
 namespace OkiRomSim.Assembler;

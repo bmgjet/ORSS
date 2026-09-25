@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Diagnostics;
 using OkiRomSim.Assembler;
 using OkiRomSim.Calibration;
@@ -9,10 +10,6 @@ namespace OkiRomSim.Desktop;
 public sealed class SimHost
 {
     readonly object _lock = new();
-    Simulator _sim = new();
-    AssemblyResult? _asm;
-    DefinitionSet? _defs;
-    string? _loadedPath;
     bool _running;
     double _speed = 1;
     string _stopReason = "nothing loaded";
@@ -21,7 +18,7 @@ public sealed class SimHost
     int? _runUntilDepth;
     string _runUntilWhy = "";
     /// Shadow call stack, rebuilt as the program runs: CAL/SCAL/VCAL frames and interrupt frames, each with the stack pointer value that identifies it.
-    readonly List<Frame> _frames = new();
+    readonly List<Frame> _frames = [];
     public sealed record Frame(ushort Entry, ushort Return, ushort Ssp, bool Interrupt);
     // executed instructions, oldest first; their text is only formatted when shown
     readonly Queue<TraceEntry> _trace = new();
@@ -29,9 +26,9 @@ public sealed class SimHost
     ulong _runStartCycles;
     long _runStartInstr;
     double _rate;
-    Dictionary<long, string> _labels = new();
+    Dictionary<long, string> _labels = [];
     /// Engine/board inputs as last set from the UI, re-applied to every freshly loaded simulator.
-    readonly Dictionary<string, double> _inputs = new();
+    readonly Dictionary<string, double> _inputs = [];
 
     public SimHost()
     {
@@ -52,16 +49,15 @@ public sealed class SimHost
         try { CalibrationChanged?.Invoke(what, item); } catch { }
     }
 
-    public Simulator Sim => _sim;
-    public AssemblyResult? Assembly => _asm;
-    public DefinitionSet? Definitions => _defs;
-    public string? LoadedPath => _loadedPath;
+    public Simulator Sim { get; private set; } = new();
+    public AssemblyResult? Assembly { get; private set; }
+    public DefinitionSet? Definitions { get; private set; }
+    public string? LoadedPath { get; private set; }
     public bool IsRunning { get { lock (_lock) return _running; } }
     public double Speed { get { lock (_lock) return _speed; } set { lock (_lock) _speed = Math.Max(0, value); } }
     public bool RomDirty { get; private set; }
     /// Skip the ROM's boot delay loops in no real time (Simulator.FastForwardDelayLoops).
-    public bool FastBoot { get => _fastBoot; set { lock (_lock) { _fastBoot = value; _sim.FastForwardDelayLoops = value; } } }
-    bool _fastBoot = true;
+    public bool FastBoot { get; set { lock (_lock) { field = value; Sim.FastForwardDelayLoops = value; } } } = true;
 
     // ------------------------------------------------------------------ loading
 
@@ -69,25 +65,25 @@ public sealed class SimHost
     {
         lock (_lock)
         {
-            var keep = _sim.Breakpoints.ToList();
-            bool same = path == _loadedPath;
-            _sim = new Simulator { FastForwardDelayLoops = _fastBoot };
-            _sim.LoadRom(image);
-            _asm = asm;
-            _defs = null;
+            var keep = Sim.Breakpoints.ToList();
+            bool same = path == LoadedPath;
+            Sim = new Simulator { FastForwardDelayLoops = FastBoot };
+            Sim.LoadRom(image);
+            Assembly = asm;
+            Definitions = null;
             _labels = asm?.Symbols.Values.Where(s => s.Kind == SymbolKind.Label)
-                .GroupBy(s => s.Value).ToDictionary(g => g.Key, g => g.First().Name) ?? new();
-            _loadedPath = path;
+                .GroupBy(s => s.Value).ToDictionary(g => g.Key, g => g.First().Name) ?? [];
+            LoadedPath = path;
             RomDirty = false;
-            if (same) foreach (var b in keep) _sim.Breakpoints.Add(b);
+            if (same) foreach (var b in keep) Sim.Breakpoints.Add(b);
             _running = false;
             _stopReason = "loaded " + Path.GetFileName(path);
             _trace.Clear();
             _frames.Clear();
             foreach (var (k, v) in _inputs) ApplyInput(k, v);
-            foreach (var (k, v) in _forced) _sim.Board.Forced[k] = v;
-            foreach (var (k, v) in _analog) _sim.Engine.AnalogOverrides[k] = v;
-            _sim.SyncSensors();
+            foreach (var (k, v) in _forced) Sim.Board.Forced[k] = v;
+            foreach (var (k, v) in _analog) Sim.Engine.AnalogOverrides[k] = v;
+            Sim.SyncSensors();
             ResetRates();
             _undo.Clear(); _redo.Clear();
             Interlocked.Increment(ref _version);
@@ -100,12 +96,12 @@ public sealed class SimHost
         lock (_lock)
         {
             profile.Apply();
-            if (_loadedPath != null)
+            if (LoadedPath != null)
             {
-                var keepBp = _sim.Breakpoints.ToList();
-                var rom = _sim.Bus.Rom.ToArray();
-                LoadImage(rom, _asm, _loadedPath);
-                foreach (var b in keepBp) _sim.Breakpoints.Add(b);
+                var keepBp = Sim.Breakpoints.ToList();
+                var rom = Sim.Bus.Rom.ToArray();
+                LoadImage(rom, Assembly, LoadedPath);
+                foreach (var b in keepBp) Sim.Breakpoints.Add(b);
                 _stopReason = $"processor {profile.Name}: restarted from reset";
             }
         }
@@ -113,16 +109,16 @@ public sealed class SimHost
 
     // ------------------------------------------------------------------ hand-set inputs (chip view)
 
-    readonly Dictionary<(int Port, int Bit), bool> _forced = new();
-    readonly Dictionary<int, double> _analog = new();
+    readonly Dictionary<(int Port, int Bit), bool> _forced = [];
+    readonly Dictionary<int, double> _analog = [];
 
     /// Force an input pin high/low, or pass null to hand it back to the board model.
     public void ForcePin(int port, int bit, bool? level)
     {
         lock (_lock)
         {
-            if (level is bool v) { _forced[(port, bit)] = v; _sim.Board.Forced[(port, bit)] = v; }
-            else { _forced.Remove((port, bit)); _sim.Board.Forced.Remove((port, bit)); }
+            if (level is bool v) { _forced[(port, bit)] = v; Sim.Board.Forced[(port, bit)] = v; }
+            else { _forced.Remove((port, bit)); Sim.Board.Forced.Remove((port, bit)); }
         }
     }
 
@@ -133,9 +129,9 @@ public sealed class SimHost
     {
         lock (_lock)
         {
-            if (volts is double v) { _analog[key] = v; _sim.Engine.AnalogOverrides[key] = v; }
-            else { _analog.Remove(key); _sim.Engine.AnalogOverrides.Remove(key); }
-            _sim.SyncSensors();
+            if (volts is double v) { _analog[key] = v; Sim.Engine.AnalogOverrides[key] = v; }
+            else { _analog.Remove(key); Sim.Engine.AnalogOverrides.Remove(key); }
+            Sim.SyncSensors();
         }
     }
 
@@ -146,7 +142,7 @@ public sealed class SimHost
     {
         lock (_lock)
         {
-            var b = _sim.Bus;
+            var b = Sim.Bus;
             double V(ushort counts) => counts * 5.0 / 1023.0;
             int sel = (b.ReadPort(2) >> 5) & 7;
             return (Enumerable.Range(0, 8).Select(i => V(b.AdcInput(i))).ToArray(),
@@ -160,24 +156,24 @@ public sealed class SimHost
     {
         lock (_lock)
         {
-            if (_defs != null) return _defs;
-            if (_asm != null) _defs = DefinitionBuilder.FromAssembly(_asm, Path.GetFileName(_loadedPath ?? ""));
+            if (Definitions != null) return Definitions;
+            if (Assembly != null) Definitions = DefinitionBuilder.FromAssembly(Assembly, Path.GetFileName(LoadedPath ?? ""));
             else
             {
-                _defs = new DefinitionSet();
-                var side = _loadedPath == null ? null : Path.ChangeExtension(_loadedPath, null) + ".okidef.json";
-                if (side != null && File.Exists(side)) _defs = DefinitionSet.Load(side);
-                var sym = _loadedPath == null ? null : Path.ChangeExtension(_loadedPath, ".sym");
+                Definitions = new DefinitionSet();
+                var side = LoadedPath == null ? null : Path.ChangeExtension(LoadedPath, null) + ".okidef.json";
+                if (side != null && File.Exists(side)) Definitions = DefinitionSet.Load(side);
+                var sym = LoadedPath == null ? null : Path.ChangeExtension(LoadedPath, ".sym");
                 if (sym != null && File.Exists(sym))
                     foreach (var line in File.ReadAllLines(sym))
                     {
                         var p = line.Split(' ', 2);
                         if (p.Length == 2 && int.TryParse(p[0], System.Globalization.NumberStyles.HexNumber, null, out var a))
-                            _defs.Symbols.TryAdd(p[1].Trim(), a);
+                            Definitions.Symbols.TryAdd(p[1].Trim(), a);
                     }
             }
-            _defs.MergeBuiltinFormulas();
-            return _defs;
+            Definitions.MergeBuiltinFormulas();
+            return Definitions;
         }
     }
 
@@ -216,43 +212,41 @@ public sealed class SimHost
             switch (action)
             {
                 case "run":
-                    if (_sim.State == RunState.Faulted || _loadedPath == null) return;
-                    _skipOnce = _sim.Cpu.Pc;
+                    if (Sim.State == RunState.Faulted || LoadedPath == null) return;
+                    _skipOnce = Sim.Cpu.Pc;
                     _running = true;
                     _stopReason = "running";
                     _runStartWall = DateTime.UtcNow;
-                    _runStartCycles = _sim.Cpu.Cycles;
-                    _runStartInstr = (long)_sim.Cpu.Instructions;
+                    _runStartCycles = Sim.Cpu.Cycles;
+                    _runStartInstr = (long)Sim.Cpu.Instructions;
                     break;
                 case "pause":
                     if (_running) { _running = false; _stopReason = "paused"; }
                     break;
                 case "reset":
-                    _running = false; _sim.Reset(); _frames.Clear(); foreach (var (k, v) in _inputs) ApplyInput(k, v);
-                    _sim.SyncSensors(); _trace.Clear(); _stopReason = "reset"; ResetRates();
+                    _running = false; Sim.Reset(); _frames.Clear(); foreach (var (k, v) in _inputs) ApplyInput(k, v);
+                    Sim.SyncSensors(); _trace.Clear(); _stopReason = "reset"; ResetRates();
                     break;
                 case "step":
                     _running = false;
-                    _lastStepReads = new();
+                    LastStepReads = [];
                     for (int i = 0; i < Math.Max(1, count); i++) Step();
                     _stopReason = "step";
                     StepSerial++;
                     break;
                 case "stepover":
                     {
-                        // Over a call (or an interrupt it triggers): run it to completion.
-                        // Over a jump or branch: do not take it - carry on at the next
-                        // instruction, which is what "step over the jump" means here.
+                        // Over a call (or an interrupt it triggers): run it to completion. Over a jump or branch: do not take it - carry on at the next instruction, which is what "step over the jump" means here.
                         _running = false;
                         int depth = _frames.Count;
-                        _lastStepReads = new();
-                        long reads = _sim.Bus.RomReadTotal;
-                        ushort here = _sim.Cpu.Pc;
+                        LastStepReads = [];
+                        long reads = Sim.Bus.RomReadTotal;
+                        ushort here = Sim.Cpu.Pc;
                         var kind = ClassifyAt(here);
-                        if (kind == StepKind.Conditional) _sim.ForcedBranches[here] = false;
-                        else if (kind == StepKind.Jump) _sim.IgnoredJumps.Add(here);
+                        if (kind == StepKind.Conditional) Sim.ForcedBranches[here] = false;
+                        else if (kind == StepKind.Jump) Sim.IgnoredJumps.Add(here);
                         try { Step(); }
-                        finally { _sim.ForcedBranches.Remove(here); _sim.IgnoredJumps.Remove(here); }
+                        finally { Sim.ForcedBranches.Remove(here); Sim.IgnoredJumps.Remove(here); }
                         if (kind is StepKind.Conditional or StepKind.Jump)
                         {
                             _stopReason = kind == StepKind.Jump ? "step over: the jump was skipped" : "step over: the branch was not taken";
@@ -272,12 +266,12 @@ public sealed class SimHost
                     {
                         // Follow the jump even when the condition says otherwise.
                         _running = false;
-                        _lastStepReads = new();
-                        ushort here = _sim.Cpu.Pc;
+                        LastStepReads = [];
+                        ushort here = Sim.Cpu.Pc;
                         var kind = ClassifyAt(here);
-                        if (kind == StepKind.Conditional) _sim.ForcedBranches[here] = true;
+                        if (kind == StepKind.Conditional) Sim.ForcedBranches[here] = true;
                         try { Step(); }
-                        finally { _sim.ForcedBranches.Remove(here); }
+                        finally { Sim.ForcedBranches.Remove(here); }
                         _stopReason = kind == StepKind.Conditional ? "step into: the branch was forced taken" : "step into";
                         StepSerial++;
                         break;
@@ -290,8 +284,8 @@ public sealed class SimHost
                         break;
                     }
                     _runUntilDepth = _frames.Count - 1; _runUntilWhy = "step out of " + LabelAt(_frames[^1].Entry);
-                    _lastStepReads = new();
-                    long before = _sim.Bus.RomReadTotal;
+                    LastStepReads = [];
+                    long before = Sim.Bus.RomReadTotal;
                     Control("run");
                     _runReadsFrom = before;
                     break;
@@ -304,7 +298,7 @@ public sealed class SimHost
     /// What the instruction at `pc` is, for Over / Into.
     StepKind ClassifyAt(ushort pc)
     {
-        var d = Decoder.Decode(_sim.Cpu.Dd, i => _sim.Bus.ReadCodeU8((ushort)(pc + i)));
+        var d = Decoder.Decode(Sim.Cpu.Dd, i => Sim.Bus.ReadCodeU8((ushort)(pc + i)));
         if (d == null) return StepKind.Plain;
         string op = d.Mnemonic.Split(' ')[0];
         if (op is "CAL" or "SCAL" or "VCAL") return StepKind.Call;
@@ -318,7 +312,7 @@ public sealed class SimHost
     {
         lock (_lock)
         {
-            return ClassifyAt(_sim.Cpu.Pc) switch
+            return ClassifyAt(Sim.Cpu.Pc) switch
             {
                 StepKind.Call => "a call: Over runs it to completion",
                 StepKind.Jump => "a jump: Over skips it, Into follows it",
@@ -330,9 +324,9 @@ public sealed class SimHost
 
     void Step()
     {
-        ushort pc = _sim.Cpu.Pc, ssp = _sim.Cpu.Ssp;
-        long readsBefore = _sim.Bus.RomReadTotal;
-        var e = _sim.StepOne();
+        ushort pc = Sim.Cpu.Pc, ssp = Sim.Cpu.Ssp;
+        long readsBefore = Sim.Bus.RomReadTotal;
+        var e = Sim.StepOne();
         NoteStepReads(readsBefore);
         if (e is TraceEntry t)
         {
@@ -340,40 +334,43 @@ public sealed class SimHost
             while (_trace.Count > 300) _trace.Dequeue();
         }
         Track(pc, ssp, e);
-        if ((_sim.Cpu.Instructions & 1023) == 0) _sim.SyncSensors();
+        if ((Sim.Cpu.Instructions & 1023) == 0) Sim.SyncSensors();
     }
 
     /// ROM data addresses read by the last Step / Over / Out (for the calibration page to jump to).
-    public List<int> LastStepReads { get { lock (_lock) return _lastStepReads.ToList(); } }
-    List<int> _lastStepReads = new();
+    public List<int> LastStepReads { get { lock (_lock) return [.. field]; }
+
+        private set;
+    } = [];
+
     /// Bumped whenever a step / over / out finishes, so the UI can react once per step.
     public int StepSerial { get; private set; }
 
     void NoteStepReads(long before)
     {
-        var b = _sim.Bus;
+        var b = Sim.Bus;
         long n = Math.Min(b.RomReadTotal - before, b.RomReadLog.Length);
         if (n <= 0) return;
         var list = new List<int>();
         for (long i = b.RomReadTotal - n; i < b.RomReadTotal; i++) list.Add(b.RomReadLog[i % b.RomReadLog.Length].Address);
-        _lastStepReads = list;
+        LastStepReads = list;
     }
 
     /// Keep the shadow call stack in step with what the instruction just did.
     void Track(ushort pcBefore, ushort sspBefore, TraceEntry? e)
     {
-        ushort ssp = _sim.Cpu.Ssp;
-        bool irq = _sim.LastStepInterrupted;
+        ushort ssp = Sim.Cpu.Ssp;
+        bool irq = Sim.LastStepInterrupted;
         ushort sspInsn = irq ? (ushort)(ssp + 8) : ssp;           // stack after the instruction itself
         while (_frames.Count > 0 && sspInsn > _frames[^1].Ssp) _frames.RemoveAt(_frames.Count - 1);
         var d = e?.Decoded;
         if (d != null && sspInsn == (ushort)(sspBefore - 2) &&
             (d.Mnemonic.StartsWith("CAL") || d.Mnemonic.StartsWith("SCAL") || d.Mnemonic.StartsWith("VCAL")))
         {
-            ushort entry = irq ? _sim.Bus.ReadDataU16(sspInsn) : _sim.Cpu.Pc;
+            ushort entry = irq ? Sim.Bus.ReadDataU16(sspInsn) : Sim.Cpu.Pc;
             _frames.Add(new Frame(entry, (ushort)(pcBefore + d.Len), sspInsn, false));
         }
-        if (irq) _frames.Add(new Frame(_sim.Cpu.Pc, _sim.Bus.ReadDataU16(sspInsn), ssp, true));
+        if (irq) _frames.Add(new Frame(Sim.Cpu.Pc, Sim.Bus.ReadDataU16(sspInsn), ssp, true));
         if (_frames.Count > 256) _frames.RemoveRange(0, _frames.Count - 256);   // runaway recursion guard
     }
 
@@ -381,8 +378,8 @@ public sealed class SimHost
     public List<string> CallStack()
     {
         lock (_lock)
-            return Enumerable.Reverse(_frames).Select(f =>
-                $"{(f.Interrupt ? "irq " : "")}{f.Entry:X4} {NearestLabel(f.Entry)}   <- {f.Return:X4} {NearestLabel(f.Return)}").ToList();
+            return [.. Enumerable.Reverse(_frames).Select(f =>
+                $"{(f.Interrupt ? "irq " : "")}{f.Entry:X4} {NearestLabel(f.Entry)}   <- {f.Return:X4} {NearestLabel(f.Return)}")];
     }
 
     long? _runReadsFrom;
@@ -392,7 +389,7 @@ public sealed class SimHost
         if (_runUntilDepth != null && _runReadsFrom is long from)
         {
             // step over / out: the calibration page shows the tables read on the way
-            NoteStepReads(Math.Max(from, _sim.Bus.RomReadTotal - 256));
+            NoteStepReads(Math.Max(from, Sim.Bus.RomReadTotal - 256));
             StepSerial++;
         }
         _runReadsFrom = null;
@@ -403,8 +400,7 @@ public sealed class SimHost
     {
         while (true)
         {
-            // one bad instruction (or a bug here) must stop the simulator, not take the whole
-            // program down with it: an exception on this thread would end the process silently
+            // one bad instruction (or a bug here) must stop the simulator, not take the whole program down with it: an exception on this thread would end the process silently
             try { Slice(); }
             catch (Exception ex)
             {
@@ -424,40 +420,39 @@ public sealed class SimHost
             if (!running) { Thread.Sleep(15); return; }
             lock (_lock)
             {
-                // Run in short time slices and let go of the lock between them, so the UI (and
-                // an MCP agent) always gets in - at unlimited speed too.
+                // Run in short time slices and let go of the lock between them, so the UI (and an MCP agent) always gets in - at unlimited speed too.
                 int budget = 200_000;
                 if (_speed > 0)
                 {
                     double wall = (DateTime.UtcNow - _runStartWall).TotalSeconds;
-                    if (_sim.Cpu.Cycles - _runStartCycles > wall * _speed * Bus.CpuHz) budget = 0;
+                    if (Sim.Cpu.Cycles - _runStartCycles > wall * _speed * Bus.CpuHz) budget = 0;
                 }
-                long sliceEnd = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 250;     // 4 ms
+                long sliceEnd = Stopwatch.GetTimestamp() + (Stopwatch.Frequency / 250);     // 4 ms
                 for (int i = 0; i < budget && _running; i++)
                 {
                     if ((i & 511) == 511 && Stopwatch.GetTimestamp() > sliceEnd) break;
                     if (_speed > 0 && (i & 255) == 255)
                     {
                         double wall = (DateTime.UtcNow - _runStartWall).TotalSeconds;
-                        if (_sim.Cpu.Cycles - _runStartCycles > wall * _speed * Bus.CpuHz) break;
+                        if (Sim.Cpu.Cycles - _runStartCycles > wall * _speed * Bus.CpuHz) break;
                     }
-                    ushort pc = _sim.Cpu.Pc;
+                    ushort pc = Sim.Cpu.Pc;
                     if (_skipOnce == pc) _skipOnce = null;
-                    else if (_sim.Breakpoints.Contains(pc)) { Stop($"breakpoint {pc:X4} {LabelAt(pc)}"); break; }
-                    ushort sspBefore = _sim.Cpu.Ssp;
-                    var e = _sim.StepOne();
+                    else if (Sim.Breakpoints.Contains(pc)) { Stop($"breakpoint {pc:X4} {LabelAt(pc)}"); break; }
+                    ushort sspBefore = Sim.Cpu.Ssp;
+                    var e = Sim.StepOne();
                     if (e is TraceEntry t)
                     {
                         _trace.Enqueue(t);
                         while (_trace.Count > 300) _trace.Dequeue();
                     }
                     Track(pc, sspBefore, e);
-                    if ((_sim.Cpu.Instructions & 1023) == 0) _sim.SyncSensors();
-                    if (e == null || _sim.State == RunState.Faulted) { Stop("fault: " + _sim.FaultMessage); break; }
+                    if ((Sim.Cpu.Instructions & 1023) == 0) Sim.SyncSensors();
+                    if (e == null || Sim.State == RunState.Faulted) { Stop("fault: " + Sim.FaultMessage); break; }
                     if (_runUntilDepth is int depth && _frames.Count <= depth) { Stop(_runUntilWhy); break; }
                 }
                 double w = (DateTime.UtcNow - _runStartWall).TotalSeconds;
-                if (w > 0.25) _rate = ((long)_sim.Cpu.Instructions - _runStartInstr) / w;
+                if (w > 0.25) _rate = ((long)Sim.Cpu.Instructions - _runStartInstr) / w;
                 if (_play != null && _running) AdvancePlayback();
                 PumpSerialLocked();
             }
@@ -471,10 +466,17 @@ public sealed class SimHost
     /// Bytes arrive at the datalog cable's rate (38400 baud: 10 bits each).
     public int SerialBaud { get; set; } = 38400;
 
+    /// The simulated serial line is a K-line: the ROM hears its own bytes (the stock tester protocol needs it).
+    public bool SerialKLine
+    {
+        get { lock (_lock) return Sim.Bus.KLineEcho; }
+        set { lock (_lock) { Sim.Bus.KLineEcho = value; Sim.Bus.KLineByteCycles = (uint)Math.Max(1, (long)Bus.CpuHz * 10 / Math.Max(300, SerialBaud)); } }
+    }
+
     /// Send bytes to the simulated ROM's serial port, as a datalogging tool would.
     public void SerialToRom(byte[] data)
     {
-        lock (_lock) _sim.Bus.QueueSerialRx(data, (uint)Math.Max(1, (long)Bus.CpuHz * 10 / Math.Max(300, SerialBaud)));
+        lock (_lock) Sim.Bus.QueueSerialRx(data, (uint)Math.Max(1, (long)Bus.CpuHz * 10 / Math.Max(300, SerialBaud)));
     }
 
     /// Take up to `max` bytes the ROM has transmitted.
@@ -493,7 +495,7 @@ public sealed class SimHost
 
     void PumpSerialLocked()
     {
-        foreach (var b in _sim.Bus.TakeSerialTx()) _romTx.Enqueue(b);
+        foreach (var b in Sim.Bus.TakeSerialTx()) _romTx.Enqueue(b);
         while (_romTx.Count > 65536) _romTx.Dequeue();
     }
 
@@ -504,14 +506,14 @@ public sealed class SimHost
     double _playSimStart, _playLogStart;
     public int PlaybackIndex { get { lock (_lock) return _playIndex; } }
     public bool PlaybackActive { get { lock (_lock) return _play != null; } }
-    double SimNow => (double)_sim.Cpu.Cycles / Bus.CpuHz;
+    double SimNow => (double)Sim.Cpu.Cycles / Bus.CpuHz;
 
     /// Drive the engine inputs from a log, frame by frame in simulated time, and run.
     public void StartPlayback(List<LogFrame> frames, int from)
     {
         lock (_lock)
         {
-            if (frames.Count == 0 || _loadedPath == null) return;
+            if (frames.Count == 0 || LoadedPath == null) return;
             _play = frames;
             _playIndex = Math.Clamp(from, 0, frames.Count - 1);
             ApplyFrameLocked(frames[_playIndex]);
@@ -539,7 +541,7 @@ public sealed class SimHost
         void In(string k, double? v) { if (v is double x && !double.IsNaN(x)) { _inputs[k] = x; ApplyInput(k, x); } }
         In("rpm", f.Rpm); In("map", f.MapKpa); In("tps", f.TpsPct); In("ect", f.EctC); In("iat", f.IatC);
         In("o2", f.O2V); In("vbatt", f.BattV); In("speed", f.SpeedKmh); In("baro", f.BaroKpa);
-        _sim.SyncSensors();
+        Sim.SyncSensors();
     }
 
     void AdvancePlayback()
@@ -561,8 +563,7 @@ public sealed class SimHost
     public readonly HitStore ExternalHits = new();
 
     /// Hit state of the simulated ROM: per address, the cycle it last ran as an instruction (0 = never) and the cycle it was last read as data, plus the current cycle.
-    // reused between calls: three arrays of 32768 rebuilt several times a second was a lot of
-    // rubbish for the collector to clear up
+    // reused between calls: three arrays of 32768 rebuilt several times a second was a lot of rubbish for the collector to clear up
     ulong[]? _hitExec, _hitData;
     uint[]? _hitCount;
 
@@ -573,10 +574,10 @@ public sealed class SimHost
             _hitExec ??= new ulong[Bus.RomSize];
             _hitData ??= new ulong[Bus.RomSize];
             _hitCount ??= new uint[Bus.RomSize];
-            for (int a = 0; a < Bus.RomSize; a++) _hitExec[a] = _sim.Coverage.LastExecuted((ushort)a);
-            Array.Copy(_sim.Bus.RomReadAt, _hitData, Bus.RomSize);
-            Array.Copy(_sim.Bus.RomReadCount, _hitCount, Bus.RomSize);
-            return (_sim.Cpu.Cycles, _hitExec, _hitData, _hitCount);
+            for (int a = 0; a < Bus.RomSize; a++) _hitExec[a] = Sim.Coverage.LastExecuted((ushort)a);
+            Array.Copy(Sim.Bus.RomReadAt, _hitData, Bus.RomSize);
+            Array.Copy(Sim.Bus.RomReadCount, _hitCount, Bus.RomSize);
+            return (Sim.Cpu.Cycles, _hitExec, _hitData, _hitCount);
         }
     }
 
@@ -585,7 +586,7 @@ public sealed class SimHost
     {
         lock (_lock)
         {
-            var b = _sim.Bus;
+            var b = Sim.Bus;
             long n = Math.Min(Math.Min(b.RomReadTotal, max), b.RomReadLog.Length);
             var list = new List<(int, int)>((int)n);
             for (long i = b.RomReadTotal - n; i < b.RomReadTotal; i++)
@@ -599,21 +600,15 @@ public sealed class SimHost
 
     public void ClearSimHits()
     {
-        lock (_lock) { _sim.Bus.ClearRomReads(); _sim.Coverage.Reset(); }
+        lock (_lock) { Sim.Bus.ClearRomReads(); Sim.Coverage.Reset(); }
     }
 
-    /// How recently each cell of a table was read by the program: 1 = within the last few
-    /// milliseconds of simulated time (the "trace"), fading to 0 over `trail` seconds (the "trail").
-    /// Which cells of a table the program has read lately, 1 = just now fading to 0 over
-    /// `trail` seconds. Deliberately lock-free: the read counters are plain arrays the
-    /// simulator writes as it runs, and a half-updated number only ever means a cell lights up
-    /// a frame early or late. Taking the simulator's lock here made the trace stutter, because
-    /// the UI had to wait for the run loop's time slice to end.
+    /// How recently each cell of a table was read by the program: 1 = within the last few milliseconds of simulated time (the "trace"), fading to 0 over `trail` seconds (the "trail"). Which cells of a table the program has read lately, 1 = just now fading to 0 over `trail` seconds. Deliberately lock-free: the read counters are plain arrays the simulator writes as it runs, and a half-updated number only ever means a cell lights up a frame early or late. Taking the simulator's lock here made the trace stutter, because the UI had to wait for the run loop's time slice to end.
     public Dictionary<int, double> TableHeat(ItemDef item, double trail = 1.0, double fresh = 0.03)
     {
         var heat = new Dictionary<int, double>();
-        var b = _sim.Bus;
-        ulong now = _sim.Cpu.Cycles;
+        var b = Sim.Bus;
+        ulong now = Sim.Cpu.Cycles;
         double hz = Bus.CpuHz;
         int count = item.Count;
         for (int i = 0; i < count; i++)
@@ -623,7 +618,7 @@ public sealed class SimHost
             ulong at = b.RomReadAt[a];
             double age = (now - Math.Min(now, at)) / hz;
             if (age <= fresh) heat[i] = 1;
-            else if (age < trail) heat[i] = 0.7 * (1 - (age - fresh) / (trail - fresh));
+            else if (age < trail) heat[i] = 0.7 * (1 - ((age - fresh) / (trail - fresh)));
         }
         return heat;
     }
@@ -644,38 +639,38 @@ public sealed class SimHost
         List<(int Pc, string Label, int Reason, int Count)> Traps,
         List<string> Calls);
 
-    ushort Preg(int slot) => (ushort)(_sim.Bus.Ram[0x80 + _sim.Cpu.Scb() * 8 + slot] |
-                                      _sim.Bus.Ram[0x81 + _sim.Cpu.Scb() * 8 + slot] << 8);
+    ushort Preg(int slot) => (ushort)(Sim.Bus.Ram[0x80 + (Sim.Cpu.Scb() * 8) + slot] |
+                                      (Sim.Bus.Ram[0x81 + (Sim.Cpu.Scb() * 8) + slot] << 8));
 
     public Snapshot State()
     {
         lock (_lock)
         {
-            var c = _sim.Cpu; var b = _sim.Bus; var en = _sim.Engine;
-            var hot = _sim.GetHottestRecentPc();
-            var src = _asm?.Lookup(c.Pc);
+            var c = Sim.Cpu; var b = Sim.Bus; var en = Sim.Engine;
+            var hot = Sim.GetHottestRecentPc();
+            var src = Assembly?.Lookup(c.Pc);
             ushort bank = c.BankBase();
             return new Snapshot(
-                _running, _sim.State.ToString(), _stopReason, _sim.FaultMessage, c.Pc, LabelAt(c.Pc),
+                _running, Sim.State.ToString(), _stopReason, Sim.FaultMessage, c.Pc, LabelAt(c.Pc),
                 src?.File, src?.Line ?? 0, (long)c.Instructions, (double)c.Cycles / Bus.CpuHz, _running ? _rate : 0,
                 c.A, Preg(4), Preg(0), Preg(2), Preg(6), c.Ssp, c.Lrb, bank, c.PswU16(),
                 c.Cf, c.Zf, c.Hc, c.Dd, c.Mie(), c.Scb(),
-                Enumerable.Range(0, 4).Select(i => b.Ram[(bank + i * 2) & 0xFFF] | b.Ram[(bank + i * 2 + 1) & 0xFFF] << 8).ToArray(),
-                Enumerable.Range(0, 5).Select(i => (int)b.ReadPort(i)).ToArray(),
+                [.. Enumerable.Range(0, 4).Select(i => b.Ram[(bank + (i * 2)) & 0xFFF] | (b.Ram[(bank + (i * 2) + 1) & 0xFFF] << 8))],
+                [.. Enumerable.Range(0, 5).Select(i => (int)b.ReadPort(i))],
                 new int[] { b.Ram[0x21], b.Ram[0x23], b.Ram[0x25], b.Ram[0x29], b.Ram[0x2D] },
-                b.Ram[0x18] | b.Ram[0x19] << 8, b.Ram[0x1A] | b.Ram[0x1B] << 8,
+                b.Ram[0x18] | (b.Ram[0x19] << 8), b.Ram[0x1A] | (b.Ram[0x1B] << 8),
                 Outputs(),
                 en.Rpm, en.MapKpa, en.TpsPct, en.EctCelsius, en.IatCelsius, en.O2Volts, en.VbattVolts, en.SpeedKmh, en.Cranking,
-                hot.Address, (int)hot.Count, (int)hot.WindowFilled, _sim.Coverage.AddressesExecuted,
-                _trace.Reverse().Take(80).Reverse().Select(t => ((int)t.Pc, LabelAt(t.Pc), t.Text)).ToList(),
-                _sim.Breakpoints.OrderBy(x => x).Select(x =>
+                hot.Address, (int)hot.Count, (int)hot.WindowFilled, Sim.Coverage.AddressesExecuted,
+                [.. _trace.Reverse().Take(80).Reverse().Select(t => ((int)t.Pc, LabelAt(t.Pc), t.Text))],
+                [.. Sim.Breakpoints.OrderBy(x => x).Select(x =>
                 {
-                    var s = _asm?.Lookup(x);
+                    var s = Assembly?.Lookup(x);
                     return ((int)x, LabelAt(x), s == null ? "" : $"{Path.GetFileName(s.File)}:{s.Line}");
-                }).ToList(),
-                _sim.TrapLog.Select(t => ((int)t.Key.Pc, LabelAt(t.Key.Pc), (int)t.Key.Reason, (int)t.Value)).ToList(),
-                Enumerable.Reverse(_frames).Select(f =>
-                    $"{(f.Interrupt ? "irq " : "")}{f.Entry:X4} {NearestLabel(f.Entry)}  (returns to {f.Return:X4})").ToList());
+                })],
+                [.. Sim.TrapLog.Select(t => ((int)t.Key.Pc, LabelAt(t.Key.Pc), (int)t.Key.Reason, (int)t.Value))],
+                [.. Enumerable.Reverse(_frames).Select(f =>
+                    $"{(f.Interrupt ? "irq " : "")}{f.Entry:X4} {NearestLabel(f.Entry)}  (returns to {f.Return:X4})")]);
         }
     }
 
@@ -691,19 +686,19 @@ public sealed class SimHost
         public ulong Cycles { get; set; }
         public ulong Instructions { get; set; }
         public ulong Elapsed { get; set; }
-        public uint[] TimerAccum { get; set; } = Array.Empty<uint>();
+        public uint[] TimerAccum { get; set; } = [];
         public uint? AdcCyclesRemaining { get; set; }
         public uint? SerialTxCyclesRemaining { get; set; }
-        public bool[] PwmOut { get; set; } = Array.Empty<bool>();
+        public bool[] PwmOut { get; set; } = [];
         public ulong LastVssCycle { get; set; }
         public ulong CkpCount { get; set; }
         public ulong TdcCount { get; set; }
-        public List<ushort> Breakpoints { get; set; } = new();
-        public Dictionary<string, double> Inputs { get; set; } = new();
-        public List<string> ForcedPins { get; set; } = new();
-        public Dictionary<int, double> Analog { get; set; } = new();
+        public List<ushort> Breakpoints { get; set; } = [];
+        public Dictionary<string, double> Inputs { get; set; } = [];
+        public List<string> ForcedPins { get; set; } = [];
+        public Dictionary<int, double> Analog { get; set; } = [];
         public double CrystalMHz { get; set; }
-        public List<string> Trace { get; set; } = new();
+        public List<string> Trace { get; set; } = [];
     }
 
     /// Everything needed to put the simulator back exactly where it is: registers, RAM, the (possibly calibration-patched) ROM, timers, crank phase, inputs, breakpoints.
@@ -711,21 +706,21 @@ public sealed class SimHost
     {
         lock (_lock)
         {
-            var c = _sim.Cpu; var b = _sim.Bus;
+            var c = Sim.Cpu; var b = Sim.Bus;
             return (new MachineState
             {
                 Pc = c.Pc, A = c.A, Ssp = c.Ssp, Lrb = c.Lrb, Psw = c.PswU16(),
                 Cycles = c.Cycles, Instructions = c.Instructions, Elapsed = b.ElapsedCycles,
-                TimerAccum = b.TimerAccum.ToArray(),
+                TimerAccum = [.. b.TimerAccum],
                 AdcCyclesRemaining = b.AdcCyclesRemaining, SerialTxCyclesRemaining = b.SerialTxCyclesRemaining,
-                PwmOut = b.PwmOut.ToArray(), LastVssCycle = _sim.Engine.LastVssCycle,
-                CkpCount = _sim.Engine.CkpPulseCount, TdcCount = _sim.Engine.TdcPulseCount,
-                Breakpoints = _sim.Breakpoints.OrderBy(x => x).ToList(),
+                PwmOut = [.. b.PwmOut], LastVssCycle = Sim.Engine.LastVssCycle,
+                CkpCount = Sim.Engine.CkpPulseCount, TdcCount = Sim.Engine.TdcPulseCount,
+                Breakpoints = [.. Sim.Breakpoints.OrderBy(x => x)],
                 Inputs = new(_inputs),
-                ForcedPins = _forced.Select(kv => $"{kv.Key.Port}.{kv.Key.Bit}={(kv.Value ? 1 : 0)}").ToList(),
+                ForcedPins = [.. _forced.Select(kv => $"{kv.Key.Port}.{kv.Key.Bit}={(kv.Value ? 1 : 0)}")],
                 Analog = new(_analog),
                 CrystalMHz = Bus.CrystalMHz,
-                Trace = _trace.Select(t => $"{t.Pc:X4}|{t.Text}").ToList(),
+                Trace = [.. _trace.Select(t => $"{t.Pc:X4}|{t.Text}")],
             }, b.Ram.ToArray(), b.Rom.ToArray());
         }
     }
@@ -745,8 +740,8 @@ public sealed class SimHost
             }
             _analog.Clear();
             foreach (var (k, v) in st.Analog) _analog[k] = v;
-            LoadImage(rom, _asm, _loadedPath ?? "project");
-            var c = _sim.Cpu; var b = _sim.Bus;
+            LoadImage(rom, Assembly, LoadedPath ?? "project");
+            var c = Sim.Cpu; var b = Sim.Bus;
             Array.Copy(ram, b.Ram, Math.Min(ram.Length, b.Ram.Length));
             c.Pc = st.Pc; c.A = st.A; c.Ssp = st.Ssp; c.Lrb = st.Lrb; c.SetPswU16(st.Psw);
             c.Cycles = st.Cycles; c.Instructions = st.Instructions; b.ElapsedCycles = st.Elapsed;
@@ -754,18 +749,18 @@ public sealed class SimHost
             b.AdcCyclesRemaining = st.AdcCyclesRemaining;
             b.SerialTxCyclesRemaining = st.SerialTxCyclesRemaining;
             Array.Copy(st.PwmOut, b.PwmOut, Math.Min(st.PwmOut.Length, b.PwmOut.Length));
-            _sim.Engine.LastVssCycle = st.LastVssCycle;
-            _sim.Engine.CkpPulseCount = st.CkpCount; _sim.Engine.TdcPulseCount = st.TdcCount;
-            _sim.Breakpoints.Clear();
-            foreach (var bp in st.Breakpoints) _sim.Breakpoints.Add(bp);
-            RomDirty = !rom.AsSpan().SequenceEqual(_asm?.Image ?? rom);
+            Sim.Engine.LastVssCycle = st.LastVssCycle;
+            Sim.Engine.CkpPulseCount = st.CkpCount; Sim.Engine.TdcPulseCount = st.TdcCount;
+            Sim.Breakpoints.Clear();
+            foreach (var bp in st.Breakpoints) Sim.Breakpoints.Add(bp);
+            RomDirty = !rom.AsSpan().SequenceEqual(Assembly?.Image ?? rom);
             _trace.Clear();
             foreach (var t in st.Trace)
             {
                 var i = t.IndexOf('|');
                 if (i > 0 && ushort.TryParse(t[..i], System.Globalization.NumberStyles.HexNumber, null, out var pc)) _trace.Enqueue(new TraceEntry(pc, t[(i + 1)..]));
             }
-            _sim.SyncSensors();
+            Sim.SyncSensors();
             ResetRates();
             _stopReason = "project restored";
         }
@@ -776,16 +771,16 @@ public sealed class SimHost
     {
         lock (_lock)
         {
-            _defs = null;
+            Definitions = null;
             _undo.Clear(); _redo.Clear();
             _trace.Clear();
             _frames.Clear();
             _play = null;
             ExternalHits.Clear();
-            _sim.Bus.ClearRomReads();
-            _sim.Coverage.Reset();
-            _sim.TrapLog.Clear();
-            _lastStepReads = new();
+            Sim.Bus.ClearRomReads();
+            Sim.Coverage.Reset();
+            Sim.TrapLog.Clear();
+            LastStepReads = [];
             Interlocked.Increment(ref _version);
         }
     }
@@ -797,11 +792,11 @@ public sealed class SimHost
         {
             _running = false;
             ResetRomState();
-            _sim = new Simulator { FastForwardDelayLoops = _fastBoot };
+            Sim = new Simulator { FastForwardDelayLoops = FastBoot };
             _hitExec = null; _hitData = null; _hitCount = null;
-            _asm = null;
-            _labels = new();
-            _loadedPath = null;
+            Assembly = null;
+            _labels = [];
+            LoadedPath = null;
             RomDirty = false;
             _stopReason = "nothing loaded";
             ResetRates();
@@ -812,7 +807,7 @@ public sealed class SimHost
         AppLog.Info("host", "project cleared");
     }
 
-    public void ReplaceDefinitions(DefinitionSet defs) { lock (_lock) { defs.MergeBuiltinFormulas(); _defs = defs; Interlocked.Increment(ref _version); } }
+    public void ReplaceDefinitions(DefinitionSet defs) { lock (_lock) { defs.MergeBuiltinFormulas(); Definitions = defs; Interlocked.Increment(ref _version); } }
 
     /// Run a change to the definitions under the simulator lock.
     public T EditDefinitions<T>(Func<DefinitionSet, T> change)
@@ -844,16 +839,16 @@ public sealed class SimHost
 
     void ResetRates()
     {
-        _rateCycles = _sim.Cpu.Cycles;
-        Array.Copy(_sim.Bus.InjectorEvents, _rateInj, 4);
-        _rateSparks = _sim.Bus.IgnitionEvents;
-        Array.Copy(_sim.Bus.Pins.Changes, _ratePins, _ratePins.Length);
+        _rateCycles = Sim.Cpu.Cycles;
+        Array.Copy(Sim.Bus.InjectorEvents, _rateInj, 4);
+        _rateSparks = Sim.Bus.IgnitionEvents;
+        Array.Copy(Sim.Bus.Pins.Changes, _ratePins, _ratePins.Length);
         Array.Clear(_injPerSec); _sparksPerSec = 0; Array.Clear(_pinPerSec);
     }
 
     OutputState Outputs()
     {
-        var b = _sim.Bus; var pins = b.Pins; ulong now = _sim.Cpu.Cycles;
+        var b = Sim.Bus; var pins = b.Pins; ulong now = Sim.Cpu.Cycles;
         double dt = (double)(now - _rateCycles) / Bus.CpuHz;
         if (dt >= 0.5)
         {
@@ -883,20 +878,20 @@ public sealed class SimHost
         for (int p = 0; p < 5; p++)
             for (int i = 0; i < 8; i++)
             {
-                bool output = (pins.Direction[p] >> i & 1) != 0;
+                bool output = ((pins.Direction[p] >> i) & 1) != 0;
                 int sfReg = p switch { 2 => b.Ram[0x26] & 0xF8, 3 => b.Ram[0x2A], 4 => b.Ram[0x2E], _ => 0 };
-                bool sf = (sfReg >> i & 1) != 0;
+                bool sf = ((sfReg >> i) & 1) != 0;
                 ushort pc = pins.LastDriverPc[p, i];
-                rows.Add(new PinRow($"P{p}.{i}", sf ? "sf" : output ? "out" : "in", b.ReadPort(p) >> i & 1,
+                rows.Add(new PinRow($"P{p}.{i}", sf ? "sf" : output ? "out" : "in", (b.ReadPort(p) >> i) & 1,
                     ProcessorProfile.Current.PinFunction(p, i), _pinPerSec[p, i],
                     // high/low phase lengths only mean something once the pin has toggled
                     pins.Changes[p, i] >= 3 ? Ms(pins.LastHighCycles[p, i]) : 0,
                     pins.Changes[p, i] >= 3 ? Ms(pins.LastLowCycles[p, i]) : 0,
                     pins.Changes[p, i] == 0 ? "" : $"{pc:X4} {NearestLabel(pc)}"));
             }
-        bool pressure = (b.ReadPort(4) >> 6 & 1) == 0;
+        bool pressure = (b.SwitchLatchPins & 0x02) == 0;   // VTEC pressure switch D6: 4700h bit 1, low = pressure
         return new OutputState(b.FuelPumpActive, b.VtecSolenoidActive, pressure,
-            injMs, _injPerSec.ToArray(), duty, injAgo, _sparksPerSec, _pinPerSec[2, 4] / 2, (b.ReadPort(2) >> 5) & 7,
+            injMs, [.. _injPerSec], duty, injAgo, _sparksPerSec, _pinPerSec[2, 4] / 2, (b.ReadPort(2) >> 5) & 7,
             d0, f0, d1, f1, rows, b.Ppi.Read(0), b.Ppi.PortB, b.Ppi.PortC);
     }
 
@@ -912,31 +907,31 @@ public sealed class SimHost
     {
         lock (_lock)
         {
-            int pc = from ?? _sim.Cpu.Pc;
+            int pc = from ?? Sim.Cpu.Pc;
             if (from == null)
             {
                 int back = pc;
                 for (int k = 0; k < 6 && back > 0; k++)
                 {
-                    var prev = _asm?.Lookup(back - 1);
+                    var prev = Assembly?.Lookup(back - 1);
                     if (prev == null) break;
                     back = prev.Address;
                 }
                 pc = back;
             }
-            bool dd = _sim.Cpu.Dd;
+            bool dd = Sim.Cpu.Dd;
             var list = new List<(int, string, string, string, bool, bool, string)>();
             for (int n = 0; n < count && pc < Bus.RomSize; n++)
             {
                 int at = pc;
-                var d = Decoder.Decode(dd, i => _sim.Bus.Rom[(at + i) & 0x7FFF]);
+                var d = Decoder.Decode(dd, i => Sim.Bus.Rom[(at + i) & 0x7FFF]);
                 int len = d?.Len ?? 1;
-                string text = d == null ? $"DB {_sim.Bus.Rom[pc]:X2}h" : Symbolize(Decoder.Format(d, (ushort)(pc + len)));
+                string text = d == null ? $"DB {Sim.Bus.Rom[pc]:X2}h" : Symbolize(Decoder.Format(d, (ushort)(pc + len)));
                 if (d?.DdAfter is bool v) dd = v;
-                var s = _asm?.Lookup(pc);
+                var s = Assembly?.Lookup(pc);
                 list.Add((pc, LabelAt(pc),
-                    string.Concat(Enumerable.Range(0, len).Select(i => _sim.Bus.Rom[(pc + i) & 0x7FFF].ToString("X2"))),
-                    text, _sim.Breakpoints.Contains((ushort)pc), pc == _sim.Cpu.Pc,
+                    string.Concat(Enumerable.Range(0, len).Select(i => Sim.Bus.Rom[(pc + i) & 0x7FFF].ToString("X2"))),
+                    text, Sim.Breakpoints.Contains((ushort)pc), pc == Sim.Cpu.Pc,
                     s == null ? "" : $"{Path.GetFileName(s.File)}:{s.Line}"));
                 pc += len;
             }
@@ -958,7 +953,7 @@ public sealed class SimHost
             for (int i = 0; i < len; i++)
             {
                 int a = (addr + i) & 0xFFFF;
-                b[i] = a >= 0x480 && a < Bus.RomSize ? _sim.Bus.Rom[a] : _sim.Bus.Ram[a & (Bus.RamSize - 1)];
+                b[i] = a >= 0x480 && a < Bus.RomSize ? Sim.Bus.Rom[a] : Sim.Bus.Ram[a & (Bus.RamSize - 1)];
             }
             return b;
         }
@@ -966,7 +961,7 @@ public sealed class SimHost
 
     public void WriteRam(int addr, byte value)
     {
-        lock (_lock) { if (addr >= 0 && addr < Bus.RamSize) _sim.Bus.WriteDataU8((ushort)addr, value); }
+        lock (_lock) { if (addr >= 0 && addr < Bus.RamSize) Sim.Bus.WriteDataU8((ushort)addr, value); }
     }
 
     // ------------------------------------------------------------------ breakpoints & lookup
@@ -975,11 +970,10 @@ public sealed class SimHost
     {
         lock (_lock)
         {
-            if (_asm == null) return (false, 0, false, "build first so line numbers map to addresses");
+            if (Assembly == null) return (false, 0, false, "build first so line numbers map to addresses");
             var full = Path.GetFullPath(file);
-            var hit = _asm.SourceMap.Where(e => e.File == full && e.Line >= line).OrderBy(e => e.Line).FirstOrDefault();
-            if (hit == null || hit.Line - line > 20) return (false, 0, false, "no code on that line");
-            return Toggle((ushort)hit.Address);
+            var hit = Assembly.SourceMap.Where(e => e.File == full && e.Line >= line).OrderBy(e => e.Line).FirstOrDefault();
+            return hit == null || hit.Line - line > 20 ? ((bool ok, int address, bool enabled, string error))(false, 0, false, "no code on that line") : ((bool ok, int address, bool enabled, string error))Toggle((ushort)hit.Address);
         }
     }
 
@@ -987,19 +981,77 @@ public sealed class SimHost
     {
         lock (_lock)
         {
-            if (!Defs().TryResolve(text, out var a)) return (false, 0, false, $"cannot resolve '{text}'");
-            return Toggle((ushort)a);
+            return !Defs().TryResolve(text, out var a) ? ((bool ok, int address, bool enabled, string error))(false, 0, false, $"cannot resolve '{text}'") : ((bool ok, int address, bool enabled, string error))Toggle((ushort)a);
         }
     }
 
     (bool, int, bool, string) Toggle(ushort a)
     {
-        if (_sim.Breakpoints.Contains(a)) { _sim.Breakpoints.Remove(a); return (true, a, false, ""); }
-        _sim.Breakpoints.Add(a);
+        if (Sim.Breakpoints.Contains(a)) { Sim.Breakpoints.Remove(a); return (true, a, false, ""); }
+        Sim.Breakpoints.Add(a);
         return (true, a, true, "");
     }
 
-    public void ClearBreakpoints() { lock (_lock) _sim.Breakpoints.Clear(); }
+    /// Set a breakpoint at a label or address, whether or not one is already there (the Breakpoints page's Add). `added` is false when it was already set.
+    public (bool ok, int address, bool added, string error) AddBreakpoint(string text)
+    {
+        lock (_lock)
+        {
+            if (!Defs().TryResolve(text, out var a)) return (false, 0, false, $"cannot resolve '{text}'");
+            ushort addr = (ushort)a;
+            if (Sim.Breakpoints.Contains(addr)) return (true, addr, false, "");
+            Sim.Breakpoints.Add(addr);
+            return (true, addr, true, "");
+        }
+    }
+
+    /// Take one breakpoint away, leaving the others (the Breakpoints page's Remove).
+    public bool RemoveBreakpoint(int address) { lock (_lock) return Sim.Breakpoints.Remove((ushort)address); }
+
+    public void ClearBreakpoints() { lock (_lock) Sim.Breakpoints.Clear(); }
+
+    /// Run the calibration detector on the built ROM, reading its sources from disk. Returns the summary, or null when there is nothing built to detect from.
+    public string? DetectDefinitions()
+    {
+        var asm = Assembly;
+        if (asm == null) return null;
+        var sources = asm.SourceMap.Select(e => e.File).Distinct()
+            .Where(File.Exists).Select(f => (Path: f, Text: File.ReadAllText(f))).ToList();
+        var rom = RomBytes(0, Bus.RomSize);
+        var r = EditDefinitions(d => CalibrationDetector.Detect(d, asm, rom, sources));
+        return r.Summary;
+    }
+
+    // ------------------------------------------------------------------ check-engine lamp
+
+    /// What the MIL window shows: the lamp and flash line now, what the flashes decoded to, the codes the ROM has stored (what the lamp will flash) and the fault bits set right now.
+    public sealed record MilView(bool Lamp, bool Flash, bool Scc, (int Tens, int Units)? Flashing,
+        IReadOnlyList<int> LastRound, IReadOnlyList<int> CurrentRound,
+        IReadOnlyList<int> Stored, int? StoredAt, IReadOnlyList<(int Bit, int Code)> Current, int FieldBase);
+
+    int _milRomVersion = -1; int _milField = 0xB0; int? _milStored;
+
+    public MilView Mil()
+    {
+        lock (_lock)
+        {
+            if (_milRomVersion != _version)
+            {
+                _milField = MilMonitor.FaultFieldBase(Sim.Bus.Rom);
+                _milStored = MilMonitor.StoredArray(Sim.Bus.Rom);
+                _milRomVersion = _version;
+            }
+            var r = Sim.Bus.Ram; var m = Sim.Mil;
+            var stored = _milStored is int a
+                ? Enumerable.Range(0, 32).Where(i => (r[a + i / 8] >> (i % 8) & 1) != 0).Select(MilMonitor.FlashCode).ToList()
+                : [];
+            var current = Enumerable.Range(0, 48)
+                .Where(b => (r[_milField + b / 8] >> (b % 8) & 1) != 0 && MilMonitor.FaultBitCode(b) != null)
+                .Select(b => (b, MilMonitor.FaultBitCode(b)!.Value)).ToList();
+            bool scc = !Bus.Is66911 && (Sim.Bus.Ppi.PortAInput & 0x80) != 0;
+            return new MilView(m.Lamp, m.Flash, scc, m.Flashing, [.. m.LastRound], [.. m.CurrentRound], stored, _milStored, current, _milField);
+        }
+    }
 
     public void SetInput(string name, double value)
     {
@@ -1007,14 +1059,14 @@ public sealed class SimHost
         {
             _inputs[name] = value;
             ApplyInput(name, value);
-            _sim.SyncSensors();
+            Sim.SyncSensors();
         }
     }
 
     void ApplyInput(string name, double value)
     {
         {
-            var e = _sim.Engine;
+            var e = Sim.Engine;
             switch (name)
             {
                 case "rpm": e.Rpm = value; break;
@@ -1027,7 +1079,18 @@ public sealed class SimHost
                 case "speed": e.SpeedKmh = value; break;
                 case "cranking": e.Cranking = value != 0; break;
                 case "baro": e.BaroKpa = value; break;
-                case "oilpressure": _sim.Board.VtecPressureSwitch = value != 0; break;
+                case "oilpressure": Sim.Board.VtecPressureSwitch = value != 0; break;
+                case "eld": e.EldVolts = value; break;
+                case "egr": e.EgrLiftPct = value; break;
+                case "crankvbatt": e.CrankingVbattVolts = value; break;
+                case "ac": e.AcRequest = value != 0; break;
+                case "power": Sim.Board.PowerGood = value != 0; break;
+                // P13 port 4 pins 51/52 read low when active
+                case "starter": Sim.Bus.StarterSignal = value == 0; break;
+                case "psp": Sim.Bus.PowerSteeringPressure = value == 0; break;
+                // raw switch buffers (P28): 8255 port A, and the 4700h buffer (bit 2 is the A/C switch above)
+                case "porta": Sim.Bus.Ppi.PortAInput = (byte)value; break;
+                case "sw4700": Sim.Bus.SwitchLatch = (byte)(((byte)value & ~0x04) | (e.AcRequest ? 0x04 : 0)); break;
             }
         }
     }
@@ -1037,12 +1100,12 @@ public sealed class SimHost
         lock (_lock)
         {
             var defs = Defs();
-            if (!defs.TryResolve(target, out var addr)) return new();
+            if (!defs.TryResolve(target, out var addr)) return [];
             var labels = defs.Symbols.GroupBy(kv => kv.Value).ToDictionary(g => g.Key, g => g.First().Key);
-            return Calibration.Xref.Find(_sim.Bus.Rom.ToArray(), addr,
-                _asm?.SourceMap.Select(e => e.Address),
+            return Calibration.Xref.Find([.. Sim.Bus.Rom], addr,
+                Assembly?.SourceMap.Select(e => e.Address),
                 a => labels.GetValueOrDefault(a, ""),
-                a => _asm?.Lookup(a) is { } e ? $"{Path.GetFileName(e.File)}:{e.Line}" : null,
+                a => Assembly?.Lookup(a) is { } e ? $"{Path.GetFileName(e.File)}:{e.Line}" : null,
                 maxHits: max);
         }
     }
@@ -1059,7 +1122,7 @@ public sealed class SimHost
             if (looksHex && defs.TryResolve(q, out var addr))
             {
                 foreach (var (nm, a) in defs.SymbolsAt(addr, 64).Take(4)) res.Add((nm, a, addr - a, "near"));
-                var s = _asm?.Lookup(addr);
+                var s = Assembly?.Lookup(addr);
                 res.Add(($"0x{addr:X4}", addr, 0, s == null ? "address" : $"{Path.GetFileName(s.File)}:{s.Line}"));
             }
             foreach (var kv in defs.Symbols.Where(kv => kv.Key.Contains(q, StringComparison.OrdinalIgnoreCase))
@@ -1075,7 +1138,7 @@ public sealed class SimHost
 
     public CellValue[] ReadItem(ItemDef item)
     {
-        lock (_lock) return RomData.Read(Defs(), _sim.Bus.Rom, item);
+        lock (_lock) return RomData.Read(Defs(), Sim.Bus.Rom, item);
     }
 
     public CellValue WriteItem(ItemDef item, int index, double value, bool raw = false)
@@ -1083,13 +1146,13 @@ public sealed class SimHost
         lock (_lock)
         {
             var defs = Defs();
-            if (raw) RomData.WriteRawCell(_sim.Bus.Rom, item, index, value);
-            else RomData.Write(defs, _sim.Bus.Rom, item, index, value);
-            _sim.InvalidateDecodeCache();
+            if (raw) RomData.WriteRawCell(Sim.Bus.Rom, item, index, value);
+            else RomData.Write(defs, Sim.Bus.Rom, item, index, value);
+            Sim.InvalidateDecodeCache();
             RomDirty = true;
             Interlocked.Increment(ref _version);
             QueueUpload(item.CellAddress(index), item.ElementSize);
-            return RomData.Read(defs, _sim.Bus.Rom, item)[index];
+            return RomData.Read(defs, Sim.Bus.Rom, item)[index];
         }
     }
 
@@ -1104,10 +1167,10 @@ public sealed class SimHost
             var defs = Defs();
             foreach (var (i, v) in cells)
             {
-                if (raw) RomData.WriteRawCell(_sim.Bus.Rom, item, i, v);
-                else RomData.Write(defs, _sim.Bus.Rom, item, i, v);
+                if (raw) RomData.WriteRawCell(Sim.Bus.Rom, item, i, v);
+                else RomData.Write(defs, Sim.Bus.Rom, item, i, v);
             }
-            _sim.InvalidateDecodeCache();
+            Sim.InvalidateDecodeCache();
             RomDirty = true;
             var after = RomBytes(lo, hi - lo);
             if (!before.AsSpan().SequenceEqual(after)) PushUndo(lo, before, after, $"{item.Name} {what}");
@@ -1123,10 +1186,10 @@ public sealed class SimHost
         lock (_lock)
         {
             int lo = patches.Min(p => p.Address), hi = patches.Max(p => p.Address) + 1;
-            if (lo < 0 || hi > _sim.Bus.Rom.Length) throw new ArgumentOutOfRangeException(nameof(patches), "a patch is outside the ROM");
+            if (lo < 0 || hi > Sim.Bus.Rom.Length) throw new ArgumentOutOfRangeException(nameof(patches), "a patch is outside the ROM");
             var before = RomBytes(lo, hi - lo);
-            foreach (var p in patches) _sim.Bus.Rom[p.Address] = p.Value;
-            _sim.InvalidateDecodeCache();
+            foreach (var p in patches) Sim.Bus.Rom[p.Address] = p.Value;
+            Sim.InvalidateDecodeCache();
             RomDirty = true;
             var after = RomBytes(lo, hi - lo);
             if (before.AsSpan().SequenceEqual(after)) return 0;
@@ -1278,7 +1341,7 @@ public sealed class SimHost
     /// A copy of the whole ROM image, for working something out without holding the lock (a scaling preview, an export).
     public byte[] RomCopy()
     {
-        lock (_lock) return _sim.Bus.Rom.ToArray();
+        lock (_lock) return [.. Sim.Bus.Rom];
     }
 
     public byte[] RomBytes(int addr, int len)
@@ -1286,7 +1349,7 @@ public sealed class SimHost
         lock (_lock)
         {
             var b = new byte[Math.Max(0, len)];
-            for (int i = 0; i < b.Length; i++) b[i] = _sim.Bus.Rom[(addr + i) & (Bus.RomSize - 1)];
+            for (int i = 0; i < b.Length; i++) b[i] = Sim.Bus.Rom[(addr + i) & (Bus.RomSize - 1)];
             return b;
         }
     }
@@ -1296,8 +1359,8 @@ public sealed class SimHost
     {
         lock (_lock)
         {
-            for (int i = 0; i < bytes.Length; i++) _sim.Bus.Rom[(addr + i) & (Bus.RomSize - 1)] = bytes[i];
-            _sim.InvalidateDecodeCache();
+            for (int i = 0; i < bytes.Length; i++) Sim.Bus.Rom[(addr + i) & (Bus.RomSize - 1)] = bytes[i];
+            Sim.InvalidateDecodeCache();
             RomDirty = true;
             Interlocked.Increment(ref _version);
             QueueUpload(addr, bytes.Length);
@@ -1306,7 +1369,7 @@ public sealed class SimHost
 
     public double[] AxisValues(AxisDef? axis, int count)
     {
-        lock (_lock) return RomData.AxisValues(Defs(), _sim.Bus.Rom, axis, count);
+        lock (_lock) return RomData.AxisValues(Defs(), Sim.Bus.Rom, axis, count);
     }
 
     public void SaveRom(string path)
@@ -1314,7 +1377,7 @@ public sealed class SimHost
         lock (_lock)
         {
             if (File.Exists(path)) File.Copy(path, path + ".bak", overwrite: true);
-            File.WriteAllBytes(path, _sim.Bus.Rom.ToArray());
+            File.WriteAllBytes(path, [.. Sim.Bus.Rom]);
             RomDirty = false;
         }
     }

@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -13,8 +14,8 @@ namespace OkiRomSim.Desktop;
 public sealed class CompareWindow : Window
 {
     readonly Func<Program66k?> _current;
-    readonly TextBox _report = new() { IsReadOnly = true, AcceptsReturn = true, FontFamily = MainWindow.MonoFont, FontSize = 11.5, TextWrapping = TextWrapping.NoWrap };
-    readonly TextBlock _status = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0), TextTrimming = TextTrimming.CharacterEllipsis };
+    readonly TextBox _report = new() { IsReadOnly = true, AcceptsReturn = true, FontFamily = MainWindow.MonoFont, FontSize = 11.5, TextWrapping = TextWrapping.Wrap };
+    readonly TextBlock _status = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0), TextWrapping = TextWrapping.Wrap, MaxWidth = 420 };
     readonly CheckBox _functions = new() { Content = "Functions", IsChecked = true };
     readonly CheckBox _tables = new() { Content = "Tables", IsChecked = true };
     string? _a, _b;
@@ -49,9 +50,28 @@ public sealed class CompareWindow : Window
         var g = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*") };
         Grid.SetRow(chrome, 0); g.Children.Add(chrome);
         Grid.SetRow(bar, 1); g.Children.Add(bar);
-        var sv = new ScrollViewer { Content = _report, HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto, Margin = new Thickness(8, 0, 8, 8) };
-        Grid.SetRow(sv, 2); g.Children.Add(sv);
+        // the report box scrolls itself and wraps long lines at the window's edge, so nothing runs off the side
+        _report.Margin = new Thickness(8, 0, 8, 8);
+        ScrollViewer.SetHorizontalScrollBarVisibility(_report, Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled);
+        Grid.SetRow(_report, 2); g.Children.Add(_report);
         Content = g;
+        Opened += (_, _) => FitToScreen(this);
+    }
+
+    /// Never bigger than the screen it opens on (a 980 x 700 window does not fit a small laptop at 150%).
+    public static void FitToScreen(Window w)
+    {
+        if (w.Screens.ScreenFromWindow(w) is not { } scr) return;
+        double availW = scr.WorkingArea.Width / scr.Scaling * 0.95, availH = scr.WorkingArea.Height / scr.Scaling * 0.92;
+        if (w.Bounds.Width > availW) w.Width = availW;
+        if (w.Bounds.Height > availH) w.Height = availH;
+        // and back fully on it
+        double ww = double.IsNaN(w.Width) ? w.Bounds.Width : w.Width, wh = double.IsNaN(w.Height) ? w.Bounds.Height : w.Height;
+        var size = new PixelSize((int)(ww * scr.Scaling), (int)(wh * scr.Scaling));
+        var wa = scr.WorkingArea;
+        int x = Math.Clamp(w.Position.X, wa.X, Math.Max(wa.X, wa.Right - size.Width));
+        int y = Math.Clamp(w.Position.Y, wa.Y, Math.Max(wa.Y, wa.Bottom - size.Height));
+        if (x != w.Position.X || y != w.Position.Y) w.Position = new PixelPoint(x, y);
     }
 
     async Task<string?> Pick(string title)

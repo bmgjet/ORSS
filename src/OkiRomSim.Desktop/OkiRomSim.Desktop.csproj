@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
@@ -18,8 +18,11 @@
     <Content Include="Assets\icon.ico" />
   </ItemGroup>
   <ItemGroup>
-    <!-- Floating versions so this restores against whatever 11.x is current. Pin them once it
-         builds on your machine if you want reproducible restores. -->
+    <!-- File > New ROM lists these -->
+    <None Include="..\..\Templates\*.asm" Link="Templates\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Floating versions so this restores against whatever 11.x is current. Pin them once it builds on your machine if you want reproducible restores. -->
     <PackageReference Include="Avalonia" Version="11.*" />
     <PackageReference Include="Avalonia.Desktop" Version="11.*" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.*" />

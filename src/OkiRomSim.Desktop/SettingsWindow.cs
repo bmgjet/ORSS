@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
@@ -21,19 +22,29 @@ public sealed class SettingsWindow : Window
     ProcessorProfile _profile;
     string _profileJson;
 
-    public SettingsWindow(AppSettings current, Func<string> mcpStatus, ProcessorProfile profile)
+    /// The RPM and load breakpoints of the ROM's own fuel map, so a target table can be laid out against the very same axes the map is tuned on (which is what makes the two comparable). Empty when nothing is open, in which case a sensible default shape is offered.
+    readonly Func<(double[] Rpm, double[] Load)>? _mapAxes;
+
+    public SettingsWindow(AppSettings current, Func<string> mcpStatus, ProcessorProfile profile,
+                          Func<(double[] Rpm, double[] Load)>? mapAxes = null)
     {
+        _mapAxes = mapAxes;
         _s = current.Clone();
         _s.McpPassword = current.McpPassword;
         _mcpStatus = mcpStatus;
         _profile = profile;
         _profileJson = profile.ToJson();
         Title = "Settings";
-        Width = 800; Height = 660; MinWidth = 560; MinHeight = 380;
+        Width = 800; Height = 660; MinWidth = 560; MinHeight = 460;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         var chrome = DarkChrome.Apply(this, "Settings");
 
-        var tabs = new TabControl { Margin = new Thickness(8, 4), TabStripPlacement = Dock.Left };
+        var tabs = new TabControl
+        {
+            Margin = new Thickness(8, 4), TabStripPlacement = Dock.Left,
+            // one column of pages: the default wrapping strip split into two columns on a short window and took half the width
+            ItemsPanel = new Avalonia.Controls.Templates.FuncTemplate<Panel?>(() => new StackPanel()),
+        };
         tabs.Items.Add(Page("General", General()));
         tabs.Items.Add(Page("Panel zoom", Zoom(), out var zoomBar));
         zoomBar.Children.Add(Button("Reset every panel to 100%", () => { _s.PanelZoom.Clear(); Reopen(tabs, "Panel zoom", Zoom()); }));
@@ -49,6 +60,7 @@ public sealed class SettingsWindow : Window
         keyBar.Children.Add(Button("Reset hot keys", () => { _s.HotKeys = AppSettings.DefaultHotKeys(); Reopen(tabs, "Hot keys", HotKeys()); }));
         tabs.Items.Add(Page("Datalog", Datalog()));
         tabs.Items.Add(Page("Targets", Targets(), out var targetBar));
+        tabs.Items.Add(Page("Corrections", Corrections()));
         targetBar.Children.Add(Button("Start from a sensible AFR table", () =>
         {
             _s.AfrTargetLow = TargetMap.Default().ToText();
@@ -66,8 +78,12 @@ public sealed class SettingsWindow : Window
         save.Click += (_, _) => Save();
         var cancel = new Button { Content = "Cancel", IsCancel = true, MinWidth = 90 };
         cancel.Click += (_, _) => Close();
-        buttons.Children.Add(cancel); buttons.Children.Add(save);
+        var apply = new Button { Content = "Apply", MinWidth = 90 };
+        apply.Click += (_, _) => Apply();
+        buttons.Children.Add(cancel); buttons.Children.Add(apply); buttons.Children.Add(save);
         ToolTip.SetTip(save, "Keep these settings and apply them now.");
+        ToolTip.SetTip(apply, "Show the changes now (UI scale, colours, zoom...) without keeping them: Save keeps them, Cancel puts back what was there.");
+        ToolTip.SetTip(cancel, "Close without keeping anything, and undo whatever Apply showed.");
 
         var g = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto") };
         Grid.SetRow(chrome, 0); g.Children.Add(chrome);
@@ -88,16 +104,34 @@ public sealed class SettingsWindow : Window
         };
     }
 
-    readonly StackPanel _procBar;
+    readonly WrapPanel _procBar;
 
-    void Save()
+    /// Apply was pressed: the settings as they stand (a copy - the page keeps editing its own), and the processor profile when it changed.
+    public event Action<AppSettings, ProcessorProfile?>? Applied;
+
+    bool TakeProfile()
     {
+        ResultProfile = null;
         if (_profileJson != _profile.ToJson())
         {
             try { ResultProfile = ProcessorProfile.FromJson(_profileJson); }
-            catch (Exception ex) { _procError.Text = "The processor profile is not valid JSON: " + ex.Message; return; }
+            catch (Exception ex) { _procError.Text = "The processor profile is not valid JSON: " + ex.Message; return false; }
         }
         else if (!ReferenceEquals(_profile, ProcessorProfile.Current)) ResultProfile = _profile;
+        return true;
+    }
+
+    void Apply()
+    {
+        if (!TakeProfile()) return;
+        var copy = _s.Clone();
+        copy.McpPassword = _s.McpPassword;
+        Applied?.Invoke(copy, ResultProfile);
+    }
+
+    void Save()
+    {
+        if (!TakeProfile()) return;
         Result = _s;
         Close();
     }
@@ -107,9 +141,9 @@ public sealed class SettingsWindow : Window
     static TabItem Page(string header, Control content) => Page(header, content, out _);
 
     /// A page: a fixed bar for its actions at the top (never scrolled away), then the content in a scroller with room left for the scroll bar and below the last row.
-    static TabItem Page(string header, Control content, out StackPanel actions)
+    static TabItem Page(string header, Control content, out WrapPanel actions)
     {
-        actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(4, 4, 4, 2) };
+        actions = new WrapPanel { Margin = new Thickness(4, 4, 4, 2), ItemSpacing = 6, LineSpacing = 4 };
         var scroller = new ScrollViewer
         {
             Content = new Border { Child = content, Padding = new Thickness(4, 6, 22, 28) },
@@ -119,7 +153,7 @@ public sealed class SettingsWindow : Window
         DockPanel.SetDock(actions, Dock.Top);
         dock.Children.Add(actions);
         dock.Children.Add(scroller);
-        return new TabItem { Header = new TextBlock { Text = header, FontSize = 13 }, Content = dock, Tag = header };
+        return new TabItem { Header = new TextBlock { Text = header, FontSize = 12.5 }, Content = dock, Tag = header, MinHeight = 30, Padding = new Thickness(10, 3) };
     }
 
     static void Reopen(TabControl tabs, string header, Control content)
@@ -137,17 +171,101 @@ public sealed class SettingsWindow : Window
 
     static Control Row(string label, Control editor, string tip)
     {
-        var g = new Grid { ColumnDefinitions = new ColumnDefinitions("230,*"), Margin = new Thickness(0, 3) };
         var l = new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 8, 0) };
         editor.HorizontalAlignment = HorizontalAlignment.Left;
-        Grid.SetColumn(l, 0); g.Children.Add(l);
-        Grid.SetColumn(editor, 1); g.Children.Add(editor);
-        ToolTip.SetTip(g, tip);
-        return g;
+        var row = new FormRow { Margin = new Thickness(0, 3) };
+        row.Children.Add(l);
+        row.Children.Add(editor);
+        ToolTip.SetTip(row, tip);
+        return row;
+    }
+
+    /// A label and its editor side by side; the label column narrows (and wraps) with the window, and when the editor still would not fit beside it the editor goes underneath - so it is never pushed out of sight or drawn over its label.
+    sealed class FormRow : Panel
+    {
+        bool _stacked;
+        double _labelW;
+
+        protected override Size MeasureOverride(Size avail)
+        {
+            if (Children.Count < 2) return default;
+            Control label = Children[0], editor = Children[1];
+            double w = double.IsInfinity(avail.Width) ? 600 : avail.Width;
+            _labelW = Math.Clamp(w * 0.38, 110, 230);
+            editor.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            double natural = double.IsNaN(editor.Width) ? editor.DesiredSize.Width : editor.Width + editor.Margin.Left + editor.Margin.Right;
+            _stacked = natural > w - _labelW + 0.5;
+            if (_stacked)
+            {
+                label.Measure(new Size(w, double.PositiveInfinity));
+                editor.Measure(new Size(w, double.PositiveInfinity));
+                return new Size(w, label.DesiredSize.Height + editor.DesiredSize.Height + 2);
+            }
+            label.Measure(new Size(_labelW, double.PositiveInfinity));
+            editor.Measure(new Size(w - _labelW, double.PositiveInfinity));
+            return new Size(w, Math.Max(label.DesiredSize.Height, editor.DesiredSize.Height));
+        }
+
+        protected override Size ArrangeOverride(Size size)
+        {
+            if (Children.Count < 2) return size;
+            Control label = Children[0], editor = Children[1];
+            if (_stacked)
+            {
+                double lh = label.DesiredSize.Height;
+                label.Arrange(new Rect(0, 0, size.Width, lh));
+                editor.Arrange(new Rect(0, lh + 2, size.Width, Math.Max(0, size.Height - lh - 2)));
+            }
+            else
+            {
+                label.Arrange(new Rect(0, 0, _labelW, size.Height));
+                editor.Arrange(new Rect(_labelW, 0, Math.Max(0, size.Width - _labelW), size.Height));
+            }
+            return size;
+        }
     }
 
     static TextBlock Note(string t) => new() { Text = t, FontSize = 11, Opacity = 0.75, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6) };
-    static TextBlock Section(string t) => new() { Text = t, FontSize = 12, FontWeight = FontWeight.Bold, Margin = new Thickness(0, 12, 0, 2) };
+
+    /// A heading that starts a new block on a settings page. `Grouped` turns each one, and the rows that follow it, into a box of its own, so a page reads as a handful of named groups rather than one long column of rows - which is how the established tuning software lays its settings out, and how anyone looking for one of them expects to find it.
+    static TextBlock Section(string t) => new()
+    {
+        Text = t, FontSize = 12, FontWeight = FontWeight.Bold, Margin = new Thickness(0, 12, 0, 2), Tag = SectionTag,
+    };
+
+    const string SectionTag = "section";
+
+    /// Break a page at its Section headings and put each block in a titled box. Rows before the first heading go in a box of their own with no title.
+    static Control Grouped(StackPanel page)
+    {
+        var children = page.Children.ToList();
+        page.Children.Clear();
+        var outer = new StackPanel();
+        StackPanel? body = null;
+
+        void Start(string? title)
+        {
+            body = new StackPanel { Margin = new Thickness(12, title == null ? 8 : 4, 10, 10) };
+            var box = new StackPanel();
+            if (title != null)
+                box.Children.Add(new TextBlock { Text = title, FontWeight = FontWeight.Bold, FontSize = 12, Margin = new Thickness(12, 8, 0, 0) });
+            box.Children.Add(body);
+            outer.Children.Add(new Border
+            {
+                BorderBrush = new SolidColorBrush(Color.FromArgb(64, 255, 255, 255)),
+                BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4),
+                Margin = new Thickness(0, 0, 0, 10), Child = box,
+            });
+        }
+
+        foreach (var c in children)
+        {
+            if (c is TextBlock tb && (tb.Tag as string) == SectionTag) { Start(tb.Text); continue; }
+            if (body == null) Start(null);
+            body!.Children.Add(c);
+        }
+        return outer;
+    }
 
     static CheckBox Check(string text, bool value, Action<bool> set, string tip)
     {
@@ -181,9 +299,45 @@ public sealed class SettingsWindow : Window
         return list;
     }
 
+    /// Select `port` in a port box, adding it when it was not in the list.
+    static void SetPort(ComboBox box, string port)
+    {
+        var list = (box.ItemsSource as IEnumerable<string> ?? []).ToList();
+        if (!list.Contains(port)) { list.Add(port); box.ItemsSource = list; }
+        box.SelectedItem = port;
+    }
+
+    /// Every datalog protocol on one port (each at its own baud rate, quickly): the one that answered, and why not otherwise.
+    static (string? Protocol, string Why) ProbeDatalogPort(string port)
+    {
+        try
+        {
+            using var link = new SerialLink(port, 38400);
+            var (p, report) = DatalogProtocol.Detect(link, quick: true);
+            return (p?.Name, p != null ? "answered " + p.Name : report.Replace('\n', ' ').Trim());
+        }
+        catch (Exception ex) { return (null, ex.Message); }
+    }
+
+    /// The emulator version query on one port at each baud rate the devices use: the device, or null.
+    static (string Port, string Device, int Baud)? ProbeEmulatorPort(string port)
+    {
+        foreach (var baud in new[] { 921600, 115200, 38400 })
+        {
+            using var m = new MoatesTrace { Kind = "auto", Baud = baud, Retries = 0, TimeoutMs = 250 };
+            try
+            {
+                m.Connect(port);
+                return (port, m.Device, baud);
+            }
+            catch (Exception ex) { AppLog.Write(LogKind.Serial, "emulator", $"detect {port} at {baud}: {ex.Message}"); }
+        }
+        return null;
+    }
+
     static ComboBox PortBox(string current, IEnumerable<string>? extra, Action<string> set)
     {
-        var list = (extra ?? Array.Empty<string>()).Concat(SerialLink.Ports()).ToList();
+        var list = (extra ?? []).Concat(SerialLink.Ports()).ToList();
         if (current.Length > 0 && !list.Contains(current)) list.Insert(0, current);
         var box = new ComboBox { ItemsSource = list, SelectedItem = current.Length > 0 ? current : list.FirstOrDefault(), Width = 180 };
         if (box.SelectedItem is string s0 && current.Length == 0) set(s0);
@@ -200,15 +354,36 @@ public sealed class SettingsWindow : Window
         p.Children.Add(Row("Version", version, "Which build of " + BuildInfo.Product + " this is. Quote it when reporting something so the version can be matched."));
 
         var scale = new Slider { Minimum = 0.6, Maximum = 2.0, Value = _s.UiScale, Width = 260, TickFrequency = 0.05, IsSnapToTickEnabled = true };
-        // a slider that keeps the pointer captured swallows the next clicks (seen on X11, where
-        // Save then needed several presses): hand the pointer back as soon as it is released
+        // a slider that keeps the pointer captured swallows the next clicks (seen on X11, where Save then needed several presses): hand the pointer back as soon as it is released
         scale.PointerReleased += (_, e) => e.Pointer.Capture(null);
         scale.PointerCaptureLost += (_, _) => { };
         var scaleText = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0), Text = $"{_s.UiScale * 100:0}%" };
-        scale.PropertyChanged += (_, e) => { if (e.Property == Slider.ValueProperty) { _s.UiScale = scale.Value; scaleText.Text = $"{scale.Value * 100:0}%"; } };
-        var scaleRow = new StackPanel { Orientation = Orientation.Horizontal };
-        scaleRow.Children.Add(scale); scaleRow.Children.Add(scaleText);
-        p.Children.Add(Row("UI scale", scaleRow, "Size of everything in the window, on top of the display scaling (use below 100% on a 4K screen at 200%). Each panel also zooms on its own with Ctrl + mouse wheel."));
+        var fit = new CheckBox { Content = "Fit to the screen", IsChecked = _s.FitToScreen, Margin = new Thickness(12, 0, 0, 0) };
+        ToolTip.SetTip(fit, "Pick the UI scale and how the panels share the window for the screen the app is on - 80% on a 1366 x 768 laptop, 100% on 1080p and up - " +
+                            "and pick again when it starts on a different screen. Moving the slider sets the scale yourself and turns this off.");
+        bool settingFit = false;
+        scale.PropertyChanged += (_, e) =>
+        {
+            if (e.Property != Slider.ValueProperty) return;
+            _s.UiScale = scale.Value; scaleText.Text = $"{scale.Value * 100:0}%";
+            if (!settingFit && fit.IsChecked == true) fit.IsChecked = false;
+        };
+        fit.IsCheckedChanged += (_, _) =>
+        {
+            _s.FitToScreen = fit.IsChecked == true;
+            if (!_s.FitToScreen) return;
+            // ticked again: show the scale this screen gets (Apply or Save lays the panels out for it too)
+            _s.FittedFor = "";
+            if ((Screens.ScreenFromWindow(this) ?? Screens.Primary) is { } scr)
+            {
+                settingFit = true;
+                scale.Value = ScreenFit.ScaleFor(ScreenFit.Dip(scr));
+                settingFit = false;
+            }
+        };
+        var scaleRow = new WrapPanel();
+        scaleRow.Children.Add(scale); scaleRow.Children.Add(scaleText); scaleRow.Children.Add(fit);
+        p.Children.Add(Row("UI scale", scaleRow, "Size of everything in the app, on top of the display scaling. Each panel also zooms on its own with Ctrl + mouse wheel."));
 
         var font = new NumericUpDown { Minimum = 8, Maximum = 32, Increment = 1, Value = (decimal)_s.EditorFontSize, Width = 120, FormatString = "0" };
         font.ValueChanged += (_, e) => { if (e.NewValue is decimal d) _s.EditorFontSize = (double)d; };
@@ -240,7 +415,7 @@ public sealed class SettingsWindow : Window
         trail.ValueChanged += (_, e) => { if (e.NewValue is decimal d) _s.TrailSeconds = (double)d; };
         p.Children.Add(Row("Trace trail (seconds)", trail, "How long a table cell stays highlighted (fading) after the program read it, in simulated seconds."));
         p.Children.Add(Note($"Settings file: {AppSettings.FilePath}. Window size and position, panel sizes and zoom, and the selected tab are remembered automatically."));
-        return p;
+        return Grouped(p);
     }
 
     static readonly (string Key, string Label)[] Panels =
@@ -268,7 +443,7 @@ public sealed class SettingsWindow : Window
             row.Children.Add(sl); row.Children.Add(txt);
             p.Children.Add(Row(label, row, $"Zoom of the {label} panel."));
         }
-        return p;
+        return Grouped(p);
     }
 
     Control Colours()
@@ -291,7 +466,7 @@ public sealed class SettingsWindow : Window
         Colour("Live trace trail", () => _s.TrailColour, v => _s.TrailColour = v, "Cells read recently, fading.");
         Colour("Hit trace: code", () => _s.HitCodeColour, v => _s.HitCodeColour = v, "Source lines that ran.");
         Colour("Hit trace: data", () => _s.HitDataColour, v => _s.HitDataColour = v, "Source lines (DB/DW) read as data.");
-        return p;
+        return Grouped(p);
     }
 
     public static Color Parse(string hex)
@@ -316,74 +491,272 @@ public sealed class SettingsWindow : Window
             }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
             p.Children.Add(Row(action, box, $"Keyboard shortcut for {action.ToLowerInvariant()}."));
         }
-        return p;
+        return Grouped(p);
     }
 
-    /// What the engine should be running, and what the sensors reading it really mean.
+    /// What the engine should be running: the AFR target for each cam, as a table on the same axes as the fuel map.
     Control Targets()
     {
         var p = new StackPanel();
         p.Children.Add(Note("The O2 / knock tables compare what was logged against these, and 'apply offset changes' moves the fuel map towards them. " +
-                            "Paste straight from a spreadsheet: load across the top, rpm down the left, tabs or commas between."));
-
+                            "Type a value into a cell and press Enter (it goes into every cell selected), +/- nudge one step, and Ctrl+C / Ctrl+V " +
+                            "copy and paste a block - the same as the maps themselves. The breakpoints are yours to set: 'Use the fuel map's axes' " +
+                            "lines the table up with the map it is tuning."));
         p.Children.Add(Section("AFR target - low cam"));
-        p.Children.Add(TableBox(_s.AfrTargetLow, t => _s.AfrTargetLow = t,
-            "The AFR you want on the low cam, cell by cell. Readings between breakpoints are read straight through."));
+        p.Children.Add(TargetTable(() => _s.AfrTargetLow, t => _s.AfrTargetLow = t,
+            "The AFR you want on the low cam, cell by cell. A reading between breakpoints is read straight through from the four around it."));
         p.Children.Add(Section("AFR target - high cam"));
-        p.Children.Add(TableBox(_s.AfrTargetHigh, t => _s.AfrTargetHigh = t,
+        p.Children.Add(TargetTable(() => _s.AfrTargetHigh, t => _s.AfrTargetHigh = t,
             "The same for the high cam (VTEC). Left empty, the low-cam table is used for both."));
+        return Grouped(p);
+    }
 
+    /// The corrections: what a sensor really means, as a table of readings in against readings out.
+    Control Corrections()
+    {
+        var p = new StackPanel();
+        p.Children.Add(Note("A correction is a small table: the reading along the top, what it really means underneath. Readings between two " +
+                            "breakpoints are read straight through, and outside the ends the first and last values hold. Type a value into a cell " +
+                            "and press Enter; 'Breakpoints' sets what the columns stand for."));
         p.Children.Add(Section("Wideband correction"));
-        p.Children.Add(CurveBox(_s.WidebandCorrection, t => _s.WidebandCorrection = t,
-            "What the controller really means: measured = corrected, one pair per line (12 = 12.3). Readings in between are read straight through, " +
-            "and outside the ends the first and last values hold."));
+        p.Children.Add(Note("What the controller really means: a bench-checked wideband that reads 12.0 when the mixture is really 12.3 is corrected here, " +
+                            "so every AFR the program compares with a target is the true one."));
+        p.Children.Add(CurveTable(() => _s.WidebandCorrection, t => _s.WidebandCorrection = t, "AFR in", "AFR", 2,
+            "Measured against corrected."));
 
         p.Children.Add(Section("Analog input curves"));
-        p.Children.Add(CurveBox(_s.AnalogCurves, t => _s.AnalogCurves = t,
-            "Scale an aux channel into the units you want: one curve per line, 'name: 0=0, 2.5=50, 5=100'. The name is the aux channel's " +
-            "(Settings > Datalog), and the curve is applied after its expression."));
-        return p;
+        p.Children.Add(Note("A curve for an aux channel, so a sensor that is not a straight line reads in the units you want. The name is the aux " +
+                            "channel's (Settings > Datalog); the curve is applied after its expression."));
+        var host = new StackPanel();
+        void Rebuild()
+        {
+            host.Children.Clear();
+            var curves = ParseNamed(_s.AnalogCurves);
+            foreach (var entry in curves.ToList())
+            {
+                var row = entry;
+                var name = new TextBox { Text = row.Name, Width = 150, Watermark = "channel name" };
+                var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 8, 0, 0) };
+                head.Children.Add(new TextBlock { Text = "Channel", VerticalAlignment = VerticalAlignment.Center, FontSize = 11.5 });
+                head.Children.Add(name);
+                head.Children.Add(Button("Remove", () => { curves.Remove(row); _s.AnalogCurves = WriteNamed(curves); Rebuild(); }));
+                var block = new StackPanel();
+                block.Children.Add(head);
+                block.Children.Add(CurveTable(() => row.Text, t => { row.Text = t; _s.AnalogCurves = WriteNamed(curves); }, "in", "out", 3,
+                                              $"What '{row.Name}' reads, and what it should mean."));
+                name.LostFocus += (_, _) => { row.Name = (name.Text ?? "").Trim(); _s.AnalogCurves = WriteNamed(curves); };
+                host.Children.Add(block);
+            }
+            if (curves.Count == 0) host.Children.Add(Note("No analog curves yet."));
+        }
+        Rebuild();
+        p.Children.Add(host);
+        p.Children.Add(Button("Add a curve", () =>
+        {
+            var curves = ParseNamed(_s.AnalogCurves);
+            curves.Add(new NamedCurve { Name = $"aux{curves.Count + 1}", Text = "0 = 0\n2.5 = 50\n5 = 100" });
+            _s.AnalogCurves = WriteNamed(curves);
+            Rebuild();
+        }));
+        return Grouped(p);
     }
 
-    TextBox TableBox(string text, Action<string> set, string tip)
+    sealed class NamedCurve
     {
-        var box = new TextBox
-        {
-            Text = text, AcceptsReturn = true, MinHeight = 130, Width = 470,
-            FontFamily = MainWindow.MonoFont, FontSize = 11.5,
-            Watermark = "rpm/load, then the load breakpoints; one row per rpm",
-        };
-        box.LostFocus += (_, _) => set(box.Text ?? "");
-        ToolTip.SetTip(box, tip);
-        return box;
+        public string Name = "";
+        public string Text = "";
     }
 
-    TextBox CurveBox(string text, Action<string> set, string tip)
+    /// "name: 0=0, 2.5=50, 5=100" per line, the way the setting is stored.
+    static List<NamedCurve> ParseNamed(string? text)
     {
-        var box = new TextBox
+        var list = new List<NamedCurve>();
+        foreach (var raw in (text ?? "").Split('\n'))
         {
-            Text = text, AcceptsReturn = true, MinHeight = 90, Width = 470,
-            FontFamily = MainWindow.MonoFont, FontSize = 11.5,
-            Watermark = "0 = 10, 2.5 = 14.7, 5 = 20",
+            var line = raw.Trim();
+            int colon = line.IndexOf(':');
+            if (colon <= 0) continue;
+            list.Add(new NamedCurve { Name = line[..colon].Trim(), Text = line[(colon + 1)..].Trim() });
+        }
+        return list;
+    }
+
+    static string WriteNamed(IEnumerable<NamedCurve> curves) =>
+        string.Join("\n", curves.Where(c => c.Name.Length > 0)
+            .Select(c => c.Name + ": " + string.Join(", ", LookupCurve.Parse(c.Text).Points.Select(pt => $"{pt.In:0.###}={pt.Out:0.###}"))));
+
+    /// A correction as a table: the reading along the top, what it means in the one row underneath.
+    Control CurveTable(Func<string> get, Action<string> set, string inUnit, string outUnit, int decimals, string tip)
+    {
+        var grid = new GridBox { Step = 0.1, Height = 86 };
+        var points = new TextBox { Width = 260, FontFamily = MainWindow.MonoFont, FontSize = 11.5, Watermark = "0, 2.5, 5" };
+        var block = new StackPanel { Margin = new Thickness(0, 2, 0, 8) };
+
+        void Draw()
+        {
+            var curve = LookupCurve.Parse(get());
+            var ins = curve.Points.Count > 0 ? curve.Points.Select(x => x.In).ToArray() : [0, 2.5, 5];
+            var outs = curve.Points.Count > 0 ? curve.Points.Select(x => x.Out).ToArray() : [0, 50, 100];
+            points.Text = GridBox.AxisText(ins);
+            grid.Set([0], ins, outs, outUnit, inUnit, outUnit, decimals);
+        }
+
+        void Save(double[] values)
+        {
+            var ins = GridBox.ParseAxis(points.Text);
+            var c = new LookupCurve();
+            for (int i = 0; i < ins.Length && i < values.Length; i++)
+                if (!double.IsNaN(values[i])) c.Points.Add((ins[i], values[i]));
+            set(c.ToText());
+        }
+
+        grid.Changed += Save;
+        points.LostFocus += (_, _) =>
+        {
+            // the breakpoints moved: keep what each column meant and redraw against the new ones
+            var ins = GridBox.ParseAxis(points.Text);
+            var old = LookupCurve.Parse(get());
+            var c = new LookupCurve();
+            foreach (var x in ins) c.Points.Add((x, old.Any ? Math.Round(old.Apply(x), 4) : x));
+            set(c.ToText());
+            Draw();
         };
-        box.LostFocus += (_, _) => set(box.Text ?? "");
-        ToolTip.SetTip(box, tip);
-        return box;
+        ToolTip.SetTip(grid, tip);
+        ToolTip.SetTip(points, "What the columns stand for: the readings coming in, separated by commas.");
+        var head = new WrapPanel { Margin = new Thickness(0, 2), ItemSpacing = 6, LineSpacing = 4 };
+        head.Children.Add(new TextBlock { Text = "Breakpoints", VerticalAlignment = VerticalAlignment.Center, FontSize = 11.5, Width = 90 });
+        head.Children.Add(points);
+        head.Children.Add(Button("Clear", () => { set(""); Draw(); }));
+        block.Children.Add(head);
+        block.Children.Add(grid);
+        Draw();
+        return block;
+    }
+
+    /// An AFR target map as a table, with its own breakpoints and a button to take the fuel map's.
+    Control TargetTable(Func<string> get, Action<string> set, string tip)
+    {
+        var grid = new GridBox { Step = 0.1 };
+        var rpmBox = new TextBox { Width = 250, FontFamily = MainWindow.MonoFont, FontSize = 11.5, Watermark = "800, 2000, 4000, 6000" };
+        var loadBox = new TextBox { Width = 250, FontFamily = MainWindow.MonoFont, FontSize = 11.5, Watermark = "20, 40, 60, 80, 100" };
+        var count = new TextBlock { FontSize = 11, Opacity = 0.75, VerticalAlignment = VerticalAlignment.Center };
+
+        double[] Rpm() => GridBox.ParseAxis(rpmBox.Text);
+        double[] Load() => GridBox.ParseAxis(loadBox.Text);
+
+        void Draw()
+        {
+            var map = TargetMap.Parse(get());
+            var rpm = map.Any ? map.Rpm.ToArray() : Rpm();
+            var load = map.Any ? map.Load.ToArray() : Load();
+            if (rpm.Length == 0 || load.Length == 0)
+            {
+                var axes = _mapAxes?.Invoke();
+                rpm = rpm.Length > 0 ? rpm : axes is { Rpm.Length: > 0 } a ? a.Rpm : [800, 2000, 3000, 4000, 5000, 6000, 7000, 8000];
+                load = load.Length > 0 ? load : axes is { Load.Length: > 0 } b ? b.Load : [20, 40, 60, 80, 100];
+            }
+            rpmBox.Text = GridBox.AxisText(rpm);
+            loadBox.Text = GridBox.AxisText(load);
+            var values = new double[rpm.Length * load.Length];
+            for (int r = 0; r < rpm.Length; r++)
+                for (int c = 0; c < load.Length; c++)
+                    values[(r * load.Length) + c] = map.Any ? map.Target(rpm[r], load[c], 14.7) : 14.7;
+            grid.Set(rpm, load, values, "rpm", "load", "AFR", 2);
+            count.Text = $"{rpm.Length} x {load.Length}";
+        }
+
+        void Save(double[] values)
+        {
+            var rpm = Rpm(); var load = Load();
+            if (rpm.Length == 0 || load.Length == 0) return;
+            var map = new TargetMap { Rpm = [.. rpm], Load = [.. load] };
+            for (int r = 0; r < rpm.Length; r++)
+                map.Values.Add([.. Enumerable.Range(0, load.Length).Select(c =>
+                {
+                    int i = (r * load.Length) + c;
+                    return i < values.Length && !double.IsNaN(values[i]) ? values[i] : 14.7;
+                })]);
+            set(map.ToText());
+        }
+
+        grid.Changed += Save;
+        void AxisChanged()
+        {
+            // keep every target where it was in rpm-and-load terms, then redraw on the new grid
+            var map = TargetMap.Parse(get());
+            var rpm = Rpm(); var load = Load();
+            if (rpm.Length == 0 || load.Length == 0) { Draw(); return; }
+            var moved = new TargetMap { Rpm = [.. rpm], Load = [.. load] };
+            foreach (var r in rpm)
+                moved.Values.Add([.. load.Select(c => map.Any ? Math.Round(map.Target(r, c, 14.7), 3) : 14.7)]);
+            set(moved.ToText());
+            Draw();
+        }
+        rpmBox.LostFocus += (_, _) => AxisChanged();
+        loadBox.LostFocus += (_, _) => AxisChanged();
+
+        ToolTip.SetTip(grid, tip);
+        ToolTip.SetTip(rpmBox, "The RPM breakpoints down the left, separated by commas.");
+        ToolTip.SetTip(loadBox, "The load breakpoints across the top, separated by commas (kPa).");
+
+        var bar = new WrapPanel { Margin = new Thickness(0, 2) };
+        bar.Children.Add(Button("Use the fuel map's axes", () =>
+        {
+            var axes = _mapAxes?.Invoke();
+            if (axes is not { Rpm.Length: > 0, Load.Length: > 0 } a) { count.Text = "no fuel map with axes is open"; return; }
+            rpmBox.Text = GridBox.AxisText(a.Rpm);
+            loadBox.Text = GridBox.AxisText(a.Load);
+            AxisChanged();
+        }));
+        bar.Children.Add(Button("Fill with 14.7", () =>
+        {
+            var rpm = Rpm(); var load = Load();
+            if (rpm.Length == 0 || load.Length == 0) return;
+            Save([.. Enumerable.Repeat(14.7, rpm.Length * load.Length)]);
+            Draw();
+        }));
+        bar.Children.Add(Button("Clear", () => { set(""); Draw(); }));
+        bar.Children.Add(count);
+
+        var rows = new StackPanel();
+        // one breakpoint list per line, the box filling what is left beside its label, so neither covers the other however narrow the window
+        var axisRow = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), RowDefinitions = new RowDefinitions("Auto,Auto"), Margin = new Thickness(0, 2) };
+        var l1 = new TextBlock { Text = "RPM rows", VerticalAlignment = VerticalAlignment.Center, FontSize = 11.5, Margin = new Thickness(0, 0, 8, 0) };
+        var l2 = new TextBlock { Text = "Load columns", VerticalAlignment = VerticalAlignment.Center, FontSize = 11.5, Margin = new Thickness(0, 0, 8, 0) };
+        rpmBox.Width = loadBox.Width = double.NaN;
+        rpmBox.MinWidth = loadBox.MinWidth = 120;
+        rpmBox.Margin = loadBox.Margin = new Thickness(0, 2);
+        Grid.SetColumn(l1, 0); axisRow.Children.Add(l1);
+        Grid.SetColumn(rpmBox, 1); axisRow.Children.Add(rpmBox);
+        Grid.SetRow(l2, 1); Grid.SetColumn(l2, 0); axisRow.Children.Add(l2);
+        Grid.SetRow(loadBox, 1); Grid.SetColumn(loadBox, 1); axisRow.Children.Add(loadBox);
+        rows.Children.Add(axisRow);
+        rows.Children.Add(bar);
+        grid.Height = 240;
+        rows.Children.Add(grid);
+        Draw();
+        return rows;
     }
 
     Control Datalog()
     {
         var p = new StackPanel();
         p.Children.Add(Section("ECU link"));
-        p.Children.Add(Row("Port", PortBox(_s.DatalogPort, new[] { "simulator" }, v => _s.DatalogPort = v),
-            "Serial port of the car's datalog cable. 'simulator' logs the ROM running in this app through its own serial port (a virtual ECU)."));
+        var dlPort = PortBox(_s.DatalogPort, new[] { "simulator" }, v => _s.DatalogPort = v);
+        var dlFound = new TextBlock { FontSize = 11, Opacity = 0.8, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0), TextWrapping = TextWrapping.Wrap, MaxWidth = 360 };
+        var dlDetect = new Button { Content = "Detect", Margin = new Thickness(6, 0, 0, 0) };
+        ToolTip.SetTip(dlDetect, "Try every serial port with every datalog protocol (each at its own baud rate) and pick the port and protocol the ECU answers on. Takes a few seconds a port; the ignition must be on.");
+        var dlRow = new WrapPanel();
+        dlRow.Children.Add(dlPort); dlRow.Children.Add(dlDetect); dlRow.Children.Add(dlFound);
+        p.Children.Add(Row("Port", dlRow,
+            "Serial port of the car's datalog cable. 'simulator' logs the ROM running in this app through its own serial port (a virtual ECU). Detect finds it."));
         var baud = new ComboBox { ItemsSource = new[] { 9600, 19200, 38400, 57600, 115200 }, SelectedItem = _s.DatalogBaud, Width = 180 };
         baud.SelectionChanged += (_, _) => { if (baud.SelectedItem is int b) _s.DatalogBaud = b; };
         p.Children.Add(Row("Baud rate", baud, "The OBD1 datalogging ROMs all use 38400."));
         p.Children.Add(Section("External readings"));
         var feeds = new TextBox
         {
-            AcceptsReturn = true, MinHeight = 90, Width = 460, FontFamily = MainWindow.MonoFont, FontSize = 11.5,
+            AcceptsReturn = true, MinHeight = 90, MinWidth = 200, MaxWidth = 460, FontFamily = MainWindow.MonoFont, FontSize = 11.5,
             Text = string.Join("\n", _s.ExternalFeeds.Select(f =>
                 $"{f.Name} = {f.Source}" + (f.IntervalMs != 1000 ? $" | {f.IntervalMs}ms" : "") + (f.Path.Length > 0 ? " | " + f.Path : ""))),
             Watermark = "dyno = http://192.168.1.50/data.json | 500ms | result",
@@ -392,11 +765,35 @@ public sealed class SettingsWindow : Window
         p.Children.Add(Row("Feeds", feeds,
             "One per line: name = http(s) URL or a path to a JSON file, then optionally | how often | which property to read. " +
             "Every number in the answer becomes a channel called name.key (nested objects join with dots), which gauges can show like any logged value."));
+        feeds.HorizontalAlignment = HorizontalAlignment.Stretch;
 
         var protos = new[] { "auto" }.Concat(DatalogProtocol.All().Select(x => x.Name)).ToList();
         var proto = new ComboBox { ItemsSource = protos, SelectedItem = protos.Contains(_s.DatalogProtocol) ? _s.DatalogProtocol : "auto", Width = 180 };
         proto.SelectionChanged += (_, _) => _s.DatalogProtocol = proto.SelectedItem as string ?? "auto";
-        p.Children.Add(Row("Protocol", proto, "auto tries each handshake in turn. " + string.Join("  ", DatalogProtocol.All().Select(x => $"{x.Name}: {x.Description}."))));
+        p.Children.Add(Row("Protocol", proto, "auto tries each handshake in turn, each at its own baud rate. " + string.Join("  ", DatalogProtocol.All().Select(x => $"{x.Name}: {x.Description}."))));
+        dlDetect.Click += async (_, _) =>
+        {
+            dlDetect.IsEnabled = false;
+            var ports = SerialLink.Ports().ToList();
+            if (ports.Count == 0) { dlFound.Text = "no serial ports on this computer"; dlDetect.IsEnabled = true; return; }
+            string? foundPort = null, foundProto = null;
+            foreach (var port in ports)
+            {
+                dlFound.Text = $"trying {port}…";
+                var (proto2, why) = await Task.Run(() => ProbeDatalogPort(port));
+                AppLog.Write(LogKind.Serial, "datalog", $"port detection on {port}: {why}");
+                if (proto2 != null) { foundPort = port; foundProto = proto2; break; }
+            }
+            if (foundPort != null)
+            {
+                _s.DatalogPort = foundPort; _s.DatalogProtocol = foundProto!;
+                SetPort(dlPort, foundPort);
+                proto.SelectedItem = foundProto;
+                dlFound.Text = $"{foundProto} on {foundPort}";
+            }
+            else dlFound.Text = $"no ECU answered on {string.Join(", ", ports)} (ignition on? cable plugged in? datalog jumper out?)";
+            dlDetect.IsEnabled = true;
+        };
         var interval = new NumericUpDown { Minimum = 0, Maximum = 2000, Increment = 10, Value = _s.DatalogIntervalMs, Width = 120, FormatString = "0" };
         interval.ValueChanged += (_, e) => { if (e.NewValue is decimal d) _s.DatalogIntervalMs = (int)d; };
         p.Children.Add(Row("Pause between frames (ms)", interval, "0 = as fast as the ECU answers."));
@@ -449,14 +846,61 @@ public sealed class SettingsWindow : Window
         var ov = new TextBox { Text = _s.OverlayChannel, Width = 180 };
         ov.TextChanged += (_, _) => _s.OverlayChannel = ov.Text ?? "afr";
         p.Children.Add(Row("Default overlay channel", ov, "Channel offered first for the map overlay (afr, lambda, knock, o2_v, or an aux channel name)."));
-        return p;
+        return Grouped(p);
     }
 
     Control Emulator()
     {
         var p = new StackPanel();
-        p.Children.Add(Note("A Moates Ostrich 2.0 or Demon in the ECU's ROM socket: the Calibration page uploads the ROM to it (and every edit as it is made), and the Hit trace page streams the addresses the ECU fetches."));
-        p.Children.Add(Row("Port", PortBox(_s.MoatesPort, null, v => _s.MoatesPort = v), "Serial port of the emulator (921.6 kbaud)."));
+        p.Children.Add(Note("An emulator in the ECU's ROM socket: the Calibration page uploads the ROM to it (and every edit as it is made), and the " +
+                            "Hit trace page streams the addresses the ECU fetches. Tell it which device is fitted - the version query answers " +
+                            "differently on each, and the baud rate is not the same either."));
+        p.Children.Add(Section("Device"));
+        var kind = new ComboBox { ItemsSource = MoatesTrace.Kinds, SelectedItem = MoatesTrace.Kinds.Contains(_s.EmulatorType) ? _s.EmulatorType : "auto", Width = 180 };
+        var ebaud = new ComboBox { ItemsSource = new[] { 38400, 115200, 921600 }, SelectedItem = _s.EmulatorBaud, Width = 180 };
+        kind.SelectionChanged += (_, _) =>
+        {
+            _s.EmulatorType = kind.SelectedItem as string ?? "auto";
+            // each family has one baud rate it is happiest at
+            _s.EmulatorBaud = _s.EmulatorType == "PGMFI RTP" ? 38400 : 921600;
+            ebaud.SelectedItem = _s.EmulatorBaud;
+        };
+        ebaud.SelectionChanged += (_, _) => { if (ebaud.SelectedItem is int b) _s.EmulatorBaud = b; };
+        p.Children.Add(Row("Emulator", kind,
+            "Which device is in the socket. 'auto' takes whatever answers the version query: an Ostrich answers 'O', a Demon 'D', " +
+            "an RTP 'C', a ROMulator '1' or '2'. Naming it means a wrong answer is reported instead of half-working."));
+        p.Children.Add(Row("Baud rate", ebaud, "921600 for an Ostrich 2.0 or a Demon (115200 also works); 38400 for a PGMFI RTP."));
+        var emPort = PortBox(_s.MoatesPort, null, v => _s.MoatesPort = v);
+        var emFound = new TextBlock { FontSize = 11, Opacity = 0.8, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0), TextWrapping = TextWrapping.Wrap, MaxWidth = 360 };
+        var emDetect = new Button { Content = "Detect", Margin = new Thickness(6, 0, 0, 0) };
+        ToolTip.SetTip(emDetect, "Ask every serial port, at each baud rate the devices use, for an emulator's version, and set the port, the device and the baud rate from the one that answers. Disconnect the emulator first if it is connected.");
+        var emRow = new WrapPanel();
+        emRow.Children.Add(emPort); emRow.Children.Add(emDetect); emRow.Children.Add(emFound);
+        p.Children.Add(Row("Port", emRow, "Serial port of the emulator. Detect finds it."));
+        emDetect.Click += async (_, _) =>
+        {
+            emDetect.IsEnabled = false;
+            var ports = MoatesTrace.Ports().ToList();
+            if (ports.Count == 0) { emFound.Text = "no serial ports on this computer"; emDetect.IsEnabled = true; return; }
+            (string Port, string Device, int Baud)? hit = null;
+            foreach (var port in ports)
+            {
+                emFound.Text = $"trying {port}…";
+                hit = await Task.Run(() => ProbeEmulatorPort(port));
+                if (hit != null) break;
+            }
+            if (hit is { } h)
+            {
+                _s.MoatesPort = h.Port; _s.EmulatorBaud = h.Baud;
+                _s.EmulatorType = MoatesTrace.Kinds.Contains(h.Device) ? h.Device : "auto";
+                SetPort(emPort, h.Port);
+                kind.SelectedItem = _s.EmulatorType;
+                ebaud.SelectedItem = h.Baud;
+                emFound.Text = $"{h.Device} on {h.Port} at {h.Baud} baud";
+            }
+            else emFound.Text = $"no emulator answered on {string.Join(", ", ports)}";
+            emDetect.IsEnabled = true;
+        };
         p.Children.Add(Check("Upload every calibration change as it is made", _s.EmulatorAutoUpload, v => _s.EmulatorAutoUpload = v,
             "The default for the Calibration page's 'Upload on changes'. Only the 256-byte blocks that changed are sent."));
         var bse = new TextBox { Text = _s.MoatesBase, Width = 180, FontFamily = MainWindow.MonoFont };
@@ -466,7 +910,32 @@ public sealed class SettingsWindow : Window
             "Ask the emulator to report an address only when it differs from the previous hit (a loop still shows every pass through it)."));
         p.Children.Add(Check("Colour the source with hits", _s.HitColourSource, v => _s.HitColourSource = v,
             "Tint executed source lines green and data lines read blue, brightest for the most recent hits."));
-        return p;
+
+        p.Children.Add(Section("Serial timing"));
+        p.Children.Add(Note("These apply to the car's datalog cable as well as the emulator. The defaults are what the established tuning software uses; " +
+                            "raise the timeout and the pause on a Bluetooth or a slow USB-serial cable."));
+        p.Children.Add(Row("Read timeout (ms)", Spin(_s.SerialTimeoutMs, 20, 5000, 10, v => _s.SerialTimeoutMs = v),
+            "How long to wait for the bytes of one frame before calling it missed."));
+        p.Children.Add(Row("Write timeout (ms)", Spin(_s.SerialWriteTimeoutMs, 50, 10000, 50, v => _s.SerialWriteTimeoutMs = v),
+            "How long a write may take before it is given up on."));
+        p.Children.Add(Row("Pause after writing (ms)", Spin(_s.PostWritePauseMs, 0, 500, 1, v => _s.PostWritePauseMs = v),
+            "A wait between sending a command and reading its answer. Several USB-serial cables lose the first byte of the answer without one; 10 ms is the usual figure."));
+        p.Children.Add(Row("Retries", Spin(_s.SerialRetries, 0, 20, 1, v => _s.SerialRetries = v),
+            "How many times a handshake or a block is tried again before the link is called dead."));
+        p.Children.Add(Check("Raise DTR and RTS on the port", _s.SerialDtrRts, v => _s.SerialDtrRts = v,
+            "Most OBD1 cables do not care; a few take their power from these lines and read nothing at all without it."));
+        return Grouped(p);
+    }
+
+    static NumericUpDown Spin(int value, int min, int max, int step, Action<int> set)
+    {
+        var n = new NumericUpDown
+        {
+            Value = Math.Clamp(value, min, max), Minimum = min, Maximum = max, Increment = step,
+            Width = 140, FormatString = "0", FontFamily = MainWindow.MonoFont,
+        };
+        n.ValueChanged += (_, e) => { if (e.NewValue is decimal d) set((int)d); };
+        return n;
     }
 
     readonly TextBlock _procError = new() { Foreground = Brushes.OrangeRed, TextWrapping = TextWrapping.Wrap, FontSize = 11 };
@@ -483,7 +952,7 @@ public sealed class SettingsWindow : Window
             {
                 _profile = ProcessorProfile.Builtin(name)!;
                 _profileJson = "";
-                if (_procText != null) _procText.Text = _profile.ToJson();
+                _procText?.Text = _profile.ToJson();
                 _s.Processor = name;
             }));
         }
@@ -519,7 +988,7 @@ public sealed class SettingsWindow : Window
         p.Children.Add(Check("Allow remote connections (listen on all network interfaces)", _s.McpRemote, v => _s.McpRemote = v,
             "Off: only this computer can connect. On: other machines can too - a password of 8+ characters is then required. " +
             "The connection is plain HTTP: use it on a trusted network or behind a VPN / SSH tunnel / HTTPS reverse proxy."));
-        var pw = new TextBox { Text = _s.McpPassword, Width = 260, PasswordChar = '•', FontFamily = MainWindow.MonoFont };
+        var pw = new TextBox { Text = _s.McpPassword, Width = 220, PasswordChar = '•', FontFamily = MainWindow.MonoFont };
         pw.TextChanged += (_, _) => _s.McpPassword = pw.Text ?? "";
         var gen = new Button { Content = "Generate", Margin = new Thickness(6, 0) };
         gen.Click += (_, _) => { pw.Text = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(18)).Replace('/', '_').Replace('+', '-'); pw.PasswordChar = '\0'; };
@@ -541,7 +1010,7 @@ public sealed class SettingsWindow : Window
         };
         var removeRoot = new Button { Content = "Remove", Margin = new Thickness(6, 0) };
         removeRoot.Click += (_, _) => { if (roots.SelectedItem is string r) { _s.McpRoots.Remove(r); roots.ItemsSource = _s.McpRoots.ToList(); } };
-        var rootButtons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4) };
+        var rootButtons = new WrapPanel { Margin = new Thickness(0, 4) };
         rootButtons.Children.Add(addRoot); rootButtons.Children.Add(removeRoot);
         var rootPanel = new StackPanel { MaxWidth = 440 };
         rootPanel.Children.Add(roots); rootPanel.Children.Add(rootButtons);
@@ -558,7 +1027,7 @@ public sealed class SettingsWindow : Window
         }, new JsonSerializerOptions { WriteIndented = true });
         p.Children.Add(Code("Local agents over stdio (the agent starts the server itself; e.g. Claude Code: claude mcp add okirom -- \"" + exe + "\" --mcp --root <folder>)", stdio));
         p.Children.Add(Code("Agents connecting to this app's HTTP server (they work on the ROM open here)", http));
-        return p;
+        return Grouped(p);
     }
 
     /// A heading with its Copy button beside it, then the text (the button used to sit under the text where the scroll bar covered it).

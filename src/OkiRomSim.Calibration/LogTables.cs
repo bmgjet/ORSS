@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 namespace OkiRomSim.Calibration;
 
 /// How a logged channel becomes a value in the table: straight through, or a straight line between two voltages (a wideband on an analog input, a knock box, anything else wired in).
@@ -16,7 +17,7 @@ public sealed class ChannelScale
     public double? Value(LogFrame f)
     {
         if (f.Get(Channel) is not double v) return null;
-        double value = Volts ? AtZeroVolts + (AtFiveVolts - AtZeroVolts) * Math.Clamp(v, 0, 5) / 5
+        double value = Volts ? AtZeroVolts + ((AtFiveVolts - AtZeroVolts) * Math.Clamp(v, 0, 5) / 5)
                      : Channel.Equals("lambda", StringComparison.OrdinalIgnoreCase) ? v * Stoich
                      : v;
         return Correction is { Any: true } c ? c.Apply(value) : value;
@@ -28,10 +29,10 @@ public sealed class LogTable
 {
     public required ItemDef Item { get; init; }
     public required string Channel { get; init; }
-    public double[] Mean = Array.Empty<double>();
-    public double[] Min = Array.Empty<double>(), Max = Array.Empty<double>();
-    public int[] Count = Array.Empty<int>();
-    public double[] RowAxis = Array.Empty<double>(), ColAxis = Array.Empty<double>();
+    public double[] Mean = [];
+    public double[] Min = [], Max = [];
+    public int[] Count = [];
+    public double[] RowAxis = [], ColAxis = [];
     public int Frames;
     public int Cells => Mean.Length;
 }
@@ -39,8 +40,7 @@ public sealed class LogTable
 /// A change a comparison suggests for one cell.
 public readonly record struct CellChange(int Index, double From, double To, double Percent, int Samples);
 
-/// The O2 / lambda and knock tables: what the log measured in each cell of a map, how far that is from the target, and the change that would close the gap.
-/// Measured AFR leaner than target means the cell needs more fuel, in proportion: a cell running 15.4 against a target of 14.7 wants 4.8% more. Knock works the other way round - a cell over the threshold wants timing taken out, by a fixed amount per cell rather than a proportion.
+/// The O2 / lambda and knock tables: what the log measured in each cell of a map, how far that is from the target, and the change that would close the gap. Measured AFR leaner than target means the cell needs more fuel, in proportion: a cell running 15.4 against a target of 14.7 wants 4.8% more. Knock works the other way round - a cell over the threshold wants timing taken out, by a fixed amount per cell rather than a proportion.
 public static class LogTables
 {
     /// Average the channel into the cells of `item`, using the same axes the map uses.
@@ -48,14 +48,14 @@ public static class LogTables
                                  Func<LogFrame, bool>? filter = null)
     {
         int rows = Math.Max(1, item.Rows), cols = Math.Max(1, item.Cols), n = rows * cols;
-        var rowAxis = item.RowAxis == null ? Enumerable.Range(0, rows).Select(i => (double)i).ToArray() : RomData.AxisValues(defs, rom, item.RowAxis, rows);
-        var colAxis = item.ColAxis == null ? Enumerable.Range(0, cols).Select(i => (double)i).ToArray() : RomData.AxisValues(defs, rom, item.ColAxis, cols);
+        var rowAxis = item.RowAxis == null ? [.. Enumerable.Range(0, rows).Select(i => (double)i)] : RomData.AxisValues(defs, rom, item.RowAxis, rows);
+        var colAxis = item.ColAxis == null ? [.. Enumerable.Range(0, cols).Select(i => (double)i)] : RomData.AxisValues(defs, rom, item.ColAxis, cols);
         var (_, rget) = LogOverlay.AxisInput(defs, item.RowAxis, true);
         var (_, cget) = LogOverlay.AxisInput(defs, item.ColAxis, false);
         var t = new LogTable
         {
             Item = item, Channel = scale.Channel, Mean = new double[n], Count = new int[n],
-            Min = Enumerable.Repeat(double.MaxValue, n).ToArray(), Max = Enumerable.Repeat(double.MinValue, n).ToArray(),
+            Min = [.. Enumerable.Repeat(double.MaxValue, n)], Max = [.. Enumerable.Repeat(double.MinValue, n)],
             RowAxis = rowAxis, ColAxis = colAxis,
         };
         var sum = new double[n];
@@ -67,7 +67,7 @@ public static class LogTables
             int r = rows == 1 ? 0 : LogOverlay.Nearest(rowAxis, rv);
             int c = cols == 1 ? 0 : cget(f) is double cv ? LogOverlay.Nearest(colAxis, cv) : -1;
             if (c < 0) continue;
-            int i = r * cols + c;
+            int i = (r * cols) + c;
             sum[i] += v; t.Count[i]++;
             t.Min[i] = Math.Min(t.Min[i], v); t.Max[i] = Math.Max(t.Max[i], v);
             t.Frames++;
@@ -87,7 +87,7 @@ public static class LogTables
         for (int i = 0; i < d.Length; i++)
         {
             double want = targetTable != null && i < targetTable.Length && !double.IsNaN(targetTable[i]) ? targetTable[i] : target;
-            d[i] = measured.Count[i] == 0 || want <= 0 || double.IsNaN(measured.Mean[i]) ? double.NaN : (measured.Mean[i] / want - 1) * 100;
+            d[i] = measured.Count[i] == 0 || want <= 0 || double.IsNaN(measured.Mean[i]) ? double.NaN : ((measured.Mean[i] / want) - 1) * 100;
         }
         return d;
     }
@@ -105,7 +105,7 @@ public static class LogTables
             if (measured.Count[i] < minSamples || double.IsNaN(diff[i])) continue;
             double pct = Math.Clamp(diff[i] * authority, -limitPct, limitPct);
             if (Math.Abs(pct) < 0.1) continue;
-            double to = cells[i].Value * (1 + pct / 100);
+            double to = cells[i].Value * (1 + (pct / 100));
             if (Math.Abs(to - cells[i].Value) < 1e-9) continue;
             changes.Add(new CellChange(i, cells[i].Value, to, pct, measured.Count[i]));
         }
@@ -155,8 +155,7 @@ public static class MapSide
     {
         var n = name.ToLowerInvariant();
         if (n.EndsWith("_hi") || n.EndsWith("hi") || n.Contains("high") || n.Contains("_vtec")) return true;
-        if (n.EndsWith("_lo") || n.EndsWith("lo") || n.Contains("low")) return false;
-        return null;
+        return n.EndsWith("_lo") || n.EndsWith("lo") || n.Contains("low") ? false : null;
     }
 
     /// The other copy of the same map, if the set has one ("FUEL1_Lo" <-> "FUEL1_Hi").
@@ -184,7 +183,6 @@ public static class MapSide
     /// Only the frames logged on this map's side of the crossover (all of them when the map is not one of a pair, or when nothing in the log says which cam was engaged).
     public static Func<LogFrame, bool>? Filter(ItemDef item)
     {
-        if (Side(item) is not bool hi) return null;
-        return f => f.Vtec is not bool v || v == hi;
+        return Side(item) is not bool hi ? null : (f => f.Vtec is not bool v || v == hi);
     }
 }

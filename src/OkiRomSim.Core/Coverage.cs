@@ -1,6 +1,5 @@
-// Execution coverage at two levels: address coverage (was a byte ever executed) and, the one that matters
-// for "hit all branches", EDGE coverage (was each conditional branch seen both taken and not-taken).
-// BranchesHalfCovered lists branches seen only one way, where untested paths hide.
+// Copyright (c) bmgjet. All rights reserved.
+// Execution coverage at two levels: address coverage (was a byte ever executed) and, the one that matters for "hit all branches", EDGE coverage (was each conditional branch seen both taken and not-taken). BranchesHalfCovered lists branches seen only one way, where untested paths hide.
 using System.Text;
 
 namespace OkiRomSim.Core;
@@ -12,7 +11,7 @@ public sealed class Coverage
     private readonly ulong[] _lastAt = new ulong[Bus.RomSize];
 
     /// Per conditional-branch site: bit 0 = seen taken, bit 1 = seen not-taken. Only populated for addresses that actually decoded to a conditional branch, so Count is the number of branch sites reached.
-    private readonly Dictionary<ushort, int> _edges = new();
+    private readonly Dictionary<ushort, int> _edges = [];
 
     public int AddressesExecuted { get; private set; }
     public ulong InstructionsObserved { get; private set; }

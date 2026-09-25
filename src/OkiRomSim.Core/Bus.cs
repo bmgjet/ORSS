@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 // OKI MSM66207 Memory Bus & Peripheral Simulation.
 
 namespace OkiRomSim.Core;
@@ -27,6 +28,22 @@ public sealed class Bus
         CpuHz = (ulong)(mhz * 1_000_000 / ClockDivider);
     }
 
+    /// Which set of on-chip peripherals to model. "66207" is the OBD1 P28 family; "66911" is the Honda P13 / P14 part, whose registers are somewhere else entirely and whose timers, one-shots and injector drivers work differently (see Peripherals66911). The active ProcessorProfile sets it, and a simulator picks it up when it is created or reset.
+    public static string PeripheralSet { get; private set; } = "66207";
+    public static bool Is66911 => PeripheralSet == "66911";
+
+    public static void SetPeripheralSet(string set) => PeripheralSet = set == "66911" ? "66911" : "66207";
+
+    /// Where the external 82C55 sits. The P28 decodes it at 0F00/1F00/2F00/3F00 (A12-A13 pick the register); the P13 puts it at 8000/A000/C000/E000 (A13-A14). Set from the profile.
+    public static int PpiPortA { get; private set; } = 0x0F00;
+    public static int PpiStride { get; private set; } = 0x1000;
+
+    public static void SetPpi(int portA, int portB)
+    {
+        PpiPortA = portA;
+        PpiStride = Math.Max(1, portB - portA);
+    }
+
     // SFR offsets
     public const ushort SfrAssp = 0x00;
     public const ushort SfrAlrb = 0x02;
@@ -36,8 +53,7 @@ public sealed class Bus
     public const ushort SfrIe = 0x1A;
     public const ushort SfrExion = 0x1C;
 
-    // IRQ/IE bit numbers correspond one-for-one with the 16 maskable
-    // vector-table entries at code addresses 0x0008..0x0027.
+    // IRQ/IE bit numbers correspond one-for-one with the 16 maskable vector-table entries at code addresses 0x0008..0x0027.
     public const int IrqInt0 = 0;
     public const int IrqSerialRx = 1;
     public const int IrqStgen = 3;
@@ -51,9 +67,7 @@ public sealed class Bus
     public const int IrqPwm = 13;
     public const int IrqInt1 = 15;
 
-    // Ports. Each port has a data register, a mode register (PxIO: 1 = output,
-    // 0 = input; reset 00H) and, for P2..P4, a secondary-function register
-    // (PxSF: 1 = the pin is driven by the on-chip peripheral).
+    // Ports. Each port has a data register, a mode register (PxIO: 1 = output, 0 = input; reset 00H) and, for P2..P4, a secondary-function register (PxSF: 1 = the pin is driven by the on-chip peripheral).
     public const ushort SfrP0 = 0x20;
     public const ushort SfrP0Io = 0x21;
     public const ushort SfrP1 = 0x22;
@@ -115,21 +129,25 @@ public sealed class Bus
     public const int P28MuxU6Adcr0 = 0;
     public const int P28MuxU5Adcr1 = 1;
 
-    /// ADCR0 mux 0: coolant temperature (ECT), sampled at every TDC.
-    public const int P28U6EctSelect = 0;
-    /// ADCR0 mux 3: barometric pressure.
+    /// Traced in HTS115 by driving each position on its own and watching both the ROM's sensor RAM and its datalog frame (whose layout HTS's own decoder confirms: byte 0 ECT, 1 IAT, 2 O2, 24 ELD, 25 battery). The same map as the P13 board. ADCR0 mux 0: primary O2 sensor. Datalog byte 2 reads 0x3CA; the TDC interrupt also copies it to 0xDA.
+    public const int P28U6HegoSelect = 0;
+    /// ADCR0 mux 2: intake air temperature. 0x3CC: datalog byte 1, and the processed IAT at 0xD8.
+    public const int P28U6IatSelect = 2;
+    /// ADCR0 mux 3: barometric pressure (read at key-on).
     public const int P28U6BaroSelect = 3;
-    /// ADCR0 mux 7: intake air temperature (IAT).
-    public const int P28U6IatSelect = 7;
-    /// ADCR1 mux 0: primary O2 sensor -- the O2 selector's default source.
-    public const int P28U5HegoSelect = 0;
+    /// ADCR0 mux 7: battery voltage. 0x3D1: datalog byte 25, and 0xDB.
+    public const int P28U6BatterySelect = 7;
+    /// ADCR1 mux 0: electrical load detector. 0x3D2: datalog byte 24.
+    public const int P28U5EldSelect = 0;
+    /// ADCR1 mux 2: coolant temperature. 0x3D4: the code-6 check reads it and the processed ECT at 0xD9 follows it.
+    public const int P28U5EctSelect = 2;
 
     /// Direct (unmultiplexed) P5 analog inputs on the P28 board.
     public const int P28AdcEgr = 3;
     /// Spare analog input: unconnected on a stock board (reads 0 V), kept inactive by default.
     public const int P28AdcAux = 4;
-    /// Battery voltage (as in the original model; not independently traced).
-    public const int P28AdcBattery = 5;
+    /// Spare direct input; the ROMs do not read it (battery voltage is on the ADCR0 multiplexer).
+    public const int P28AdcSpare5 = 5;
     public const int P28AdcMap = 6;
     public const int P28AdcTps = 7;
 
@@ -154,25 +172,15 @@ public sealed class Bus
 
     public ulong ElapsedCycles;
 
-    // Board outputs, decoded from the port pins the ROMs drive. Each mapping
-    // is taken from the ROM code that drives it:
-    //   P0.7      fuel pump relay, active low ("fuelpump_relay_drive: MB P0.7, C";
-    //             held low whenever the ROM sees the engine turning, high at key-on
-    //             once the prime time has run out)
-    //   P1.0      VTEC solenoid, active high (vtec_highcam_output / _force_on)
-    //   P2.0-P2.3 injectors 1-4, active low (injenable_p2_update opens,
-    //             int_timer_0 / inj_p2_drive_return close)
-    //   P2.4      watchdog heartbeat, toggled by every ResetWatchDog call
-    //   P2.5-P2.7 analog mux select A/B/C
-    public bool FuelPumpActive => IsOutput(0, 7) && !Latch(0, 7);
-    public bool VtecSolenoidActive => IsOutput(1, 0) && Latch(1, 0);
-    public bool InjectorOpen(int n) => IsOutput(2, n) && !Latch(2, n);
+    // Board outputs, decoded from the port pins the ROMs drive. Each mapping is taken from the ROM code that drives it: P0.7 fuel pump relay, active low ("fuelpump_relay_drive: MB P0.7, C"; held low whenever the ROM sees the engine turning, high at key-on once the prime time has run out) P1.0 VTEC solenoid, active high (vtec_highcam_output / _force_on) P2.0-P2.3 injectors 1-4, active low (injenable_p2_update opens, int_timer_0 / inj_p2_drive_return close) P2.4 watchdog heartbeat, toggled by every ResetWatchDog call P2.5-P2.7 analog mux select A/B/C On the P13 these are not port pins at all: the fuel pump and the VTEC solenoid hang off the external 82C55 (port B bit 1 and port C bits 6/7, both written inverted), and the injectors are driven by one-shots on P3.4-P3.7.
+    public bool FuelPumpActive => Is66911 ? (Ppi.Read(1) & 0x02) == 0 : IsOutput(0, 7) && !Latch(0, 7);
+    /// The dash check-engine lamp and the code-flash line (see MilMonitor): P28 P1.4 / P1.5, P13 8255 PC3 / PC4. Both active high.
+    public bool MilLamp => Is66911 ? (Ppi.PortC & 0x08) != 0 : IsOutput(1, 4) && Latch(1, 4);
+    public bool MilFlash => Is66911 ? (Ppi.PortC & 0x10) != 0 : IsOutput(1, 5) && Latch(1, 5);
+    public bool VtecSolenoidActive => Is66911 ? (Ppi.Read(2) & 0xC0) != 0xC0 : IsOutput(1, 0) && Latch(1, 0);
+    public bool InjectorOpen(int n) => Is66911 ? P66911.InjectorOpen(n) : IsOutput(2, n) && !Latch(2, n);
 
-    // Injector pulse width. P2.0-P2.3 only select the injector: the ROM pulls
-    // the line low, sets TMR0 = TM0 + pulse width in the same routine, and
-    // raises the line again within ~50 us. The injection event ends at that
-    // timer-0 compare match, so the pulse is measured from the select edge to
-    // the next TM0 match.
+    // Injector pulse width. P2.0-P2.3 only select the injector: the ROM pulls the line low, sets TMR0 = TM0 + pulse width in the same routine, and raises the line again within ~50 us. The injection event ends at that timer-0 compare match, so the pulse is measured from the select edge to the next TM0 match.
     readonly ulong?[] _injSelectedAt = new ulong?[4];
     /// Last measured pulse width per injector, microseconds.
     public readonly uint[] InjectorPulseUs = new uint[4];
@@ -187,14 +195,14 @@ public sealed class Bus
     public ulong LastIgnitionAt;
     public float IacvDutyCyclePct;
 
-    /// VTEC oil-pressure switch input on P4.6 ("vtec_oilpressure_pin_check: MB C, P4.6"). True = pressure present, which the ROM reads as a low pin.
+    /// Oil pressure is available to the VTEC spool: the pressure switch (D6) then closes while the solenoid is open, pulling bit 1 of the 4700h switch buffer low (SwitchLatchPins) - what code 22 checks.
     public bool VtecPressureSwitch = true;
 
     /// Activity of every port pin: level, when it last changed, how long its last high and low phases lasted, and which instruction drove it.
     public readonly PinActivity Pins = new();
 
-    bool IsOutput(int port, int bit) => (Ram[Ports[port].Mode] >> bit & 1) != 0;
-    bool Latch(int port, int bit) => (Ram[Ports[port].Data] >> bit & 1) != 0;
+    bool IsOutput(int port, int bit) => ((Ram[Ports[port].Mode] >> bit) & 1) != 0;
+    bool Latch(int port, int bit) => ((Ram[Ports[port].Data] >> bit) & 1) != 0;
 
     /// PC of the instruction being executed, for PinActivity's "driven by".
     public ushort CurrentPc;
@@ -239,16 +247,63 @@ public sealed class Bus
     private byte _wdtSequence;
 
     // Serial datalogging UART buffers
-    public System.Collections.Generic.List<byte> SerialRxQueue = new();
-    public System.Collections.Generic.List<byte> SerialTxQueue = new();
+    public System.Collections.Generic.List<byte> SerialRxQueue = [];
+    /// The serial line is a single-wire K-line (the stock tester protocol): every byte sent is received back.
+    public bool KLineEcho;
+    /// Machine cycles one byte takes on that line (10 bits at its baud rate).
+    public uint KLineByteCycles = (uint)(CpuHz * 10 / 9600);
+    public System.Collections.Generic.List<byte> SerialTxQueue = [];
+
+    /// The MSM66911's peripherals, used instead of the ones in this class when the active profile asks for them. Always constructed (it is a few hundred bytes) so nothing has to be null-checked.
+    public readonly Peripherals66911 P66911;
+
+    /// Board inputs the P13 reads on port 4 that the P28 has nowhere: the starter signal (pin 51) and the power-steering pressure switch (pin 52). Both read low when active.
+    public bool StarterSignal = true, PowerSteeringPressure = true;
+
+    /// Is there a byte of simulated serial input due? Used by whichever peripheral set is modelling the UART.
+    public bool SerialRxPending(out byte b)
+    {
+        if (_rxIncoming.Count > 0 && _rxIncoming.Peek().At <= ElapsedCycles) { b = _rxIncoming.Dequeue().B; return true; }
+        b = 0;
+        return false;
+    }
 
     public Bus()
     {
+        P66911 = new Peripherals66911(this);
         Array.Fill(Rom, (byte)0xFF);
         Array.Fill(AdcInputs, (ushort)512); // ~2.5V mid-scale default
         Array.Fill(P28MuxInputs[0], (ushort)512);
         Array.Fill(P28MuxInputs[1], (ushort)512);
+        ResetRegisters();
+    }
+
+    /// A power-on reset of everything on the chip side: RAM and SFRs, timers, the peripherals, the injector/ignition measurements, serial queues, pin history, and every cycle stamp (the CPU's cycle count starts again at 0, so a stamp from before the reset would sit in the future). The ROM image and what the outside world drives (analog inputs, switch buffers, 8255 port A) stay. Without it a reset left the old peripheral state behind - the P13 never injected again.
+    public void PowerOnReset()
+    {
+        Array.Clear(Ram);
+        ElapsedCycles = 0; NowCycles = 0;
+        Array.Clear(_injSelectedAt); Array.Clear(InjectorPulseUs); Array.Clear(InjectorEvents); Array.Clear(InjectorLastEventAt);
+        InjectorPulseWidthUs = 0; IgnitionEvents = 0; LastIgnitionAt = 0; IacvDutyCyclePct = 0;
+        Array.Clear(PwmOut); Array.Clear(TimerAccum);
+        AdcCyclesRemaining = null; SerialTxCyclesRemaining = null;
+        WatchdogCyclesRemaining = 0; WatchdogTripped = false; _wdtSequence = 0;
+        SerialRxQueue.Clear(); SerialTxQueue.Clear(); _rxIncoming.Clear(); _rxLastAt = 0;
+        _crankIrq = 0;
+        Ppi.PortB = 0; Ppi.PortC = 0; Ppi.Control = 0x9B; Ppi.Writes = 0;
+        Pins.Reset();
+        ResetRegisters();
+    }
+
+    void ResetRegisters()
+    {
         WriteDataU16(SfrAssp, 0x07FE);
+        if (Is66911)
+        {
+            // the P13 starts its stack at the top of its 1 KB and comes out of reset with the register values its own integrity test insists on
+            WriteDataU16(SfrAssp, 0x047F);
+            P66911.Reset();
+        }
     }
 
     public void LoadRomFile(string path)
@@ -272,7 +327,27 @@ public sealed class Bus
 
     /// The P28 board's 8255 PPI on the external data bus (internal RAM ends at 047Fh): 0F00h port A, 1F00h port B, 2F00h port C, 3F00h control (A12-A13 select the register). The ROMs write control word 90h (A input, B and C output), copy P0 to port B and P1 to port C (reading them back to verify), and read switch inputs from port A.
     public readonly Ppi8255 Ppi = new();
-    public static bool IsPpi(ushort addr) => addr >= 0x0480 && (addr & 0x0FFF) == 0x0F00;
+
+    /// The P28's second switch-input buffer at 4700h, as the pins read (the ROMs copy it XOR 1Ah to RAM 0x211). Traced from the ROMs' 3B0h status byte, their GIO input selector and HTS's names: 0 start signal (B9) 1 VTEC pressure (D6), low = pressure 2 A/C request (B5) 3 unused by every ROM 4 brake switch (D2) 5 park/neutral (B7) 6 A/T shift position 1 7 A/T shift position 2 Bit 1 follows the oil-pressure model (see SwitchLatchPins); EngineState drives 0 and 2.
+    public const ushort SwitchLatchAddr = 0x4700;
+    public byte SwitchLatch;
+
+    /// Square wave on 8255 port A bit 2, the input the code-24 check needs to keep changing (see ReadDataU8). 0 = static.
+    public double PortA2PulseHz = 10;
+
+    /// What the 4700h buffer reads now: SwitchLatch, with the VTEC pressure switch closing (bit 1 low) only while the solenoid is open and oil pressure is there - the check behind code 22.
+    public byte SwitchLatchPins => (byte)((SwitchLatch & ~0x02) | (VtecPressureSwitch && VtecSolenoidActive ? 0 : 0x02));
+
+    /// The four 82C55 registers, wherever the board decodes them. Anything below the end of internal RAM is RAM, never the PPI.
+    public static bool IsPpi(ushort addr)
+    {
+        if (addr < 0x0480) return false;
+        int off = addr - PpiPortA;
+        return off >= 0 && off % PpiStride == 0 && off / PpiStride < 4;
+    }
+
+    /// Which of the four registers an address is (0 = A, 1 = B, 2 = C, 3 = control).
+    public static int PpiRegister(ushort addr) => (addr - PpiPortA) / PpiStride;
 
     // Code space read (ROM)
     public byte ReadCodeU8(ushort addr) => Rom[addr & (RomSize - 1)];
@@ -316,7 +391,28 @@ public sealed class Bus
         int idx = addr & (RamSize - 1);
         OnDataRead?.Invoke(addr);
 
-        if (IsPpi(addr)) return Ppi.Read((addr >> 12) & 3);
+        if (IsPpi(addr))
+        {
+            int reg = PpiRegister(addr);
+            // port A bit 5 is the VTEC solenoid's feedback: low while it is energised
+            if (reg == 0 && !Is66911)
+            {
+                Ppi.PortAInput = (byte)((Ppi.PortAInput & ~0x20) | (VtecSolenoidActive ? 0 : 0x20));
+                // bit 2 has to keep changing or code 24 sets. What drives it on the car is not traced; the board model keeps a square wave on it (PortA2PulseHz; 0 = leave it to PortAInput)
+                if (PortA2PulseHz > 0)
+                {
+                    ulong half = (ulong)(CpuHz / (2 * PortA2PulseHz));
+                    Ppi.PortAInput = (byte)((Ppi.PortAInput & ~0x04) | ((ElapsedCycles / half & 1) != 0 ? 0x04 : 0));
+                }
+            }
+            return Ppi.Read(reg);
+        }
+        if (Is66911)
+        {
+            if (P66911.Read(addr, out byte v66911)) return v66911;
+            return Ram[idx];
+        }
+        if (addr == SwitchLatchAddr) return SwitchLatchPins;
         if (addr == SfrSrbuf)
         {
             if (SerialRxQueue.Count > 0)
@@ -328,8 +424,7 @@ public sealed class Bus
         }
         else if (addr == SfrP2Sf)
         {
-            // P2SF bits 0..2 are hardwired; reset value 07H, and the ROM's
-            // periodic integrity check requires it to read back 007h.
+            // P2SF bits 0..2 are hardwired; reset value 07H, and the ROM's periodic integrity check requires it to read back 007h.
             return (byte)(Ram[SfrP2Sf] | 0x07);
         }
 
@@ -341,10 +436,7 @@ public sealed class Bus
         return Ram[idx];
     }
 
-    /// Read a port the way the silicon does, one bit at a time:
-    /// * secondary function enabled -> the on-chip peripheral drives the pin
-    /// * else configured as output  -> the port's own output latch
-    /// * else                       -> the external level on the pin
+    /// Read a port the way the silicon does, one bit at a time: * secondary function enabled -> the on-chip peripheral drives the pin * else configured as output -> the port's own output latch * else -> the external level on the pin
     public byte ReadPort(int port)
     {
         var def = Ports[port];
@@ -354,12 +446,7 @@ public sealed class Bus
         if (def.Sf is ushort sfAddr)
         {
             byte raw = Ram[sfAddr];
-            // P2SF bits 0..2 are unimplemented: they read back as 1 (see
-            // ReadDataU8) but P2.0-P2.2 have no secondary function, so the pins
-            // stay ordinary port bits. Treating them as SF-enabled made every
-            // read of P2 -- including the read half of the ROM's ANDB/ORB P2
-            // read-modify-writes -- return the external level instead of the
-            // latch, which shut injectors 1-3 the moment they were opened.
+            // P2SF bits 0..2 are unimplemented: they read back as 1 (see ReadDataU8) but P2.0-P2.2 have no secondary function, so the pins stay ordinary port bits. Treating them as SF-enabled made every read of P2 -- including the read half of the ROM's ANDB/ORB P2 read-modify-writes -- return the external level instead of the latch, which shut injectors 1-3 the moment they were opened.
             sfBits = sfAddr == SfrP2Sf ? (byte)(raw & 0xF8) : raw;
         }
         byte pins = PortPins[port];
@@ -371,15 +458,7 @@ public sealed class Bus
             bool level;
             if ((sfBits & m) != 0)
             {
-                // Secondary function enabled. If the on-chip peripheral
-                // drives the pin (PWM out), take its level. Otherwise the
-                // secondary function is an INPUT one -- TM0CK/TM1CK on
-                // P4.0/P4.1, TRNS0-3 on P4.4-7 -- and the pin is still being
-                // driven from outside, so read the external level. Falling
-                // back to the output latch here made every such pin read
-                // back whatever the ROM last wrote to the port, which is why
-                // P4.1 (the run/power-good sense) read high and sent the ROM
-                // into its shutdown path on every boot.
+                // Secondary function enabled. If the on-chip peripheral drives the pin (PWM out), take its level. Otherwise the secondary function is an INPUT one -- TM0CK/TM1CK on P4.0/P4.1, TRNS0-3 on P4.4-7 -- and the pin is still being driven from outside, so read the external level. Falling back to the output latch here made every such pin read back whatever the ROM last wrote to the port, which is why P4.1 (the run/power-good sense) read high and sent the ROM into its shutdown path on every boot.
                 level = SecondaryFnLevel(port, bit)
                         ?? InputLevel(port, bit)
                         ?? ((pins & m) != 0);
@@ -398,11 +477,7 @@ public sealed class Bus
     }
 
     /// Named external inputs, for pins whose harness signal this model tracks as a field rather than as a raw bit in PortPins. Only consulted when the ROM has left the pin configured as an input.
-    private bool? InputLevel(int port, int bit)
-    {
-        if (Board != null) return Board.InputLevel(port, bit);
-        return (port, bit) switch { (4, 6) => !VtecPressureSwitch, _ => null };
-    }
+    private bool? InputLevel(int port, int bit) => Board != null ? Board.InputLevel(port, bit) : (port, bit) switch { (4, 6) => true, _ => null };
 
     /// Level driven by the on-chip peripheral assigned to a pin. Port 4's map: P4.0/TM0CK, P4.1/TM1CK, P4.2/PWM0, P4.3/PWM1, P4.4-7/TRNS0-3. Only the two PWM outputs are driven from inside the chip in this model.
     private bool? SecondaryFnLevel(int port, int bit) =>
@@ -423,13 +498,29 @@ public sealed class Bus
     // Data space write (RAM & SFRs)
     public void WriteDataU8(ushort addr, byte val)
     {
-        // ADCR0..ADCR7 are read-only. Conversion completion updates their
-        // backing latches directly in TriggerAdcConversion.
+        if (Is66911)
+        {
+            if (IsPpi(addr))
+            {
+                int r66911 = PpiRegister(addr);
+                byte was = Ppi.Read(r66911);
+                Ppi.Write(r66911, val);
+                OnDataWrite?.Invoke(addr, was, val);
+                return;
+            }
+            int i66911 = addr & (RamSize - 1);
+            byte old66911 = Ram[i66911];
+            if (!P66911.Write(addr, val)) Ram[i66911] = val;
+            OnDataWrite?.Invoke(addr, old66911, val);
+            P66911.Armed(addr);
+            return;
+        }
+        // ADCR0..ADCR7 are read-only. Conversion completion updates their backing latches directly in TriggerAdcConversion.
         if (addr >= SfrAdcr0 && addr < SfrAdcr0 + 16) return;
 
         if (IsPpi(addr))
         {
-            int reg = (addr >> 12) & 3;
+            int reg = PpiRegister(addr);
             byte prev = Ppi.Read(reg);
             Ppi.Write(reg, val);
             OnDataWrite?.Invoke(addr, prev, val);
@@ -454,15 +545,14 @@ public sealed class Bus
         {
             SerialTxQueue.Add(val);
             if (SerialTxQueue.Count > 8192) SerialTxQueue.RemoveRange(0, SerialTxQueue.Count - 4096);
-            // The byte is in flight; TickTimers raises the transmit-complete
-            // interrupt when it lands.
+            // a K-line is one wire: what the ECU sends comes straight back into its own receiver, and the stock Honda tester protocol sends each byte of its answer on the echo of the one before
+            if (KLineEcho) QueueSerialRx([val], KLineByteCycles);
+            // The byte is in flight; TickTimers raises the transmit-complete interrupt when it lands.
             SerialTxCyclesRemaining = SerialByteCycles;
         }
         else if (addr == SfrWdt)
         {
-            // ResetWatchDog writes 3Ch then (after SWAPB) C3h. Either half of
-            // the sequence restarts the timer in this model -- the ROM never
-            // writes the register any other way.
+            // ResetWatchDog writes 3Ch then (after SWAPB) C3h. Either half of the sequence restarts the timer in this model -- the ROM never writes the register any other way.
             if (val == 0x3C) _wdtSequence = 0x3C;
             else if (val == 0xC3 && _wdtSequence == 0x3C) _wdtSequence = 0;
             WatchdogCyclesRemaining = WatchdogTimeoutCycles;
@@ -481,9 +571,7 @@ public sealed class Bus
             if (Pins.JustFell(2, n)) _injSelectedAt[n] = ElapsedCycles;
             else if (Pins.JustRose(2, n) && _injSelectedAt[n] is ulong at)
             {
-                // At higher load the ROM selects two injectors on one edge and releases one
-                // straight away; that partner never injects. At light load the single
-                // selected line is also released early but that one is the real event.
+                // At higher load the ROM selects two injectors on one edge and releases one straight away; that partner never injects. At light load the single selected line is also released early but that one is the real event.
                 for (int m = 0; m < 4; m++)
                     if (m != n && _injSelectedAt[m] == at && InjectorOpen(m)) { _injSelectedAt[n] = null; break; }
             }
@@ -512,8 +600,7 @@ public sealed class Bus
         InjectorPulseUs[pick] = InjectorPulseWidthUs = (uint)(cycles / CyclesPerUs);
         InjectorEvents[pick]++;
         InjectorLastEventAt[pick] = start;
-        // Injector-drive feedback on TRNS2: the ROMs clear it when they open an
-        // injector ("ANDB TRNSIT, #0FBh") and check it afterwards.
+        // Injector-drive feedback on TRNS2: the ROMs clear it when they open an injector ("ANDB TRNSIT, #0FBh") and check it afterwards.
         Ram[SfrTrns] |= 0x04;
     }
 
@@ -526,12 +613,23 @@ public sealed class Bus
     /// A/D conversion result for a channel, in the layout the ROM expects: the 10-bit result left-justified in a 16-bit register (bits 15..6).
     public ushort AdcResult(int channel) => (ushort)((AdcInput(channel) & 0x03FF) << 6);
 
+    /// The interrupt the last crank capture raised, so the engine model can pass it on without knowing which part it is talking to. Read once and cleared.
+    ushort _crankIrq;
+    public ushort TakeCrankIrq() { var v = _crankIrq; _crankIrq = 0; return v; }
+
+    /// A road-speed pulse, captured by whichever set is modelling the timers.
+    public ushort CaptureVss() => Is66911 ? P66911.CaptureVss() : (ushort)0;
+
+    /// A crank tooth, and the interrupt it raised: what the engine model does in two steps, for anything that wants it in one (tests, and driving the bus by hand).
+    public ushort CaptureTm2Probe() { CaptureTm2(); return TakeCrankIrq(); }
+
     /// Resolve the voltage present at an MCU analog pin. The ROM drives the shared P28 mux select through P2.5..P2.7.
     public ushort AdcInput(int channel)
     {
         if (channel is 0 or 1)
         {
-            int select = (ReadPort(2) >> 5) & 0x07;
+            // P28: the CD4051 selects are P2.5-P2.7. P13: they are MUXA/B/C on P3.0-P3.2 (pins 38-40), which the background scan at 0x4A98 steps through, storing ADCR0 at 0x3D0+n, ADCR1 at 0x3D8+n (the P13 ROM writes the complement of the position it wants - XORB A,#0FFh at 0x451A)
+            int select = Is66911 ? ~P66911.ReadPort(Peripherals66911.SfrP3) & 0x07 : (ReadPort(2) >> 5) & 0x07;
             return P28MuxInputs[channel][select];
         }
         return AdcInputs[channel];
@@ -542,18 +640,29 @@ public sealed class Bus
         for (int i = 0; i < 8; i++)
         {
             ushort val = AdcResult(i);
-            ushort addr = (ushort)(SfrAdcr0 + i * 2);
+            ushort addr = (ushort)(SfrAdcr0 + (i * 2));
             Ram[addr] = (byte)(val & 0xFF);
             Ram[addr + 1] = (byte)(val >> 8);
         }
     }
 
     /// Latch a CYP (cylinder-#1) transition on TRNS0, exactly as the transition detector does when the distributor's CYP signal edges on P4.4. The ROM read-clears SFR_TRNS bit 0 in its TDC ISR.
-    public void SignalCyp() => Ram[SfrTrns] |= 0x01;
+    public void SignalCyp()
+    {
+        if (Is66911) { P66911.SignalCyp(); return; }
+        Ram[SfrTrns] |= 0x01;
+    }
+
+    /// A TDC pulse where it is an edge latch rather than an interrupt: the 66911 (P13) crank task read-clears TRNSIT bit 7 each tooth and counts six teeth between them. On the 66207 TDC is INT1, raised by the engine model directly, so this does nothing there.
+    public void SignalTdc()
+    {
+        if (Is66911) P66911.SignalTdc();
+    }
 
     /// TM2 capture: the crank-angle (CKP) edge latches the free-running TM2 count into TMR2. TMR2 is therefore a capture register on this board, not a compare register, and timer 2 raises no compare-match interrupt.
     public void CaptureTm2()
     {
+        if (Is66911) { _crankIrq = P66911.CaptureCrank(); return; }
         Ram[SfrTmr2] = Ram[SfrTm2];
         Ram[SfrTmr2 + 1] = Ram[SfrTm2 + 1];
     }
@@ -564,8 +673,7 @@ public sealed class Bus
         return 1 << IrqSerialRx;
     }
 
-    // Bytes on their way in over the serial line, each arriving at its machine-cycle time
-    // (the receive interrupt is raised as each one lands, like the real UART).
+    // Bytes on their way in over the serial line, each arriving at its machine-cycle time (the receive interrupt is raised as each one lands, like the real UART).
     readonly Queue<(byte B, ulong At)> _rxIncoming = new();
     ulong _rxLastAt;
 
@@ -589,6 +697,7 @@ public sealed class Bus
     public ushort TickTimers(uint cycles)
     {
         ElapsedCycles += cycles;
+        if (Is66911) return P66911.Tick(cycles);
 
         // (counter SFR, reload SFR, control SFR, IRQ bit)
         var timers = new (ushort tm, ushort tmr, ushort tcon, int irq)[]
@@ -601,16 +710,13 @@ public sealed class Bus
 
         ushort irqFlags = 0;
 
-        // 16-bit PWM: the counter counts up, and on overflow reloads from the
-        // PWM register and flips the output pin.
+        // 16-bit PWM: the counter counts up, and on overflow reloads from the PWM register and flips the output pin.
         var pwmRegs = new (ushort c, ushort r)[] { (SfrPwmc0, SfrPwmr0), (SfrPwmc1, SfrPwmr1) };
         bool pwmToggled = false;
         for (int i = 0; i < pwmRegs.Length; i++)
         {
             var (c, r) = pwmRegs[i];
-            // Rust truncates `cycles` to u16 before the add (overflowing_add
-            // on a u16 counter); mirror that so multi-instruction batches
-            // wrap identically.
+            // Rust truncates `cycles` to u16 before the add (overflowing_add on a u16 counter); mirror that so multi-instruction batches wrap identically.
             ushort cyclesU16 = (ushort)cycles;
             uint sum0 = (uint)ReadDataU16(c) + cyclesU16;
             bool overflow = sum0 > 0xFFFF;
@@ -635,6 +741,8 @@ public sealed class Bus
 
         while (_rxIncoming.Count > 0 && _rxIncoming.Peek().At <= ElapsedCycles)
         {
+            // one receive buffer, as on the chip: a byte the ROM never read (the echo of its own transmission on a K-line, which the tester protocol ignores) is overwritten by the next one rather than held back and read later in place of it
+            SerialRxQueue.Clear();
             SerialRxQueue.Add(_rxIncoming.Dequeue().B);
             irqFlags |= (ushort)(1 << IrqSerialRx);
         }
@@ -684,21 +792,18 @@ public sealed class Bus
         {
             var (tmSfr, tmrSfr, tconSfr, irqBit) = timers[i];
             byte tcon = Ram[tconSfr];
-            // TCON bit 4 is the run bit; a stopped timer neither counts nor
-            // toggles its pin.
+            // TCON bit 4 is the run bit; a stopped timer neither counts nor toggles its pin.
             if ((tcon & (1 << 4)) == 0) continue;
 
-            // Prescaler (in machine cycles). Only encodings 00b (/8) and 01b (/2,
-            // timer 1's 4x-faster rate) are attested by the P28 ROMs.
+            // Prescaler (in machine cycles). Only encodings 00b (/8) and 01b (/2, timer 1's 4x-faster rate) are attested by the P28 ROMs.
             uint div = ((tcon >> 5) & 0x03) switch
             {
                 0b00 => 8u,
                 0b01 => 2u,
                 var other => (uint)(8 >> Math.Min(other, 3)),
             };
-            // One prescaler feeds every timer, so timers on the same division tick on the
-            // same machine cycles (the ROMs' boot self-test checks TM2 and TM3 agree).
-            uint steps = (uint)(ElapsedCycles / div - (ElapsedCycles - cycles) / div);
+            // One prescaler feeds every timer, so timers on the same division tick on the same machine cycles (the ROMs' boot self-test checks TM2 and TM3 agree).
+            uint steps = (uint)((ElapsedCycles / div) - ((ElapsedCycles - cycles) / div));
             if (steps == 0) continue;
 
             ushort tm = ReadDataU16(tmSfr);
@@ -708,22 +813,16 @@ public sealed class Bus
             uint sum = (uint)tm + stepsU16;
             bool overflow = sum > 0xFFFF;
             ushort newTm = (ushort)sum;
-            // TMR is a compare register, not a reload value; TM keeps free
-            // running after a match.
+            // TMR is a compare register, not a reload value; TM keeps free running after a match.
             bool matched = overflow ? (tm < tmr || newTm >= tmr) : (tm < tmr && newTm >= tmr);
             WriteDataU16(tmSfr, newTm);
 
-            // TMR2 holds the CKP capture (see CaptureTm2), so timer 2 has no
-            // compare event of its own; its interrupt comes from the capture.
+            // TMR2 holds the CKP capture (see CaptureTm2), so timer 2 has no compare event of its own; its interrupt comes from the capture.
             if (matched && i != 2) irqFlags |= (ushort)(1 << irqBit);
             if (matched && i == 0) EndInjectorPulses();
-            // Igniter feedback: each timer-3 compare fires the coil, and the
-            // igniter's confirmation pulse comes back on TRNS1. The ROMs test
-            // "RB TRNSIT.1" once per TDC and log code 15 (ignition output)
-            // when it has not latched.
+            // Igniter feedback: each timer-3 compare fires the coil, and the igniter's confirmation pulse comes back on TRNS1. The ROMs test "RB TRNSIT.1" once per TDC and log code 15 (ignition output) when it has not latched.
             if (matched && i == 3) { Ram[SfrTrns] |= 0x02; IgnitionEvents++; LastIgnitionAt = ElapsedCycles; }
-            // Every timer also raises a counter-overflow interrupt on the even
-            // bit just below its event bit.
+            // Every timer also raises a counter-overflow interrupt on the even bit just below its event bit.
             if (overflow) irqFlags |= (ushort)(1 << (irqBit - 1));
         }
 
@@ -751,6 +850,12 @@ public sealed class PinActivity
     readonly bool[,] _rose = new bool[5, 8];
     readonly bool[,] _fell = new bool[5, 8];
 
+    public void Reset()
+    {
+        Array.Clear(Level); Array.Clear(Direction); Array.Clear(LastChange); Array.Clear(LastHighCycles);
+        Array.Clear(LastLowCycles); Array.Clear(Changes); Array.Clear(LastDriverPc); Array.Clear(_rose); Array.Clear(_fell);
+    }
+
     internal void Update(int port, byte level, byte dir, ulong now, ushort pc)
     {
         byte diff = (byte)(level ^ Level[port]);
@@ -759,9 +864,9 @@ public sealed class PinActivity
         {
             _rose[port, b] = false;
             _fell[port, b] = false;
-            if ((diff >> b & 1) == 0) continue;
+            if (((diff >> b) & 1) == 0) continue;
             ulong held = now - LastChange[port, b];
-            bool nowHigh = (level >> b & 1) != 0;
+            bool nowHigh = ((level >> b) & 1) != 0;
             if (nowHigh) { LastLowCycles[port, b] = held; _rose[port, b] = true; }
             else { LastHighCycles[port, b] = held; _fell[port, b] = true; }
             LastChange[port, b] = now;
@@ -778,7 +883,7 @@ public sealed class PinActivity
 /// Intel 8255 programmable peripheral interface, as far as the P28 uses it (mode 0).
 public sealed class Ppi8255
 {
-    /// Port A pins as the board drives them (switch inputs). Bits 3-5 read inverted by the ROM (XOR 38h), so 38h is "all switches off".
+    /// Port A pins as the board drives them (the ROMs store them XOR 38h at RAM 0x210). Traced: 0, 1 knock detector outputs, sampled at every spark into a history word (0ECh); the pattern check on it (233h.7) gates codes 23 and 24 - not modelled, so P30 and some custom ROMs can store 24 when driving 2 must keep changing or code 24 sets (the board model feeds it a square wave, PortA2PulseHz) 3 power-steering pressure switch (B8) 4 unused (P08: feedback behind its fault bit 14) 5 VTEC solenoid feedback, low while energised (code 21; driven by Bus from the solenoid) 6 O2 sensor heater feedback (code 41) 7 service check connector (D4)
     public byte PortAInput = 0x38;
     public byte PortB, PortC;
     public byte Control = 0x9B;           // reset: every port an input

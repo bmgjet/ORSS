@@ -1,24 +1,27 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Text;
 using Decoder = OkiRomSim.Core.Decoder;
 using OkiRomSim.Core;
 
 namespace OkiRomSim.Calibration;
 
-/// What a ROM's datalogging looks like, worked out from the ROM itself rather than from a list of known protocols: the command bytes its serial code compares against, tried in a simulator until one produces a checksummed frame, and then the meaning of each byte found by changing one engine input at a time and watching which bytes follow it.
-/// The result can be used straight away (DetectedProtocol) and saved with the project, so a ROM with its own datalog format still logs, graphs and overlays like the known ones.
+/// What a ROM's datalogging looks like, worked out from the ROM itself rather than from a list of known protocols: the command bytes its serial code compares against, tried in a simulator until one produces a checksummed frame, and then the meaning of each byte found by changing one engine input at a time and watching which bytes follow it. The result can be used straight away (DetectedProtocol) and saved with the project, so a ROM with its own datalog format still logs, graphs and overlays like the known ones.
 public sealed class DatalogFieldMap
 {
     /// Frame byte index -> channel name ("rpm" is a 16-bit pair, low byte first).
-    public Dictionary<int, string> Bytes { get; set; } = new();
-    public Dictionary<int, string> Words { get; set; } = new();
+    public Dictionary<int, string> Bytes { get; set; } = [];
+    public Dictionary<int, string> Words { get; set; } = [];
+
+    RawNames? _rawNames;
+    int _rawLength = -1;
 
     public LogFrame Decode(byte[] raw, double t)
     {
-        var f = new LogFrame { T = t, Raw = raw.ToArray() };
+        var f = new LogFrame { T = t, Raw = [.. raw] };
         foreach (var (i, name) in Words)
         {
             if (i + 1 >= raw.Length) continue;
-            int w = raw[i] | raw[i + 1] << 8;
+            int w = raw[i] | (raw[i + 1] << 8);
             switch (name)
             {
                 case "rpm": f.Rpm = w == 0 ? 0 : Math.Round(1875000.0 / w); break;
@@ -39,12 +42,18 @@ public sealed class DatalogFieldMap
                 case "o2_v": f.O2V = Math.Round(HondaDatalog.Volts(b), 3); break;
                 case "batt_v": f.BattV = Math.Round(26.0 * b / 270.0, 2); break;
                 case "speed_kmh": f.SpeedKmh = b; break;
-                case "ign_deg": f.IgnDeg = b * 0.25 - 6; break;
+                case "ign_deg": f.IgnDeg = (b * 0.25) - 6; break;
                 default: f.Extra[name] = b; break;
             }
         }
-        for (int i = 0; i < raw.Length; i++)
-            if (!Bytes.ContainsKey(i) && !Words.ContainsKey(i) && !Words.ContainsKey(i - 1)) f.Extra[$"b{i}"] = raw[i];
+        // the bytes with no meaning found for them, by number, read from Raw when asked for
+        if (_rawNames == null || _rawLength != raw.Length)
+        {
+            _rawLength = raw.Length;
+            _rawNames = new RawNames(Enumerable.Range(0, raw.Length)
+                .Where(i => !Bytes.ContainsKey(i) && !Words.ContainsKey(i) && !Words.ContainsKey(i - 1)).Select(i => ($"b{i}", i)));
+        }
+        f.RawChannels = _rawNames;
         return f;
     }
 
@@ -97,7 +106,8 @@ public static class DatalogLayout
                 if ((_sim.Cpu.Instructions & 1023) == 0) _sim.SyncSensors();
             foreach (var b in _sim.Bus.TakeSerialTx()) _rx.Enqueue(b);
         }
-        public void Write(byte[] data) => _sim.Bus.QueueSerialRx(data, (uint)(Bus.CpuHz * 10 / 38400));
+        uint _byteCycles = (uint)(Bus.CpuHz * 10 / 38400);
+        public void Write(byte[] data) => _sim.Bus.QueueSerialRx(data, _byteCycles);
         public int Read(byte[] buffer, int offset, int count, int timeoutMs)
         {
             ulong end = _sim.Cpu.Cycles + (ulong)(timeoutMs / 1000.0 * Bus.CpuHz);
@@ -112,6 +122,14 @@ public static class DatalogLayout
             return n;
         }
         public void Discard() { Run(0.002); _rx.Clear(); }
+        public void Wait(int ms) => Run(ms / 1000.0);
+        public void SetBaud(int baud) { if (!_sim.Bus.KLineEcho) _byteCycles = (uint)(Bus.CpuHz * 10 / (ulong)Math.Max(300, baud)); }
+        // the stock tester link runs at 9600 on a K-line; the chipped protocols at 38400 on two wires
+        public void SetKLine(bool on)
+        {
+            _byteCycles = (uint)(Bus.CpuHz * 10 / (on ? 9600UL : 38400UL));
+            _sim.Bus.KLineEcho = on; _sim.Bus.KLineByteCycles = _byteCycles;
+        }
     }
 
     public sealed record Result(DetectedProtocol? Protocol, DatalogProtocol? Known, string Report);
@@ -264,7 +282,7 @@ public static class DatalogLayout
     public static IEnumerable<byte> CommandBytes(byte[] rom)
     {
         var found = new List<byte>();
-        int rx = rom[0x0A] | rom[0x0B] << 8;                 // the serial receive vector
+        int rx = rom[0x0A] | (rom[0x0B] << 8);                 // the serial receive vector
         if (rx >= 0x38 && rx < rom.Length)
         {
             // follow the handler for a few hundred instructions and collect CMP immediates

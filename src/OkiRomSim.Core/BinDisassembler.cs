@@ -1,7 +1,6 @@
-// Turns a raw 32 KB ROM image into assembler source that rebuilds to the same bytes.
-// Code is found by following control flow from the reset, interrupt and VCAL vectors, carrying the
-// DD (word/byte) mode along each path; unreachable bytes stay as DB data and targets get labels.
-// Any instruction whose text won't rebuild to its original bytes is demoted to DB and re-checked.
+// Copyright (c) bmgjet. All rights reserved.
+// Turns a raw 32 KB ROM image into assembler source that rebuilds to the same bytes. Code is found by following control flow from the reset, interrupt and VCAL vectors, carrying the DD (word/byte) mode along each path; unreachable bytes stay as DB data and targets get labels. Any instruction whose text won't rebuild to its original bytes is demoted to DB and re-checked.
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -36,8 +35,8 @@ public static class BinDisassembler
     /// Vector names (4 fixed, 16 maskable in IRQ bit order, 8 VCAL) and SFR names for another 66K part; null puts the MSM66207 ones back.
     public static void UseNames(IReadOnlyList<string>? vectors)
     {
-        VectorNames = vectors is { Count: VectorTableEnd / 2 } ? vectors.ToArray() : DefaultVectorNames;
-        _sfrNames = null;
+        VectorNames = vectors is { Count: VectorTableEnd / 2 } ? [.. vectors] : DefaultVectorNames;
+        SfrNames = null;
     }
 
     sealed class Insn
@@ -65,11 +64,10 @@ public static class BinDisassembler
         // Vector tables: DW entries pointing at handlers.
         for (int v = 0; v < VectorTableEnd / 2; v++)
         {
-            int target = image[v * 2] | image[v * 2 + 1] << 8;
+            int target = image[v * 2] | (image[(v * 2) + 1] << 8);
             if (target < VectorTableEnd || target >= Bus.RomSize) continue;
             labels.TryAdd(target, VectorNames[v]);
-            // Reset starts with PSW cleared (DD=0); handlers inherit whatever
-            // was running, and nearly all open with a word load, so try DD=1.
+            // Reset starts with PSW cleared (DD=0); handlers inherit whatever was running, and nearly all open with a word load, so try DD=1.
             work.Push((target, v != 0));
         }
 
@@ -151,8 +149,7 @@ public static class BinDisassembler
     static int? Target(Decoded d, int pcAfter)
     {
         if (d.Mnemonic.Contains("rel8")) return (ushort)(pcAfter + d.Fields.Rel8);
-        if (d.Mnemonic.Contains("addr16")) return d.Fields.Addr16;
-        return null;
+        return d.Mnemonic.Contains("addr16") ? d.Fields.Addr16 : null;
     }
 
     static (string text, Dictionary<int, int> lineToInsn) Emit(byte[] image,
@@ -175,7 +172,7 @@ public static class BinDisassembler
         // Vector table.
         for (int v = 0; v < VectorTableEnd / 2; v++)
         {
-            int target = image[v * 2] | image[v * 2 + 1] << 8;
+            int target = image[v * 2] | (image[(v * 2) + 1] << 8);
             string name = labels.TryGetValue(target, out var n) && n == VectorNames[v] ? n : $"0{target:X4}h";
             if (labels.TryGetValue(target, out var any) && (target >= VectorTableEnd)) name = any;
             Line($"{VectorNames[v] + "_vec:",-26}DW  {name}");
@@ -226,11 +223,11 @@ public static class BinDisassembler
     static readonly Regex OffDirect = new(@"\boff (0[0-9A-F]+h)", RegexOptions.Compiled);
     static readonly Regex Hex4 = new(@"\b0([0-9A-F]{4})h\b", RegexOptions.Compiled);
 
-    /// SFR address -> the name the assembler predefines for it.
-    static Dictionary<int, string>? _sfrNames;
-    static Dictionary<int, string> SfrNames => _sfrNames ??= OkiRomSim.Assembler.OkiAssembler.Sfrs
+    [AllowNull]
+    static Dictionary<int, string> SfrNames { get => field ??= OkiRomSim.Assembler.OkiAssembler.Sfrs
         .Where(kv => !kv.Key.StartsWith("zp_", StringComparison.Ordinal))
-        .GroupBy(kv => kv.Value).ToDictionary(g => g.Key, g => g.First().Key);
+        .GroupBy(kv => kv.Value).ToDictionary(g => g.Key, g => g.First().Key); set;
+    }
     /// A plain two-digit direct address operand (not an immediate, not an off() page offset, not an index displacement).
     static readonly Regex DirectSfr = new(@"(?<![#(\w])0([0-9A-F]{2})h(?![\w\[])", RegexOptions.Compiled);
 

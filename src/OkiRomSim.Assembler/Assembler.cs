@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Text;
 
 namespace OkiRomSim.Assembler;
@@ -24,7 +25,7 @@ public sealed class ModuleUsage
 {
     public required string Name;
     public int Bytes;
-    public List<(int Start, int End)> Ranges { get; } = new();
+    public List<(int Start, int End)> Ranges { get; } = [];
     internal void Add(int addr, int len)
     {
         Bytes += len;
@@ -36,9 +37,9 @@ public sealed class ModuleUsage
 public sealed class AssemblerOptions
 {
     /// Symbols predefined before assembly (feature flags from a firmware project, -D on the CLI).
-    public Dictionary<string, long> Defines { get; } = new();
+    public Dictionary<string, long> Defines { get; } = [];
     /// Include search paths, in addition to the including file's directory.
-    public List<string> IncludePaths { get; } = new();
+    public List<string> IncludePaths { get; } = [];
     public int RomSize { get; set; } = 0x8000;
     public byte FillByte { get; set; } = 0xFF;
     /// Lenient mode: undefined symbols, out-of-range branches and duplicate labels become warnings (producing a silently-wrong image) instead of errors.
@@ -55,12 +56,12 @@ public sealed class AssemblyResult
 {
     public required byte[] Image;
     public required bool[] Used;
-    public List<Diagnostic> Diagnostics { get; } = new();
-    public Dictionary<string, SymbolInfo> Symbols { get; } = new();
-    public List<SourceMapEntry> SourceMap { get; } = new();
-    public List<Annotation> Annotations { get; } = new();
-    public Dictionary<string, ModuleUsage> Modules { get; } = new();
-    public List<string> Files { get; } = new();
+    public List<Diagnostic> Diagnostics { get; } = [];
+    public Dictionary<string, SymbolInfo> Symbols { get; } = [];
+    public List<SourceMapEntry> SourceMap { get; } = [];
+    public List<Annotation> Annotations { get; } = [];
+    public Dictionary<string, ModuleUsage> Modules { get; } = [];
+    public List<string> Files { get; } = [];
     public bool Success => Diagnostics.All(d => d.Severity != Severity.Error);
     public int UsedBytes => Used.Count(u => u);
 
@@ -77,8 +78,7 @@ public sealed class AssemblyResult
 
     public SourceMapEntry? Lookup(int address)
     {
-        // entries are appended in address order within a region; binary search is not safe
-        // across ORGs, so keep a lazily built index.
+        // entries are appended in address order within a region; binary search is not safe across ORGs, so keep a lazily built index.
         _index ??= BuildIndex();
         return address >= 0 && address < _index.Length ? _index[address] : null;
     }
@@ -147,9 +147,9 @@ public sealed class OkiAssembler
     int _romSize;
     string _module = "(main)";
     readonly Stack<string> _moduleStack = new();
-    readonly HashSet<(string, int, string)> _diagSeen = new();
-    int[] _owner = Array.Empty<int>(); // line id that wrote each byte (final pass), for overlap detection
-    readonly List<string> _ownerDesc = new();
+    readonly HashSet<(string, int, string)> _diagSeen = [];
+    int[] _owner = []; // line id that wrote each byte (final pass), for overlap detection
+    readonly List<string> _ownerDesc = [];
 
     public AssemblyResult AssembleFile(string path)
     {
@@ -227,8 +227,9 @@ public sealed class OkiAssembler
             var f = Path.GetFullPath(c);
             if (_files.ContainsKey(f) || (_opt.ReadFile?.Invoke(f) != null) || File.Exists(f))
             {
-                if (_opt.AllowFile != null && !_opt.AllowFile(f)) throw new AsmException($"'{name}' is outside the folders this assembly may read");
-                return f;
+                return _opt.AllowFile != null && !_opt.AllowFile(f)
+                    ? throw new AsmException($"'{name}' is outside the folders this assembly may read")
+                    : f;
             }
         }
         return null;
@@ -351,7 +352,7 @@ public sealed class OkiAssembler
                         break;
                     }
                     ExpectEnd(toks, q);
-                    Emit(bytes.ToArray(), src.Path, line);
+                    Emit([.. bytes], src.Path, line);
                     return;
                 }
             case Tk.Keyword when t.Text == "PRELOAD":
@@ -404,9 +405,9 @@ public sealed class OkiAssembler
             ExpectEnd(toks, q);
             var ctx = MakeCtx();
             long v = e.Eval(ctx);
-            if (ctx.Undefined.Count > 0)
-                throw new AsmException($"'{ctx.Undefined[0]}' must be defined before it is used in a condition (use ifdef or defined())");
-            return v != 0;
+            return ctx.Undefined.Count > 0
+                ? throw new AsmException($"'{ctx.Undefined[0]}' must be defined before it is used in a condition (use ifdef or defined())")
+                : v != 0;
         }
         switch (w)
         {
@@ -489,7 +490,7 @@ public sealed class OkiAssembler
                 {
                     long n = Eval(ExprParser.Parse(toks, ref q, true), src.Path, line, out _);
                     if (n <= 0) throw new AsmException("align must be positive");
-                    long pad = (n - _pc % n) % n;
+                    long pad = (n - (_pc % n)) % n;
                     var b = new byte[pad]; Array.Fill(b, _opt.FillByte);
                     Emit(b, src.Path, line);
                     return;

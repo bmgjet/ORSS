@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
@@ -48,6 +49,7 @@ public static class DarkChrome
     {
         w.Background = new SolidColorBrush(Background);
         w.Icon = LoadWindowIcon();
+        w.Opened += (_, _) => ScreenFit.FitWindow(w);
         if (!Custom) { w.SystemDecorations = SystemDecorations.Full; return new Panel { Height = 0 }; }
         if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())
         {
@@ -58,8 +60,7 @@ public static class DarkChrome
         }
         else
         {
-            // X11 / Wayland: keep the frame (so the window can still be resized and snapped)
-            // but drop the light title bar and draw ours in its place
+            // X11 / Wayland: keep the frame (so the window can still be resized and snapped) but drop the light title bar and draw ours in its place
             w.SystemDecorations = SystemDecorations.BorderOnly;
         }
         return BuildBar(w, title);

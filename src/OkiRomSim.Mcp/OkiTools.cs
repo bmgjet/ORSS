@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Globalization;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -41,14 +42,14 @@ public sealed class OkiTools
     {
         if (a[k] is not JsonValue v) return def;
         if (v.TryGetValue<int>(out var i)) return i;
-        if (v.TryGetValue<double>(out var d)) return (int)d;
-        return int.TryParse(v.ToString(), out i) ? i : def;
+        return v.TryGetValue<double>(out var d) ? (int)d : int.TryParse(v.ToString(), out i) ? i : def;
     }
     internal static double D(JsonObject a, string k, double def)
     {
         if (a[k] is not JsonValue v) return def;
-        if (v.TryGetValue<double>(out var d)) return d;
-        return double.TryParse(v.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out d) ? d : def;
+        return v.TryGetValue<double>(out var d)
+            ? d
+            : double.TryParse(v.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out d) ? d : def;
     }
     internal static bool B(JsonObject a, string k, bool def) =>
         a[k] is JsonValue v ? (v.TryGetValue<bool>(out var b) ? b : v.ToString().Equals("true", StringComparison.OrdinalIgnoreCase)) : def;
@@ -127,6 +128,26 @@ public sealed class OkiTools
                    ("reason", "string", "what it is for, shown to the user", false)), a =>
                 _ws.AddRoot(Req(a, "path"), S(a, "reason") ?? "an agent asked to open a file there"), ReadOnly: false);
 
+        yield return new McpTool("transfer_dir",
+            "The folder on the simulator's machine that this server can always write to, and the path to give file_upload when you have nowhere else to " +
+            "put a file. The whole round trip for an agent on a different computer is: transfer_dir, then file_upload (in chunks) into it, then app_open " +
+            "to open what you sent in the desktop app; file_download brings a file back the same way.",
+            Schema(), _ => $"transfer folder: {_ws.Transfer}\nupload into it with file_upload path=\"{Path.Combine(_ws.Transfer, "yourfile.bin")}\" " +
+                           "(or just \"yourfile.bin\", which is taken as relative to the first workspace root), then open it with app_open.");
+
+        yield return new McpTool("app_open",
+            "Open a file that is on the simulator's machine in the desktop app, exactly as the File menu would: a .asm is assembled and loaded, a .bin " +
+            "or .rom is disassembled and loaded, a saved project .zip is restored. Use it after file_upload to work on a file you sent from another " +
+            "computer. The ROM then answers to cal_detect, the simulator, the datalog and the emulator, and the user sees it open.",
+            Schema(("path", "string", "file on the simulator's machine (a path from transfer_dir, or any path inside the workspace)", true)), a =>
+            {
+                var session = _server.Session ?? throw new ToolException(
+                    "no app session: this server is not the one inside the desktop app, so there is no window to open a file in " +
+                    "(point your client at the app's HTTP server instead - Settings > MCP server)");
+                var path = _ws.Resolve(Req(a, "path"));
+                return session.OpenFile(path);
+            }, ReadOnly: false);
+
         yield return new McpTool("file_download",
             "Read any file as base64, in chunks - how an agent on another machine gets a .bin, a log or a project out of the workspace. " +
             "The result gives the total size, this chunk's offset and the file's SHA-256, so a transfer can be resumed and checked.",
@@ -152,14 +173,22 @@ public sealed class OkiTools
         yield return new McpTool("rom_upload",
             "Send a ROM image (base64) to the desktop app and open it there, as if it had been opened from disk: it is disassembled, built and ready for " +
             "cal_detect, the simulator and the emulator. For an agent working from another machine.",
-            Schema(("data", "string", "base64 of the .bin image", true), ("name", "string", "name to show it under", false)), a =>
+            Schema(("data", "string", "base64 of the .bin image (leave out when using path)", false),
+                   ("path", "string", "a .bin already on the simulator's machine, instead of data (what file_upload wrote)", false),
+                   ("name", "string", "name to show it under", false)), a =>
             {
                 var s2 = _server.Session ?? throw new ToolException("no app session: write the file with file_upload instead");
                 byte[] rom;
-                try { rom = Convert.FromBase64String(Req(a, "data")); }
-                catch (FormatException) { throw new ToolException("data is not valid base64"); }
-                if (rom.Length is 0 or > Bus.RomSize + 1) throw new ToolException($"a 66207 image is 1..{Bus.RomSize} bytes, got {rom.Length}");
-                return s2.LoadRom(rom, S(a, "name") ?? "uploaded");
+                // an image larger than one request, or one already sent across in chunks, comes by path instead: file_upload it into transfer_dir first
+                if (S(a, "path") is { Length: > 0 } from) rom = File.ReadAllBytes(_ws.Resolve(from));
+                else
+                {
+                    try { rom = Convert.FromBase64String(Req(a, "data")); }
+                    catch (FormatException) { throw new ToolException("data is not valid base64"); }
+                }
+                return rom.Length is 0 or > Bus.RomSize + 1
+                    ? throw new ToolException($"a 66207 image is 1..{Bus.RomSize} bytes, got {rom.Length}")
+                    : s2.LoadRom(rom, S(a, "name") ?? "uploaded");
             }, ReadOnly: false);
 
         yield return new McpTool("file_edit",
@@ -398,7 +427,7 @@ Paths are confined to the workspace. Large outputs go to .okirom/ files - read t
         int s = I(a, "start_line", -1), e = I(a, "end_line", -1);
         if (s < 1 || s > lines.Count + 1 || e < s - 1 || e > lines.Count) throw new ToolException($"line range {s}..{e} is outside the file (1..{lines.Count})");
         var text = S(a, "text") ?? "";
-        var add = text.Length == 0 ? new List<string>() : text.Replace("\r\n", "\n").TrimEnd('\n').Split('\n').ToList();
+        var add = text.Length == 0 ? [] : text.Replace("\r\n", "\n").TrimEnd('\n').Split('\n').ToList();
         lines.RemoveRange(s - 1, e - s + 1);
         lines.InsertRange(s - 1, add);
         File.WriteAllText(path, string.Join(nl, lines));
@@ -474,9 +503,9 @@ Paths are confined to the workspace. Large outputs go to .okirom/ files - read t
         }
         var all = File.ReadAllBytes(path);
         string sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(all));
-        if (S(a, "sha256") is { Length: > 0 } want && !sha.Equals(want.Replace("-", ""), StringComparison.OrdinalIgnoreCase))
-            return $"{_ws.Show(path)}: {all.Length} bytes written, but sha256 {sha} does not match the {want} you gave - send the file again";
-        return $"{_ws.Show(path)}: {all.Length} bytes, sha256 {sha}";
+        return S(a, "sha256") is { Length: > 0 } want && !sha.Equals(want.Replace("-", ""), StringComparison.OrdinalIgnoreCase)
+            ? $"{_ws.Show(path)}: {all.Length} bytes written, but sha256 {sha} does not match the {want} you gave - send the file again"
+            : $"{_ws.Show(path)}: {all.Length} bytes, sha256 {sha}";
     }
 
     string Disassemble(JsonObject a)
@@ -574,7 +603,7 @@ Paths are confined to the workspace. Large outputs go to .okirom/ files - read t
         string note = "";
         if (entry < 0x38 && !p.IsCode(entry))
         {
-            int target = p.Image[entry & ~1] | p.Image[(entry & ~1) + 1] << 8;
+            int target = p.Image[entry & ~1] | (p.Image[(entry & ~1) + 1] << 8);
             note = $"{entry:X4}h is a vector-table entry; following it to {p.Name(target)} ({target:X4}h)\n";
             entry = target;
         }
@@ -648,7 +677,7 @@ Paths are confined to the workspace. Large outputs go to .okirom/ files - read t
         sb.AppendLine($"{stop}: {simS:F3} s simulated, {c.Instructions:N0} instructions ({sim.FastForwardedInstructions:N0} of them fast-forwarded boot delay), {sw.Elapsed.TotalSeconds:F1} s real time");
         var src = p.SourceAt(c.Pc);
         sb.AppendLine($"PC {c.Pc:X4}h {p.Name(c.Pc)}{(src != null ? $"  ({_ws.Show(src.Value.File)}:{src.Value.Line}: {src.Value.Text.Trim()})" : "")}");
-        sb.AppendLine($"A {c.A:X4}  DD {(c.Dd ? 1 : 0)}  CY {(c.Cf ? 1 : 0)}  Z {(c.Zf ? 1 : 0)}  MIE {(c.Mie() ? 1 : 0)}  LRB {c.Lrb:X4}  SSP {c.Ssp:X4}  IE {b.Ram[0x1A] | b.Ram[0x1B] << 8:X4}");
+        sb.AppendLine($"A {c.A:X4}  DD {(c.Dd ? 1 : 0)}  CY {(c.Cf ? 1 : 0)}  Z {(c.Zf ? 1 : 0)}  MIE {(c.Mie() ? 1 : 0)}  LRB {c.Lrb:X4}  SSP {c.Ssp:X4}  IE {b.Ram[0x1A] | (b.Ram[0x1B] << 8):X4}");
         sb.AppendLine();
         sb.AppendLine($"inputs: {e.Rpm:0} rpm, MAP {e.MapKpa:0.#} kPa, TPS {e.TpsPct:0.#}%, ECT {e.EctCelsius:0} C, IAT {e.IatCelsius:0} C, O2 {e.O2Volts:0.00} V, {e.VbattVolts:0.0} V, {e.SpeedKmh:0} km/h");
         sb.AppendLine($"fuel pump: {(b.FuelPumpActive ? "ON" : "off")}    VTEC solenoid: {(b.VtecSolenoidActive ? "ON" : "off")}");
@@ -676,7 +705,7 @@ Paths are confined to the workspace. Large outputs go to .okirom/ files - read t
             {
                 var name = w?.ToString() ?? "";
                 if (!p.TryResolve(name, out var addr) || addr >= Bus.RamSize) { sb.AppendLine($"  {name}: not a RAM address"); continue; }
-                int by = b.Ram[addr], wd = b.Ram[addr] | b.Ram[(addr + 1) & 0xFFF] << 8;
+                int by = b.Ram[addr], wd = b.Ram[addr] | (b.Ram[(addr + 1) & 0xFFF] << 8);
                 sb.AppendLine($"  {name} ({addr:X3}h): byte {by:X2}h ({by})  word {wd:X4}h ({wd})");
             }
         }

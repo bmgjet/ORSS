@@ -1,8 +1,5 @@
-// OKI 66207 executor: evaluates the Arg tree that Decoder + OperandParser produce, so each mnemonic is implemented once.
-// Conventions taken from the ISA:
-//   * Word ops use the full 16-bit accumulator; byte ops (mnemonic ending in B) use its low half.
-//   * CF is set on borrow by SUB/SBC/CMP: JLT = CF, JGE = !CF, JGT = !CF && !ZF, JLE = CF || ZF.
-//   * LC/CMPC read code space; everything else reads data space.
+// Copyright (c) bmgjet. All rights reserved.
+// OKI 66207 executor: evaluates the Arg tree that Decoder + OperandParser produce, so each mnemonic is implemented once. Conventions taken from the ISA: * Word ops use the full 16-bit accumulator; byte ops (mnemonic ending in B) use its low half. * CF is set on borrow by SUB/SBC/CMP: JLT = CF, JGE = !CF, JGT = !CF && !ZF, JLE = CF || ZF. * LC/CMPC read code space; everything else reads data space.
 namespace OkiRomSim.Core;
 
 public sealed class ExecException : Exception
@@ -21,14 +18,13 @@ internal sealed class Exec
     private readonly Cpu _cpu;
     private readonly Bus _bus;
     private readonly Decoded _d;
-    private bool _branchTaken;
 
     public Exec(Cpu cpu, Bus bus, Decoded d)
     {
         _cpu = cpu; _bus = bus; _d = d;
     }
 
-    public bool BranchTaken => _branchTaken;
+    public bool BranchTaken { get; private set; }
 
     // ---- operand address / value plumbing ---------------------------------
 
@@ -43,14 +39,14 @@ internal sealed class Exec
             Reg.Usp => 6,
             _ => null,
         };
-        if (slot == null) return null;
-        return (ushort)(0x0080 + _cpu.Scb() * 8 + slot.Value);
+        return slot == null ? null : (ushort)(0x0080 + (_cpu.Scb() * 8) + slot.Value);
     }
 
     private ushort RegGet(Reg r)
     {
-        if (PregAddr(r) is ushort a) return _bus.ReadDataU16(a);
-        return r switch
+        return PregAddr(r) is ushort a
+            ? _bus.ReadDataU16(a)
+            : r switch
         {
             Reg.A => _cpu.A,
             Reg.Ssp => _cpu.Ssp,
@@ -79,9 +75,7 @@ internal sealed class Exec
         }
     }
 
-    /// SSP, LRB, PSW and the accumulator are memory-mapped at 0x00..0x07, so
-    /// `CLR off(PSW)` (a write to 0x0004) has to land on the real PSW rather
-    /// than on plain RAM.
+    /// SSP, LRB, PSW and the accumulator are memory-mapped at 0x00..0x07, so `CLR off(PSW)` (a write to 0x0004) has to land on the real PSW rather than on plain RAM.
     private static (Reg reg, bool high)? Alias(ushort addr)
     {
         Reg? reg = (addr & ~1) switch
@@ -92,8 +86,7 @@ internal sealed class Exec
             0x06 => Reg.A,
             _ => null,
         };
-        if (reg == null) return null;
-        return (reg.Value, (addr & 1) == 1);
+        return reg == null ? null : (reg.Value, (addr & 1) == 1);
     }
 
     private ushort Load(ushort addr, bool byteWidth)
@@ -101,8 +94,7 @@ internal sealed class Exec
         if (Alias(addr) is var (r, high))
         {
             ushort v = RegGet(r);
-            if (!byteWidth) return v;
-            return high ? (ushort)(v >> 8) : (ushort)(v & 0xFF);
+            return !byteWidth ? v : high ? (ushort)(v >> 8) : (ushort)(v & 0xFF);
         }
         return byteWidth ? _bus.ReadDataU8(addr) : _bus.ReadDataU16(addr);
     }
@@ -136,16 +128,14 @@ internal sealed class Exec
             case MemKind.AtReg: return RegGet(m.Reg);
             case MemKind.AtEr:
                 {
-                    ushort a = (ushort)(_cpu.BankBase() + m.ErIndex * 2);
+                    ushort a = (ushort)(_cpu.BankBase() + (m.ErIndex * 2));
                     return _bus.ReadDataU16(a);
                 }
             case MemKind.IdxUsp:
                 { ushort u = RegGet(Reg.Usp); return (ushort)(u + (ushort)f.S8); }
             case MemKind.IdxReg: return (ushort)(RegGet(m.Reg) + f.N16);
             case MemKind.IdxRegAlt: return (ushort)(RegGet(m.Reg) + f.N16Alt);
-            // The base word may be one of the registers mapped at 0x00-0x07:
-            // "LC A, table[ACC]" encodes its index as N16[06h], and A lives in
-            // the CPU, not in RAM, so go through the register-aware Load.
+            // The base word may be one of the registers mapped at 0x00-0x07: "LC A, table[ACC]" encodes its index as N16[06h], and A lives in the CPU, not in RAM, so go through the register-aware Load.
             case MemKind.IdxMemN8:
                 {
                     ushort baseAddr = Load(f.N8, false);
@@ -162,6 +152,14 @@ internal sealed class Exec
         }
     }
 
+    /// Where J / CAL go. `J addr16` is absolute. `J [DP]` / `J [er0]` (register object, 92 22 / 44 22) go to the address in the register - the serial dispatch in the 66207 ROMs is "LC A, [DP] / MOV DP, A / J [DP]". `J [N8]`, `J [[DP]]` and the other bracketed memory forms go to the word held in that memory ("J [ACC]" in the P13 DTC dispatch goes to A).
+    private ushort JumpTarget(Arg a)
+    {
+        if (a.Kind == ArgKind.Mem && !a.Deref && a.Mem.Kind is MemKind.AtReg or MemKind.AtEr) return Ea(a.Mem);
+        if (a.Kind == ArgKind.Mem && a.Deref) return Load(Ea(a.Mem), false);
+        return Read(a, false, false);
+    }
+
     /// Read an operand as a value. `code` selects code space for LC/CMPC.
     private ushort Read(Arg a, bool byteWidth, bool code)
     {
@@ -172,7 +170,7 @@ internal sealed class Exec
             case ArgKind.Reg: return RegGet(a.Reg);
             case ArgKind.Er:
                 {
-                    ushort addr = (ushort)(_cpu.BankBase() + a.Index * 2);
+                    ushort addr = (ushort)(_cpu.BankBase() + (a.Index * 2));
                     return _bus.ReadDataU16(addr);
                 }
             case ArgKind.R:
@@ -188,14 +186,13 @@ internal sealed class Exec
             case ArgKind.Mem:
                 {
                     ushort addr = Ea(a.Mem);
+                    // "LC A, [N8]" and friends: the object is a word in data memory, and the code address is what that word holds ("LC A, [ACC]" reads ROM at A, not at 0x0006)
+                    if (code && a.Deref) addr = Load(addr, false);
                     if (code) _bus.NoteRomRead(addr, byteWidth ? 1 : 2);
                     if (byteWidth && code) return _bus.ReadCodeU8(addr);
-                    if (!byteWidth && code) return _bus.ReadCodeU16(addr);
-                    return Load(addr, byteWidth);
+                    return !byteWidth && code ? _bus.ReadCodeU16(addr) : Load(addr, byteWidth);
                 }
-            // A bit operand is always one byte (bit 0-7), whatever the DD mode.
-            // Reading it word-wide broke the register aliases at odd addresses:
-            // "MB C, 007h.7" (ACCH.7) returned ACCL's bit 7 instead.
+            // A bit operand is always one byte (bit 0-7), whatever the DD mode. Reading it word-wide broke the register aliases at odd addresses: "MB C, 007h.7" (ACCH.7) returned ACCL's bit 7 instead.
             case ArgKind.Bit:
                 return (ushort)((Read(a.Inner!, true, code) >> a.Bit_) & 1);
             case ArgKind.Addr16: return f.Addr16;
@@ -214,7 +211,7 @@ internal sealed class Exec
             case ArgKind.Reg: RegSet(a.Reg, v); break;
             case ArgKind.Er:
                 {
-                    ushort addr = (ushort)(_cpu.BankBase() + a.Index * 2);
+                    ushort addr = (ushort)(_cpu.BankBase() + (a.Index * 2));
                     _bus.WriteDataU16(addr, v);
                     break;
                 }
@@ -281,10 +278,7 @@ internal sealed class Exec
             // ---- data movement -------------------------------------------
             case "L":
                 {
-                    // L/LB/LC/LCB update ZF from the loaded value (arch.ml's OP_L/OP_LB/OP_LC/
-                    // OP_LCB rules, and the stock ROMs depend on it: the 115 ROM alone has ~230
-                    // load-then-JEQ/JNE pairs with no compare in between, e.g. the BRK handler's
-                    // "LB A, trapReasonCode / JNE nmi_brk"). MOV does not touch the flags.
+                    // L/LB/LC/LCB update ZF from the loaded value (arch.ml's OP_L/OP_LB/OP_LC/ OP_LCB rules, and the stock ROMs depend on it: the 115 ROM alone has ~230 load-then-JEQ/JNE pairs with no compare in between, e.g. the BRK handler's "LB A, trapReasonCode / JNE nmi_brk"). MOV does not touch the flags.
                     ushort v = Read(args[1], byteWidth, false);
                     Write(args[0], byteWidth, v);
                     SetZf(v, byteWidth);
@@ -381,10 +375,7 @@ internal sealed class Exec
                     break;
                 }
             case "MUL":
-                // MUL/MULB have no source operands in their mnemonics; operands
-                // and destinations are fixed by the ISA:
-                //   MUL   (er1, A) <- A * er0
-                //   MULB  A        <- AL * r0
+                // MUL/MULB have no source operands in their mnemonics; operands and destinations are fixed by the ISA: MUL (er1, A) <- A * er0 MULB A <- AL * r0
                 if (byteWidth)
                 {
                     ushort product = (ushort)(Read(Arg.OfReg(Reg.A), true, false) * Read(Arg.OfR(0), true, false));
@@ -400,11 +391,7 @@ internal sealed class Exec
                 }
                 break;
             case "DIV":
-                // DIV/DIVB likewise use fixed registers:
-                //   DIV   (er0, A) <- (er0, A) / er2; er1 <- remainder
-                //   DIVB  A        <- A / r0;         r1  <- remainder
-                // Divide-by-zero results are undefined on the chip; only CF=1
-                // is specified. Preserve the operands in that case.
+                // DIV/DIVB likewise use fixed registers: DIV (er0, A) <- (er0, A) / er2; er1 <- remainder DIVB A <- A / r0; r1 <- remainder Divide-by-zero results are undefined on the chip; only CF=1 is specified. Preserve the operands in that case.
                 if (byteWidth)
                 {
                     ushort divisor = Read(Arg.OfR(0), true, false);
@@ -463,16 +450,13 @@ internal sealed class Exec
                     ushort v = Read(args[0], byteWidth, false);
                     int bits = byteWidth ? 8 : 16;
                     uint msb = 1u << (bits - 1);
-                    uint mask = msb * 2 - 1;
+                    uint mask = (msb * 2) - 1;
                     uint v32 = v & mask;
                     uint res; bool carry;
                     uint cin = _cpu.Cf ? 1u : 0u;
                     switch (baseOp)
                     {
-                        // ROL/ROR rotate through carry. The ROMs depend on it:
-                        // "SRL er1 / ROR A" pairs are 32-bit shifts
-                        // (scale_mul5_div4), and "MB C, r6.7 / ROLB r6" builds a
-                        // plain rotate out of the through-carry one.
+                        // ROL/ROR rotate through carry. The ROMs depend on it: "SRL er1 / ROR A" pairs are 32-bit shifts (scale_mul5_div4), and "MB C, r6.7 / ROLB r6" builds a plain rotate out of the through-carry one.
                         case "ROL":
                             res = ((v32 << 1) | cin) & mask; carry = (v32 & msb) != 0; break;
                         case "ROR":
@@ -493,8 +477,7 @@ internal sealed class Exec
             // ---- carry and bit operations -----------------------------------
             case "SC": _cpu.Cf = true; break;
             case "RC": _cpu.Cf = false; break;
-            // Bit set/reset are test-and-modify. ZF is one when the bit's
-            // previous value was zero.
+            // Bit set/reset are test-and-modify. ZF is one when the bit's previous value was zero.
             case "SB":
             case "RB":
                 {
@@ -503,8 +486,7 @@ internal sealed class Exec
                     Write(args[0], byteWidth, (ushort)(baseOp == "SB" ? 1 : 0));
                     break;
                 }
-            // MB moves a bit; whichever side is C decides the direction. Does
-            // not affect ZF.
+            // MB moves a bit; whichever side is C decides the direction. Does not affect ZF.
             case "MB":
                 if (args[0].Equals(Arg.Carry))
                 {
@@ -517,8 +499,7 @@ internal sealed class Exec
                     Write(args[0], byteWidth, v);
                 }
                 break;
-            // Same move, with the bit selected indirectly by A[0:2]. Leaves ZF
-            // unchanged.
+            // Same move, with the bit selected indirectly by A[0:2]. Leaves ZF unchanged.
             case "MBR":
                 {
                     ushort mask = (ushort)(1 << (_cpu.A & 0x07));
@@ -537,8 +518,7 @@ internal sealed class Exec
                     }
                     break;
                 }
-            // "Register Indirect Bit Addressing": no bit index in the
-            // encoding; the bit location is bits 0..2 of the accumulator.
+            // "Register Indirect Bit Addressing": no bit index in the encoding; the bit location is bits 0..2 of the accumulator.
             case "SBR":
             case "RBR":
             case "TBR":
@@ -570,8 +550,7 @@ internal sealed class Exec
 
             // ---- control flow -------------------------------------------------
             case "J":
-                // `J addr16` is absolute; `J [reg]` takes the operand's value.
-                _cpu.Pc = Read(args[0], false, false);
+                _cpu.Pc = JumpTarget(args[0]);
                 break;
             case "SJ":
                 {
@@ -581,7 +560,7 @@ internal sealed class Exec
                 }
             case "CAL":
                 {
-                    ushort target = Read(args[0], false, false);
+                    ushort target = JumpTarget(args[0]);
                     ushort ret = _cpu.Pc;
                     PushSys(ret);
                     _cpu.Pc = target;
@@ -601,7 +580,7 @@ internal sealed class Exec
                     ushort n = Read(args[0], false, false);
                     ushort ret = _cpu.Pc;
                     PushSys(ret);
-                    _cpu.Pc = _bus.ReadCodeU16((ushort)(0x0028 + n * 2));
+                    _cpu.Pc = _bus.ReadCodeU16((ushort)(0x0028 + (n * 2)));
                     break;
                 }
             case "RT":
@@ -609,8 +588,7 @@ internal sealed class Exec
                 break;
             case "RTI":
                 {
-                    // MSM66201 manual, RTI: hardware restores PSW, LRB, A and
-                    // PC in that order and advances SSP by eight.
+                    // MSM66201 manual, RTI: hardware restores PSW, LRB, A and PC in that order and advances SSP by eight.
                     ushort psw = PopSys();
                     ushort lrb = PopSys();
                     ushort a3 = PopSys();
@@ -642,7 +620,7 @@ internal sealed class Exec
                     {
                         short off = _d.Fields.Rel8;
                         _cpu.Pc = (ushort)(_cpu.Pc + off);
-                        _branchTaken = true;
+                        BranchTaken = true;
                     }
                     break;
                 }
@@ -655,7 +633,7 @@ internal sealed class Exec
                     {
                         short off = _d.Fields.Rel8;
                         _cpu.Pc = (ushort)(_cpu.Pc + off);
-                        _branchTaken = true;
+                        BranchTaken = true;
                     }
                     break;
                 }
@@ -668,7 +646,7 @@ internal sealed class Exec
                     {
                         short off = _d.Fields.Rel8;
                         _cpu.Pc = (ushort)(_cpu.Pc + off);
-                        _branchTaken = true;
+                        BranchTaken = true;
                     }
                     break;
                 }
@@ -703,7 +681,7 @@ internal sealed class Exec
                     ushort m = Read(args[0], true, false);
                     ushort a4 = (ushort)(_cpu.A & 0xFF);
                     Write(args[0], true, (ushort)((m & 0xF0) | (a4 & 0x0F)));
-                    _cpu.A = (ushort)((_cpu.A & 0xFF00) | ((a4 & 0xF0) | (m & 0x0F)));
+                    _cpu.A = (ushort)((_cpu.A & 0xFF00) | (a4 & 0xF0) | (m & 0x0F));
                     break;
                 }
             case "SMOVI":
@@ -744,8 +722,7 @@ public static class ExecStep
         branchTaken = false;
         ushort pc = cpu.Pc;
 
-        // PC advances past the instruction before execution, so rel8 targets
-        // and pushed return addresses are relative to the *next* instruction.
+        // PC advances past the instruction before execution, so rel8 targets and pushed return addresses are relative to the *next* instruction.
         cpu.Pc = (ushort)(pc + d.Len);
         cpu.Cycles += d.Cycles;
         cpu.Instructions += 1;

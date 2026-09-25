@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -7,10 +8,7 @@ namespace OkiRomSim.Calibration;
 
 // ---------------------------------------------------------------- formulas
 
-/// A scaling formula: raw byte/word in the ROM -> engineering value, and back.
-/// `expr` is in terms of x (the raw value). `inverse` is optional: when it is missing the
-/// raw value is found by searching the raw domain, which works for non-invertible or
-/// piecewise encodings (e.g. Honda's exponent/mantissa RPM byte).
+/// A scaling formula: raw byte/word in the ROM -> engineering value, and back. `expr` is in terms of x (the raw value). `inverse` is optional: when it is missing the raw value is found by searching the raw domain, which works for non-invertible or piecewise encodings (e.g. Honda's exponent/mantissa RPM byte).
 public sealed class FormulaDef
 {
     public string Name { get; set; } = "";
@@ -163,6 +161,8 @@ public sealed class Expression
                             case "log2": st.Push(Math.Log2(Pop())); break;
                             case "exp2": st.Push(Math.Pow(2, Pop())); break;
                             case "sqrt": st.Push(Math.Sqrt(Pop())); break;
+                            // the Honda ECT / IAT thermistor curve: byte -> degrees C
+                            case "hondatemp": st.Push(HondaDatalog.ThermistorC((byte)Math.Clamp(Math.Round(Pop()), 0, 255))); break;
                             case "min": { double b = Pop(), a = Pop(); st.Push(Math.Min(a, b)); break; }
                             case "max": { double b = Pop(), a = Pop(); st.Push(Math.Max(a, b)); break; }
                             case "pow": { double b = Pop(), a = Pop(); st.Push(Math.Pow(a, b)); break; }
@@ -212,6 +212,8 @@ public sealed class AxisDef
     public string? Formula { get; set; }
     public double[]? Values { get; set; }
     public string Unit { get; set; } = "";
+    /// Bytes from one axis value to the next; 0 = packed. Honda (x, y) tables keep the axis interleaved with the values (3 bytes a step for a byte x and a word y).
+    public int Stride { get; set; }
 }
 
 public sealed class ItemDef
@@ -235,6 +237,21 @@ public sealed class ItemDef
     public string? Label { get; set; }
     /// Where the definition came from (source file:line, or the def file).
     public string? Origin { get; set; }
+    /// Which row of a feature page this definition fills, as a stable key ("gpo1.rpm.min"). A ROM's labels are whatever its author called them (and a disassembled stock ROM has none worth the name), so a feature page laid out the way the established tuning software does it cannot find its settings by name alone: it is told once, here, and the answer travels with the definitions - exported, imported and saved with a project like everything else.
+    public string? Slot { get; set; }
+
+    /// One definition can fill several rows (the same byte shown on two pages): Slot then holds them separated by ';'.
+    public bool HasSlot(string slot) => Slot != null && Slot.Split(';').Any(x => x.Equals(slot, StringComparison.OrdinalIgnoreCase));
+    public void AddSlot(string slot) { if (!HasSlot(slot)) Slot = Slot == null ? slot : Slot + ";" + slot; }
+    /// Drop the slots `drop` says to; true when one was dropped.
+    public bool RemoveSlots(Func<string, bool> drop)
+    {
+        if (Slot == null) return false;
+        var keep = Slot.Split(';').Where(x => !drop(x)).ToList();
+        bool changed = keep.Count != Slot.Split(';').Length;
+        Slot = keep.Count == 0 ? null : string.Join(";", keep);
+        return changed;
+    }
     /// Bytes from the start of one row to the next; 0 = Cols * ElementSize (packed). Honda maps store wider rows than they use (e.g. 24 bytes per row, 16 columns).
     public int Stride { get; set; }
     /// Address of a per-column multiplier row (Honda fuel maps keep it right after the last row): the value shown is formula(cell * multiplier[column]).
@@ -245,18 +262,21 @@ public sealed class ItemDef
     public double OnRaw { get; set; } = 0xFF;
     public double OffRaw { get; set; }
 
+    /// Bytes from one cell of a row to the next; 0 = packed. Honda (x, y) tables keep the axis between the values, so a byte-x / word-y table steps 3 bytes a cell and a byte / byte one steps 2.
+    public int ColStride { get; set; }
+
     [JsonIgnore] public bool IsTable => Rows > 0 && Cols > 0;
-    [JsonIgnore] public int RowStride => Stride > 0 ? Stride : Math.Max(Cols, 1) * ElementSize;
+    [JsonIgnore] public int CellStep => ColStride > 0 ? ColStride : ElementSize;
+    [JsonIgnore] public int RowStride => Stride > 0 ? Stride : Math.Max(Cols, 1) * CellStep;
     /// ROM address of element `index` (row-major).
     public int CellAddress(int index)
     {
-        if (!IsTable) return Address + index * ElementSize;
-        return Address + index / Cols * RowStride + index % Cols * ElementSize;
+        return !IsTable ? Address + (index * ElementSize) : Address + (index / Cols * RowStride) + (index % Cols * CellStep);
     }
     /// Bytes spanned by the whole definition (rows at their stride, plus the multiplier row).
     [JsonIgnore]
     public int Span => IsTable
-        ? Math.Max((Rows - 1) * RowStride + Cols * ElementSize, ColumnScaleAddress is int m ? m + Cols - Address : 0)
+        ? Math.Max(((Rows - 1) * RowStride) + ((Cols - 1) * CellStep) + ElementSize, ColumnScaleAddress is int m ? m + Cols - Address : 0)
         : ByteLength;
     public bool Contains(int addr) => addr >= Address && addr < Address + Span;
     /// Row and column of the cell holding `addr`, or null when addr is outside the cells.
@@ -265,8 +285,8 @@ public sealed class ItemDef
         int off = addr - Address;
         if (off < 0) return null;
         if (!IsTable) return off < ByteLength ? (0, off / ElementSize) : null;
-        int r = off / RowStride, c = off % RowStride / ElementSize;
-        return r < Rows && c < Cols ? (r, c) : null;
+        int r = off / RowStride, inRow = off % RowStride, c = inRow / CellStep;
+        return r < Rows && c < Cols && inRow % CellStep < ElementSize ? (r, c) : null;
     }
     [JsonIgnore] public int Count => IsTable ? Rows * Cols : 1;
     [JsonIgnore]
@@ -279,10 +299,10 @@ public sealed class DefinitionSet
     public string Name { get; set; } = "";
     public string? RomId { get; set; }
     public int RomSize { get; set; } = 0x8000;
-    public List<FormulaDef> Formulas { get; set; } = new();
-    public List<ItemDef> Items { get; set; } = new();
+    public List<FormulaDef> Formulas { get; set; } = [];
+    public List<ItemDef> Items { get; set; } = [];
     /// name -> address, for plain label lookups (from the assembler .sym output).
-    public Dictionary<string, int> Symbols { get; set; } = new();
+    public Dictionary<string, int> Symbols { get; set; } = [];
 
     public static readonly JsonSerializerOptions Json = new()
     {
@@ -345,8 +365,8 @@ public static class Builtin
 {
     public static readonly FormulaDef Raw = new() { Name = "raw", Expr = "x", Unit = "", Decimals = 0, Notes = "the stored number, unscaled" };
 
-    public static readonly List<FormulaDef> All = new()
-    {
+    public static readonly List<FormulaDef> All =
+    [
         Raw,
         new FormulaDef
         {
@@ -395,6 +415,72 @@ public static class Builtin
             Name = "map_kpa", Expr = "(x * 7.221 - 59) / 10", Inverse = "(x * 10 + 59) / 7.221", Unit = "kPa", Decimals = 1,
             Notes = "same as map_mbar in kPa",
         },
+        // ---- MSM66911 (Honda P13 / P14). The crank timer ticks every 4 us on that part, which is where its rpm constant comes from; the sensors are its own, not the 66207's.
+        new FormulaDef
+        {
+            Name = "p13_map_mbar", Expr = "x * 1860 / 255 - 70", Inverse = "(x + 70) * 255 / 1860", Unit = "mBar", Decimals = 0,
+            Notes = "P13 MAP from the raw A/D high byte: the sensor reads -70 mBar at 0 V and 1790 at 5 V",
+        },
+        new FormulaDef
+        {
+            Name = "p13_map_axis", Expr = "(x * 128 + 6144) * 1860 / 65535 - 70", Unit = "mBar", Decimals = 0,
+            Notes = "P13 table/axis load byte: the ROM builds it as (Map16 - 0x1800) >> 7, so it covers about 104..1031 mBar " +
+                    "(0.47..2.96 V) and cannot represent boost at all",
+        },
+        new FormulaDef
+        {
+            Name = "p13_thermistor_c",
+            Expr = "((0.1423 * (x/51)^6 - 2.4938 * (x/51)^5 + 17.837 * (x/51)^4 - 68.698 * (x/51)^3 + 154.69 * (x/51)^2 " +
+                   "- 232.75 * (x/51) + 284.24) - 32) * 5 / 9",
+            Unit = "°C", Decimals = 1,
+            Notes = "P13 coolant and intake air share one NTC curve; this is the polynomial in volts (raw/51) the ROM's table follows, converted to Celsius",
+        },
+        new FormulaDef
+        {
+            Name = "p13_volts", Expr = "x / 51", Inverse = "x * 51", Unit = "V", Decimals = 2,
+            Notes = "P13 plain 0-5 V input (TPS, narrowband O2, ELD): raw / 51",
+        },
+        new FormulaDef
+        {
+            Name = "p13_batt_v", Expr = "x * 4.9 / 51", Inverse = "x * 51 / 4.9", Unit = "V", Decimals = 2,
+            Notes = "P13 battery voltage (raw 0x66 = 9.8 V)",
+        },
+        new FormulaDef
+        {
+            Name = "p13_advance", Expr = "(x - 24) / 4", Inverse = "x * 4 + 24", Unit = "deg BTDC", Decimals = 2,
+            Notes = "P13 ignition advance from the streamed byte",
+        },
+        new FormulaDef
+        {
+            Name = "p13_inj_ms", Expr = "x * 4.00839 / 1000", Inverse = "x * 1000 / 4.00839", Unit = "ms", Decimals = 3,
+            Notes = "P13 injector pulse: the ROM's fuel word in 4.00839 us ticks",
+        },
+        new FormulaDef
+        {
+            Name = "p13_rpm8",
+            Expr = "7.8125 * (x + 64) * (x < 64) + 15.625 * x * (x >= 64) * (x < 128) " +
+                   "+ 31.25 * (x - 64) * (x >= 128) * (x < 192) + 62.5 * (x - 128) * (x >= 192)",
+            Unit = "rpm", Decimals = 0, Step = 25,
+            Notes = "P13 8-bit rpm byte: four straight lines meeting at 1000, 2000 and 4000 rpm (0xC0 = 4000). " +
+                    "0xFE and 0xFF are the ROM's saturation markers, not readings",
+        },
+        // ---- the scalings the HTS 1.15 pages use (HTS-master Rom.cs), by what they convert
+        new FormulaDef { Name = "honda_temp_c", Expr = "hondatemp(x)", Unit = "°C", Decimals = 0, Notes = "ECT / IAT byte through the Honda thermistor curve (HTS method_191 / method_230)" },
+        new FormulaDef { Name = "hts_tps_pct", Expr = "(x - 25) / 2.04", Inverse = "x * 2.04 + 25", Unit = "%", Decimals = 0, Notes = "TPS byte as HTS shows it (method_198 / method_228)" },
+        new FormulaDef { Name = "hts_trim_word", Expr = "x * 100 / 32768 - 100", Inverse = "(x + 100) * 32768 / 100", Unit = "%", Decimals = 1, Notes = "word trim, 8000h = 0% (method_203 / method_231, divisor 32768)" },
+        new FormulaDef { Name = "hts_trim_128", Expr = "x * 100 / 128 - 100", Inverse = "(x + 100) * 128 / 100", Unit = "%", Decimals = 1, Notes = "byte trim, 80h = 0% (method_205, divisor 128)" },
+        new FormulaDef { Name = "hts_trim_64", Expr = "x * 100 / 64 - 100", Inverse = "(x + 100) * 64 / 100", Unit = "%", Decimals = 1, Notes = "byte trim, 40h = 0% (method_205, divisor 64)" },
+        new FormulaDef { Name = "hts_signed_trim", Expr = "(x - 128) * 100 / 128", Inverse = "x * 128 / 100 + 128", Unit = "%", Decimals = 1, Notes = "byte trim centred on 80h" },
+        new FormulaDef { Name = "hts_half_step", Expr = "(x - 128) * 0.5", Inverse = "x / 0.5 + 128", Unit = "", Decimals = 1, Notes = "method_190 / method_222" },
+        new FormulaDef { Name = "hts_duty_half", Expr = "x / 2", Inverse = "x * 2", Unit = "%", Decimals = 1, Notes = "solenoid duty, 2 per % (method_207 / method_211)" },
+        new FormulaDef { Name = "hts_x10_ms", Expr = "x * 10", Inverse = "x / 10", Unit = "ms", Decimals = 0, Notes = "10 ms steps" },
+        new FormulaDef { Name = "hts_x01_s", Expr = "x * 0.1", Inverse = "x / 0.1", Unit = "s", Decimals = 1, Notes = "0.1 s steps" },
+        new FormulaDef { Name = "hts_quarter", Expr = "x / 4", Inverse = "x * 4", Unit = "", Decimals = 2, Notes = "quarter steps (method_223)" },
+        new FormulaDef { Name = "hts_quarter_deg", Expr = "x / 4", Inverse = "x * 4", Unit = "°", Decimals = 2, Notes = "0.25 degree steps" },
+        new FormulaDef { Name = "hts_eighth", Expr = "x / 8", Inverse = "x * 8", Unit = "", Decimals = 2, Notes = "eighth steps" },
+        new FormulaDef { Name = "hts_batt_v", Expr = "x * 26 / 270", Inverse = "x * 270 / 26", Unit = "V", Decimals = 2, Notes = "battery through the ECU divider (method_208)" },
+        new FormulaDef { Name = "hts_dwell_batt_v", Expr = "x * 0.052 + 6.26", Inverse = "(x - 6.26) / 0.052", Unit = "V", Decimals = 2, Notes = "dwell battery axis" },
+        new FormulaDef { Name = "hts_x16", Expr = "x * 16", Inverse = "x / 16", Unit = "", Decimals = 0, Notes = "16 per step" },
         new FormulaDef
         {
             Name = "percent255", Expr = "x * 100 / 255", Inverse = "x * 255 / 100", Unit = "%", Decimals = 1,
@@ -413,7 +499,7 @@ public static class Builtin
         new FormulaDef
         {
             Name = "speed_kmh_byte", Expr = "x", Unit = "km/h", Decimals = 0,
-            Notes = "PLACEHOLDER: speed scaling has not been confirmed for these ROMs - verify with okisim xref before use",
+            Notes = "road speed byte in km/h (HTS method_197 / method_233 show and store it as is)",
         },
         new FormulaDef
         {
@@ -430,7 +516,7 @@ public static class Builtin
             Name = "ms_per_count", Expr = "x / 1000", Inverse = "x * 1000", Unit = "ms", Decimals = 3,
             Notes = "PLACEHOLDER for injector timing in microsecond counts - confirm the tick rate with xref",
         },
-    };
+    ];
 }
 
 // ---------------------------------------------------------------- ROM access
@@ -452,10 +538,10 @@ public static class RomData
     {
         CellType.U8 => rom[addr],
         CellType.S8 => (sbyte)rom[addr],
-        CellType.U16 => (ushort)(rom[addr] | rom[addr + 1] << 8),
-        CellType.S16 => (short)(rom[addr] | rom[addr + 1] << 8),
-        CellType.U16BE => (ushort)(rom[addr] << 8 | rom[addr + 1]),
-        CellType.S16BE => (short)(rom[addr] << 8 | rom[addr + 1]),
+        CellType.U16 => (ushort)(rom[addr] | (rom[addr + 1] << 8)),
+        CellType.S16 => (short)(rom[addr] | (rom[addr + 1] << 8)),
+        CellType.U16BE => (ushort)((rom[addr] << 8) | rom[addr + 1]),
+        CellType.S16BE => (short)((rom[addr] << 8) | rom[addr + 1]),
         CellType.Bit => (rom[addr] >> bit) & 1,
         _ => rom[addr],
     };
@@ -473,7 +559,7 @@ public static class RomData
     }
 
     static double Multiplier(byte[] rom, ItemDef item, int index) =>
-        item.ColumnScaleAddress is int m && item.IsTable ? Math.Max(1, (int)rom[(m + index % item.Cols) & (rom.Length - 1)]) : 1;
+        item.ColumnScaleAddress is int m && item.IsTable ? Math.Max(1, (int)rom[(m + (index % item.Cols)) & (rom.Length - 1)]) : 1;
 
     public static CellValue[] Read(DefinitionSet defs, byte[] rom, ItemDef item)
     {
@@ -511,18 +597,23 @@ public static class RomData
     public static double[] AxisValues(DefinitionSet defs, byte[] rom, AxisDef? axis, int count)
     {
         if (axis?.Values is { Length: > 0 } v) return v;
-        if (axis?.Address is not int addr) return Enumerable.Range(0, count).Select(i => (double)i).ToArray();
+        if (axis?.Address is not int addr) return [.. Enumerable.Range(0, count).Select(i => (double)i)];
         var f = defs.Formula(axis.Formula);
         int size = axis.Type is CellType.U16 or CellType.S16 or CellType.U16BE or CellType.S16BE ? 2 : 1;
         var result = new double[count];
+        var raws = new double[count];
         for (int i = 0; i < count; i++)
         {
-            if (axis.Count > 0 && i >= axis.Count) { result[i] = double.NaN; continue; }
-            int a = addr + i * size;
-            if (a < 0 || a + size > rom.Length) { result[i] = double.NaN; continue; }
-            double raw = ReadRaw(rom, a, axis.Type);
-            // Honda byte axes end on 00 meaning 256 (one past FF)
-            if (size == 1 && i > 0 && raw == 0 && axis.Type == CellType.U8) raw = 256;
+            int a = addr + (i * (axis.Stride > 0 ? axis.Stride : size));
+            raws[i] = (axis.Count > 0 && i >= axis.Count) || a < 0 || a + size > rom.Length ? double.NaN : ReadRaw(rom, a, axis.Type);
+        }
+        // Honda byte axes that climb end on 00 meaning 256 (one past FF); the (x, y) lists that fall from FF end on a real 00
+        bool falling = count > 1 && raws[1] < raws[0];
+        for (int i = 0; i < count; i++)
+        {
+            double raw = raws[i];
+            if (double.IsNaN(raw)) { result[i] = double.NaN; continue; }
+            if (!falling && size == 1 && i > 0 && raw == 0 && axis.Type == CellType.U8) raw = 256;
             result[i] = f.ToValue(raw);
         }
         return result;
@@ -549,7 +640,7 @@ public static class RomData
         for (int r = 0; r < item.Rows; r++)
         {
             sb.Append($"{rows[r],8:0.##}");
-            for (int c = 0; c < item.Cols; c++) sb.Append($"{cells[r * item.Cols + c].Value,8:0.##}");
+            for (int c = 0; c < item.Cols; c++) sb.Append($"{cells[(r * item.Cols) + c].Value,8:0.##}");
             sb.AppendLine();
         }
         if (item.RowAxis != null) sb.AppendLine($"   ^ rows: {item.RowAxis.Name ?? "row"}{(item.RowAxis.Unit.Length > 0 ? " (" + item.RowAxis.Unit + ")" : "")}");

@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Globalization;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -9,8 +10,7 @@ using static OkiRomSim.Mcp.OkiTools;
 
 namespace OkiRomSim.Mcp;
 
-/// Calibration, comparison, datalog, emulator and simulator tools. Every calibration tool works on a file (`path`: a .bin, or a .asm that is assembled) or - inside the desktop app, with `path` left out - on the ROM open there, so the user watches the agent's edits land.
-/// File mode keeps definitions next to the ROM as <rom>.okidef.json (created by cal_detect or cal_define). Edits to a .bin are written straight back to it (a .bak is kept once); edits to a .asm image stay in memory until cal_save writes a .bin.
+/// Calibration, comparison, datalog, emulator and simulator tools. Every calibration tool works on a file (`path`: a .bin, or a .asm that is assembled) or - inside the desktop app, with `path` left out - on the ROM open there, so the user watches the agent's edits land. File mode keeps definitions next to the ROM as <rom>.okidef.json (created by cal_detect or cal_define). Edits to a .bin are written straight back to it (a .bak is kept once); edits to a .asm image stay in memory until cal_save writes a .bin.
 public sealed class CalTools
 {
     readonly Workspace _ws;
@@ -29,7 +29,7 @@ public sealed class CalTools
         public required DefinitionSet Defs;
         public required byte[] Rom;
         public AssemblyResult? Asm;
-        public IReadOnlyList<(string Path, string Text)> Sources = Array.Empty<(string, string)>();
+        public IReadOnlyList<(string Path, string Text)> Sources = [];
         public IMcpSession? Session;
         public string? File;          // file mode
         public string? DefsFile;
@@ -45,8 +45,9 @@ public sealed class CalTools
         if (string.IsNullOrWhiteSpace(p) || p.Equals("session", StringComparison.OrdinalIgnoreCase))
         {
             var s = Session ?? throw new ToolException($"'{key}' is required (no ROM is open in an app session: pass the .bin or .asm to work on)");
-            if (s.RomPath == null) throw new ToolException("nothing is open in the app: open a ROM there first, or pass a path");
-            return new Target
+            return s.RomPath == null
+                ? throw new ToolException("nothing is open in the app: open a ROM there first, or pass a path")
+                : new Target
             {
                 Name = Path.GetFileName(s.RomPath), Defs = s.Definitions(), Rom = s.Rom(), Asm = s.Assembly, Sources = s.Sources(), Session = s,
             };
@@ -63,7 +64,7 @@ public sealed class CalTools
         defs.MergeBuiltinFormulas();
         var t = new Target
         {
-            Name = Path.GetFileName(full), Defs = defs, Rom = prog.Image.ToArray(), Asm = prog.Asm, File = full, DefsFile = defsFile,
+            Name = Path.GetFileName(full), Defs = defs, Rom = [.. prog.Image], Asm = prog.Asm, File = full, DefsFile = defsFile,
             Sources = prog.Sources.Select(kv => (kv.Key, string.Join("\n", kv.Value))).ToList(),
         };
         _files[full] = (stamp, t);
@@ -173,6 +174,13 @@ public sealed class CalTools
             Schema(PathArg, ("format", "string", "bin, defs, xdf or all (default bin)", false), ("output", "string", "output file (bin/defs/xdf: extension is set per format)", false)),
             CalSave, ReadOnly: false);
 
+        yield return new McpTool("cal_features",
+            "Code patches from a feature file (roms/features.json by default): list them with whether each fits this ROM (on / off / partial / not for this ROM), " +
+            "or apply / remove one by id - disable a trouble code, MIL off, known base-ROM fixes. Every site is checked against the bytes it expects first, " +
+            "and removing restores exactly what was there. In the app the change is one undo step on the running ROM.",
+            Schema(PathArg, ("action", "string", "list (default), apply, remove or show", false), ("id", "string", "feature id for apply/remove/show", false),
+                   ("file", "string", "feature file (default: features.json next to the program)", false)), CalFeatures, ReadOnly: false);
+
         yield return new McpTool("compare",
             "What changed between two ROMs (.bin or .asm; 'session' = the app's): routines added/removed/changed/moved (with the hardware, calls and tables they gained or lost), " +
             "vectors, and every calibration table that differs cell by cell. mode: all (default), functions, tables.",
@@ -261,7 +269,7 @@ public sealed class CalTools
             sb.Append((rowAxis != null && r < rowAxis.Length ? rowAxis[r].ToString("0", Inv) : r.ToString()).PadLeft(7)).Append("  ");
             for (int c = 0; c < item.Cols; c++)
             {
-                var cv = cells[r * item.Cols + c];
+                var cv = cells[(r * item.Cols) + c];
                 sb.Append((raw ? cv.Raw.ToString("0", Inv) : cv.Value.ToString("F" + Math.Clamp(f.Decimals, 0, 3), Inv)).PadLeft(w));
             }
             sb.AppendLine();
@@ -280,8 +288,7 @@ public sealed class CalTools
         int hi = lo;
         if (p.Length == 2 && !int.TryParse(p[1].Trim(), out hi)) throw new ToolException($"bad range '{s}'");
         if (lo > hi) (lo, hi) = (hi, lo);
-        if (lo < 0 || hi >= n) throw new ToolException($"'{s}' is outside 0-{n - 1}");
-        return (lo, hi);
+        return lo < 0 || hi >= n ? throw new ToolException($"'{s}' is outside 0-{n - 1}") : ((int Lo, int Hi)?)(lo, hi);
     }
 
     static double Num(JsonNode? n) => n is JsonValue v && v.TryGetValue<double>(out var d) ? d
@@ -299,7 +306,7 @@ public sealed class CalTools
         double Cur(int i) => raw ? before[i].Raw : before[i].Value;
         double Apply(int i, double v) => op switch
         {
-            "set" => v, "add" => Cur(i) + v, "mul" => Cur(i) * v, "pct" => Cur(i) * (1 + v / 100),
+            "set" => v, "add" => Cur(i) + v, "mul" => Cur(i) * v, "pct" => Cur(i) * (1 + (v / 100)),
             _ => throw new ToolException($"unknown op '{op}' (set, add, mul, pct)"),
         };
 
@@ -310,7 +317,7 @@ public sealed class CalTools
                 if (c is not JsonArray triple || triple.Count != 3) throw new ToolException("cells must be [[row, col, value], ...]");
                 int r = (int)Num(triple[0]), cc = (int)Num(triple[1]);
                 if (r < 0 || r >= rows || cc < 0 || cc >= cols) throw new ToolException($"cell [{r},{cc}] is outside {rows}x{cols}");
-                target[r * cols + cc] = Apply(r * cols + cc, Num(triple[2]));
+                target[(r * cols) + cc] = Apply((r * cols) + cc, Num(triple[2]));
             }
         }
         else if (a["grid"] is JsonArray grid)
@@ -323,7 +330,7 @@ public sealed class CalTools
                 {
                     int r = r0 + dr, cc = c0 + dc;
                     if (r >= rows || cc >= cols) throw new ToolException($"grid runs past the table ({rows}x{cols}) at [{r},{cc}]");
-                    target[r * cols + cc] = Apply(r * cols + cc, Num(line[dc]));
+                    target[(r * cols) + cc] = Apply((r * cols) + cc, Num(line[dc]));
                 }
             }
         }
@@ -343,7 +350,7 @@ public sealed class CalTools
                 if (item.IsTable && item.Count > 1 && S(a, "row") == null && S(a, "col") == null && op == "set")
                     throw new ToolException("give row and/or col (or index / cells / grid): setting a whole table to one value is almost never meant");
                 for (int r = rr.Item1; r <= rr.Item2; r++)
-                    for (int c = cr.Item1; c <= cr.Item2; c++) target[r * cols + c] = Apply(r * cols + c, v);
+                    for (int c = cr.Item1; c <= cr.Item2; c++) target[(r * cols) + c] = Apply((r * cols) + c, v);
             }
         }
         if (target.Count == 0) return "no cells picked";
@@ -386,7 +393,7 @@ public sealed class CalTools
         var work = t.Rom.ToArray();                     // the report is built against a copy
         ScaleReport report = op switch
         {
-            "table" => Rescale.ScaleTable(t.Defs, work, Item(t, Req(a, "name")), 1 + D("percent", 0) / 100),
+            "table" => Rescale.ScaleTable(t.Defs, work, Item(t, Req(a, "name")), 1 + (D("percent", 0) / 100)),
             "headroom" => Rescale.Headroom(t.Defs, work, Item(t, Req(a, "name")), (int)D("peak", 200)),
             "injectors" => Rescale.Injectors(t.Defs, work, FuelTables(t), D("old", 0), D("new", 0)),
             "map_sensor" or "map" => Rescale.MapSensor(t.Defs, work,
@@ -412,6 +419,48 @@ public sealed class CalTools
         return report.Summary + $"\n{report.Patches.Count} byte(s) written, {where}";
     }
 
+    string CalFeatures(JsonObject a)
+    {
+        var t = Open(a);
+        var file = S(a, "file") ?? FeatureFile.DefaultPath;
+        if (!File.Exists(file)) throw new ToolException($"no feature file at {file}");
+        var ff = FeatureFile.Load(file);
+        string action = (S(a, "action") ?? "list").ToLowerInvariant();
+        if (action == "list")
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (var f in ff.Features)
+            {
+                var c = FeaturePatches.Check(f, t.Rom);
+                sb.AppendLine($"{f.Id,-30} {c.State,-13} {f.Name}");
+            }
+            return sb.ToString();
+        }
+        var id = Req(a, "id");
+        var feat = ff.Features.FirstOrDefault(f => f.Id.Equals(id, StringComparison.OrdinalIgnoreCase)) ?? throw new ToolException($"no feature '{id}'");
+        var check = FeaturePatches.Check(feat, t.Rom);
+        if (action == "show")
+            return $"{feat.Name} [{feat.Category}] - {check.Detail}\n{feat.Description}\nChecked: {feat.Verified}\n" +
+                   string.Join("\n", (check.Variant?.Sites ?? []).Select(x => $"  {x.Address}: {x.Original} -> {x.Patched} {x.Note}"));
+        if (action is not ("apply" or "remove")) throw new ToolException($"unknown action '{action}' (list, show, apply, remove)");
+        if (check.State == FeatureState.NotApplicable) throw new ToolException($"{id} does not fit this ROM");
+        var patches = FeaturePatches.Patches(feat, t.Rom, action == "remove", ff.ChecksumByte);
+        if (patches.Count == 0) return $"{id}: already {(action == "remove" ? "off" : "on")}";
+        string where;
+        if (t.Session != null)
+        {
+            t.Session.ApplyPatches(patches, $"MCP {action} feature {id}");
+            t.Rom = t.Session.Rom();
+            where = "in the app's running ROM (Undo takes it back)";
+        }
+        else
+        {
+            foreach (var p in patches) t.Rom[p.Address] = p.Value;
+            where = CommitRom(t);
+        }
+        return $"{id}: {patches.Count} byte(s) {(action == "remove" ? "restored" : "written")} {where}";
+    }
+
     static IEnumerable<ItemDef> FuelTables(Target t) =>
         t.Defs.Items.Where(i => i.IsTable && i.Count > 1 &&
             (i.ColumnScaleAddress != null || i.Category.Equals("Fuel", StringComparison.OrdinalIgnoreCase)));
@@ -424,8 +473,9 @@ public sealed class CalTools
         if (t.Defs.TryResolve(text, out var a)) return a;
         if (t.Asm != null && t.Asm.Symbols.TryGetValue(text, out var s)) return (int)s.Value;
         var hex = text.EndsWith("h", StringComparison.OrdinalIgnoreCase) ? text[..^1] : text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? text[2..] : text;
-        if (int.TryParse(hex, NumberStyles.HexNumber, Inv, out a)) return a;
-        throw new ToolException($"cannot resolve '{text}' (a label or a hex address)");
+        return int.TryParse(hex, NumberStyles.HexNumber, Inv, out a)
+            ? a
+            : throw new ToolException($"cannot resolve '{text}' (a label or a hex address)");
     }
 
     string CalDefine(JsonObject a)
@@ -457,7 +507,7 @@ public sealed class CalTools
             if (S(a, "formula") is { Length: > 0 } fo) { try { defs.Formula(fo); } catch { throw new ToolException($"no formula '{fo}' (cal_formulas lists them)"); } item.Formula = fo; }
             AxisDef? Axis(string key, string fkey, AxisDef? old, int count)
             {
-                if (a[key] == null) { if (old != null && S(a, fkey) is { Length: > 0 } of) old.Formula = of; if (old != null) old.Count = count; return old; }
+                if (a[key] == null) { if (old != null && S(a, fkey) is { Length: > 0 } of) old.Formula = of; old?.Count = count; return old; }
                 var text = S(a, key) ?? "";
                 if (text.Trim().Length == 0) return null;
                 var f = S(a, fkey) ?? old?.Formula ?? "raw";
@@ -473,8 +523,9 @@ public sealed class CalTools
             if (a["on_raw"] != null) item.OnRaw = D(a, "on_raw", 0xFF);
             if (a["off_raw"] != null) item.OffRaw = D(a, "off_raw", 0);
             if (a["bit"] != null) item.Bit = Math.Clamp(I(a, "bit", 0), 0, 7);
-            if (item.Address < 0 || item.Address + item.Span > Math.Max(t.Rom.Length, Bus.RomSize)) throw new ToolException($"{item.Name} would run past the end of the ROM");
-            return $"{(created ? "added" : "updated")} {item.Name}: {item.Address:X4} {(item.IsTable ? $"{item.Rows}x{item.Cols}" : "setting")} {item.Type.ToString().ToLowerInvariant()} " +
+            return item.Address < 0 || item.Address + item.Span > Math.Max(t.Rom.Length, Bus.RomSize)
+                ? throw new ToolException($"{item.Name} would run past the end of the ROM")
+                : $"{(created ? "added" : "updated")} {item.Name}: {item.Address:X4} {(item.IsTable ? $"{item.Rows}x{item.Cols}" : "setting")} {item.Type.ToString().ToLowerInvariant()} " +
                    $"formula {item.Formula ?? "raw"} [{item.Category}]" +
                    (item.RowAxis?.Address is int ra ? $", rows {ra:X4}" : "") + (item.ColAxis?.Address is int ca ? $", cols {ca:X4}" : "");
         }
@@ -622,8 +673,9 @@ public sealed class CalTools
             File.WriteAllText(outPath, XdfExport.Write(t.Defs, t.Rom, Path.GetFileNameWithoutExtension(baseName)));
             done.Add($"TunerPro XDF -> {_ws.Show(outPath)} ({t.Defs.Items.Count} definitions)");
         }
-        if (done.Count == 0) throw new ToolException($"unknown format '{format}' (bin, defs, xdf, all)");
-        return "saved: " + string.Join("; ", done);
+        return done.Count == 0
+            ? throw new ToolException($"unknown format '{format}' (bin, defs, xdf, all)")
+            : "saved: " + string.Join("; ", done);
     }
 
     // ------------------------------------------------------------------ compare
@@ -678,8 +730,9 @@ public sealed class CalTools
                     var target = Open(a);
                     var r = DatalogLayout.Detect(target.Rom);
                     if (r.Known != null) return $"{target.Name} speaks {r.Known.Name}: {r.Known.Description}\n\n{r.Report}";
-                    if (r.Protocol != null) return $"{target.Name}: {r.Protocol.Description}\n\n{r.Report}";
-                    return $"{target.Name}: no datalogging found.\n\n{r.Report}";
+                    return r.Protocol != null
+                        ? $"{target.Name}: {r.Protocol.Description}\n\n{r.Report}"
+                        : $"{target.Name}: no datalogging found.\n\n{r.Report}";
                 }
         }
         var s = Session ?? throw new ToolException($"datalog {action} needs the desktop app (overlay and stats also work on a `log` file)");
@@ -691,14 +744,15 @@ public sealed class CalTools
         if (S(a, "log") is { Length: > 0 } log) return LogFile.Load(_ws.Resolve(log));
         var s = Session ?? throw new ToolException("give `log` (a .csv or the tuning software datalog file)");
         var f = s.DatalogFrames().ToList();
-        if (f.Count == 0) throw new ToolException("the app has no datalog frames yet: start logging (datalog action=start) or load a log");
-        return f;
+        return f.Count == 0
+            ? throw new ToolException("the app has no datalog frames yet: start logging (datalog action=start) or load a log")
+            : f;
     }
 
     string Stats(JsonObject a)
     {
         var frames = Frames(a);
-        var channels = (a["channels"] as JsonArray)?.Select(x => x!.ToString()).ToList() ?? frames.SelectMany(f => f.Channels()).Distinct().ToList();
+        var channels = (a["channels"] as JsonArray)?.Select(x => x!.ToString()).ToList() ?? [.. frames.SelectMany(f => f.Channels()).Distinct()];
         var sb = new StringBuilder($"{frames.Count} frames, {frames[^1].T - frames[0].T:0.0} s{(frames[0].Protocol != null ? $", {frames[0].Protocol}" : "")}\nchannel | min | avg | max | samples\n");
         foreach (var c in channels)
         {
@@ -718,8 +772,8 @@ public sealed class CalTools
         int minN = Math.Max(1, I(a, "min_samples", 3));
         var ov = LogOverlay.Compute(t.Defs, t.Rom, item, frames, channel);
         if (ov.Frames == 0) throw new ToolException($"no frame has both '{channel}' and the table's axis inputs ({ov.RowSource}, {ov.ColSource}); channels logged: {string.Join(", ", frames.SelectMany(f => f.Channels()).Distinct())}");
-        var rowAxis = item.RowAxis == null ? Enumerable.Range(0, item.Rows).Select(i => (double)i).ToArray() : RomData.AxisValues(t.Defs, t.Rom, item.RowAxis, item.Rows);
-        var colAxis = item.ColAxis == null ? Enumerable.Range(0, item.Cols).Select(i => (double)i).ToArray() : RomData.AxisValues(t.Defs, t.Rom, item.ColAxis, item.Cols);
+        var rowAxis = item.RowAxis == null ? [.. Enumerable.Range(0, item.Rows).Select(i => (double)i)] : RomData.AxisValues(t.Defs, t.Rom, item.RowAxis, item.Rows);
+        var colAxis = item.ColAxis == null ? [.. Enumerable.Range(0, item.Cols).Select(i => (double)i)] : RomData.AxisValues(t.Defs, t.Rom, item.ColAxis, item.Cols);
         var sb = new StringBuilder(ov.Render(rowAxis, colAxis));
         if (a["target_afr"] != null)
         {

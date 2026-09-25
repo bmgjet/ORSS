@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 namespace OkiRomSim.Mcp;
 
 /// What an agent needs to know to read and write 66K (MSM66207 / nX-8/200) assembly, by topic. Written from the datasheet, the opcode grammar and what the simulator had to get right to run the stock Honda ROMs.
@@ -189,8 +190,8 @@ P3.0 TX  P3.1 RX (datalog)  P3.2 VSS (INT0)  P3.3 TDC (INT1)  P3.4 injector gate
 P3.5 IACV PWM  P3.6 CKP (TM2 capture, 24 pulses per cam turn)  P3.7 ignition (TM3 output)
 P4.2 EGR (PWM0)  P4.3 A/T lockup (PWM1)  P4.4 CYP (TRNS0)  P4.5 ICM test / igniter feedback (TRNS1)
 P4.6 injector test / driver feedback (TRNS2; some ROMs also read it in their VTEC logic)
-Analog: P5.0 U6 out (mux: ch0 ECT, ch3 baro, ch7 IAT)  P5.1 U5 out (mux: ch0 O2)  P5.2 ALT FR
-        P5.3 EGR lift  P5.5 battery (divider)  P5.6 MAP  P5.7 TPS
+Analog: P5.0 U6 out (mux: ch0 O2, ch2 IAT, ch3 baro, ch7 battery)  P5.1 U5 out (mux: ch0 ELD, ch2 ECT)
+        P5.2 ALT FR  P5.3 EGR lift  P5.6 MAP  P5.7 TPS   (mux ch n of U6 lands at 0x3CA+n, of U5 at 0x3D2+n)
 Scalings used by the tuning software: rpm = 1,875,000 / period word; MAP mbar = byte*7.221-59;
 TPS % = (byte-25)/2.04; ignition deg = byte*0.25-6; injector ms = word*3.2/1000.
 """),

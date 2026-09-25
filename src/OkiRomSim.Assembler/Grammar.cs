@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Reflection;
 using System.Text.RegularExpressions;
 
@@ -27,8 +28,7 @@ public sealed class Rule
 
 public sealed class Grammar
 {
-    static Grammar? _instance;
-    public static Grammar Instance => _instance ??= Load();
+    public static Grammar Instance => field ??= Load();
 
     readonly Dictionary<string, List<Rule>> _byMnemonic = new(StringComparer.OrdinalIgnoreCase);
     public IReadOnlyCollection<string> Mnemonics => _byMnemonic.Keys;
@@ -36,7 +36,7 @@ public sealed class Grammar
 
     public bool IsMnemonic(string s) => _byMnemonic.ContainsKey(s) || s.Equals("VCAL", StringComparison.OrdinalIgnoreCase);
     public IReadOnlyList<Rule> RulesFor(string mnem) =>
-        _byMnemonic.TryGetValue(mnem, out var l) ? l : (IReadOnlyList<Rule>)Array.Empty<Rule>();
+        _byMnemonic.TryGetValue(mnem, out var l) ? l : (IReadOnlyList<Rule>)[];
     public IEnumerable<Rule> AllRules => _byMnemonic.Values.SelectMany(x => x).OrderBy(r => r.Order);
 
     static readonly Regex RuleRe = new(@"^\s*\|\s*(\S+)\s*(.*?)\s*NL\s*\{\s*u8 instr\[(\d+)\] = \{([^}]*)\};(.*?)emit\(instr,\s*\d+\);\s*\}\s*$");
@@ -70,9 +70,9 @@ public sealed class Grammar
             var rule = new Rule
             {
                 Mnemonic = m.Groups[1].Value.ToUpperInvariant(), Symbols = syms, Template = tmpl,
-                Actions = acts.ToArray(), Order = order++
+                Actions = [.. acts], Order = order++
             };
-            if (!g._byMnemonic.TryGetValue(rule.Mnemonic, out var list)) g._byMnemonic[rule.Mnemonic] = list = new();
+            if (!g._byMnemonic.TryGetValue(rule.Mnemonic, out var list)) g._byMnemonic[rule.Mnemonic] = list = [];
             list.Add(rule);
         }
         g.RuleCount = order;

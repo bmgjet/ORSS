@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Collections.Concurrent;
 using System.Net;
 using System.Security.Cryptography;
@@ -42,10 +43,7 @@ public sealed class McpHttpOptions
     public string? CertificatePassword { get; set; }
 }
 
-/// MCP "Streamable HTTP" transport: clients POST JSON-RPC to /mcp and get the response as
-/// application/json. Every request needs `Authorization: Bearer <password>` (or an
-/// `X-Api-Key: <password>` header) when a password is set; wrong passwords are slowed down
-/// and an address that keeps failing is locked out for a while.
+/// MCP "Streamable HTTP" transport: clients POST JSON-RPC to /mcp and get the response as application/json. Every request needs `Authorization: Bearer <password>` (or an `X-Api-Key: <password>` header) when a password is set; wrong passwords are slowed down and an address that keeps failing is locked out for a while.
 public sealed class McpHttp : IAsyncDisposable
 {
     readonly McpServer _server;

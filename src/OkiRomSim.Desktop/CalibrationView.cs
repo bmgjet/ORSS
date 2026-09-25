@@ -1,7 +1,9 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Globalization;
 using System.Text.RegularExpressions;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.VisualTree;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -12,15 +14,7 @@ using OkiRomSim.Core;
 
 namespace OkiRomSim.Desktop;
 
-/// Calibration tab, a full editor for the ROM's settings and maps:
-/// - maps drawn as tuners expect (RPM rows, load columns, coloured cells) with Line
-/// and 3D views, multi-cell editing, copy/paste, interpolate/smooth, undo/redo;
-/// - settings as number boxes, switches as checkboxes, all in a tree by category;
-/// - live trace: the cells the simulated program is reading light up (aqua, lime trail) -
-/// or, in Tuner mode, the cell the car is in according to the datalog;
-/// - a logged channel (wideband AFR, knock...) averaged per cell over the map;
-/// - Detect, definitions editing, Import/Export (JSON, TunerPro XDF), Save .bin, and the
-/// ROM emulator (connect, upload, upload every change as it is made).
+/// Calibration tab, a full editor for the ROM's settings and maps: - maps drawn as tuners expect (RPM rows, load columns, coloured cells) with Line and 3D views, multi-cell editing, copy/paste, interpolate/smooth, undo/redo; - settings as number boxes, switches as checkboxes, all in a tree by category; - live trace: the cells the simulated program is reading light up (aqua, lime trail) - or, in Tuner mode, the cell the car is in according to the datalog; - a logged channel (wideband AFR, knock...) averaged per cell over the map; - Detect, definitions editing, Import/Export (JSON, TunerPro XDF), Save .bin, and the ROM emulator (connect, upload, upload every change as it is made).
 public sealed class CalibrationView : UserControl
 {
     readonly SimHost _host;
@@ -32,14 +26,21 @@ public sealed class CalibrationView : UserControl
     readonly TextBlock _status = new() { FontSize = 11, Opacity = 0.85, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(12, 0, 0, 0) };
     readonly CheckBox _live = new() { Content = "Live trace", IsChecked = true, FontSize = 11 };
     readonly CheckBox _follow = new() { Content = "Follow reads when stepping", IsChecked = true, FontSize = 11 };
+    /// Keep the table's selection on the cell the engine is in (the live trace), scrolled into view.
+    readonly CheckBox _lock = new() { Content = "Lock to live cell", IsChecked = false, FontSize = 11 };
+    (int R, int C) _locked = (-1, -1);
+
+    /// The Datalogging menu's lines, from the datalog panel (set by the main window): (live trace on?, set it) -> entries.
+    public Func<Func<bool>, Action<bool>, Toolbar.Entry[]>? DatalogMenu { get; set; }
     readonly CheckBox _autoUpload = new() { Content = "Upload on changes", FontSize = 11 };
     readonly Button _emuButton;
     readonly TextBlock _emuStatus = new() { FontSize = 11, Opacity = 0.75, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0), MaxWidth = 260, TextTrimming = TextTrimming.CharacterEllipsis };
-    readonly ComboBox _overlayPick = new() { Width = 110, FontSize = 11 };
-    readonly HashSet<string> _openCategories = new() { "Fuel", "Ignition" };
-    List<ItemDef> _items = new();
+    /// Which logged channel is laid over the map (Tools > Overlay); "none" for no overlay.
+    string _overlayChannel = "none";
+    List<string> _overlayChannels = ["none"];
+    readonly HashSet<string> _openCategories = ["Fuel", "Ignition"];
+    List<ItemDef> _items = [];
     bool _updating;
-    ItemDef? _selected;
 
     // current table
     ItemDef? _item;
@@ -75,6 +76,8 @@ public sealed class CalibrationView : UserControl
     public event Action? CompareRequested;
     readonly Button _expand = new() { Content = "⤢ Expand", Margin = new Thickness(2, 1), FontSize = 11.5, Padding = new Thickness(7, 2) };
     double _trail = 1.0;
+    /// Set when a write worked out to no byte change at all, so the page can say why.
+    bool _nothingChanged;
     /// Emulator serial port (from Settings).
     public string EmulatorPort { get; set; } = "";
     /// Datalog frames for the overlay (the engine's recorded frames, or a loaded log).
@@ -96,7 +99,7 @@ public sealed class CalibrationView : UserControl
         _follow.IsVisible = !tuner;
         ToolTip.SetTip(_live, tuner ? "Mark the cell the car is in, from the datalog (rpm and load against the table's axes)."
                                     : "Colour the cells the simulated program is reading: aqua = just now, fading lime = recently.");
-        if (_model != null) { _model.Heat = new(); _model.ExternalTrace = null; Redraw(); }
+        if (_model != null) { _model.Heat = []; _model.ExternalTrace = null; Redraw(); }
     }
 
     static NumericUpDown Num(double min, double max) => new() { Width = 100, Minimum = (decimal)min, Maximum = (decimal)max, Increment = 1, FormatString = "0" };
@@ -105,7 +108,7 @@ public sealed class CalibrationView : UserControl
     {
         _host = host; _sources = sources; _top = top;
         _emuButton = Btn("Connect emulator", ToggleEmulator,
-            "Connect to the Moates Ostrich 2.0 / Demon on the port set in Settings and upload the ROM (with every edit made here), so the car runs it. Press again to disconnect.");
+            "Connect to the emulator on the port set in Settings (the device and its baud rate are set there too) and upload the ROM, with every edit made here, so the car runs it. Press again to disconnect.");
 
         var bar = new WrapPanel { Margin = new Thickness(4) };
         _expand.Click += (_, _) => ExpandRequested?.Invoke();
@@ -116,6 +119,26 @@ public sealed class CalibrationView : UserControl
             new Toolbar.Entry(Toolbar.Detect, "Detect",
                 "Scan the assembly for calibration data: the maps set up for the 2D lookup (with their RPM and load axes, row stride and fuel multiplier row), " +
                 "labelled DB/DW blocks, tables the code reads with LC/LCB, and on/off switches. New finds are added to the list.", Detect),
+            Toolbar.Entry.Line,
+            Toolbar.Entry.Submenu(Toolbar.Log, "Overlay",
+                "Lay a datalogged channel over the map: its average in every cell the engine sat in (wideband AFR over the fuel map, knock over the ignition map...).",
+                OverlayEntries),
+            Toolbar.Entry.Line,
+            new Toolbar.Entry(Toolbar.Scale, "Injector size\u2026",
+                "Stock and fitted injector size, the multiplier they come to, the injector offset and the fuel trims - and the fuel maps scaled to match.",
+                () => OpenInjectors()),
+            new Toolbar.Entry(Toolbar.Scale, "MAP sensor size\u2026",
+                "Pick the MAP sensor fitted (or type what it reads at 0 V and 5 V) and move every load breakpoint to the count that means the same real pressure.",
+                () => OpenMapSensor()),
+            new Toolbar.Entry(Toolbar.Scale, "Feature patches\u2026",
+                "Code patches from a feature file (disable a trouble code, MIL off, known base-ROM fixes): which fit this ROM, which are in, and Apply / Remove.",
+                () => OpenFeatures()),
+            new Toolbar.Entry(Toolbar.Scale, "Scale\u2026",
+                "Scale whole sections at once: this table by a percentage, or rescale a fuel map that has run to the top of its scale.",
+                () => ScaleTools(Selected)),
+            new Toolbar.Entry(Toolbar.Log, "O2 / knock tables\u2026",
+                "What the log measured in every cell of the map, how far it is from target, and a button to apply the offsets.",
+                () => LogTableTools(Selected)),
             Toolbar.Entry.Line,
             new Toolbar.Entry(Toolbar.Add, "Add", "Add a new definition at the address in the Definition form (or the selected item's address).", AddNew),
             new Toolbar.Entry(Toolbar.Delete, "Delete", "Remove the selected definition from the list (the ROM bytes are not touched).", Delete),
@@ -129,45 +152,69 @@ public sealed class CalibrationView : UserControl
                 () => CompareRequested?.Invoke())));
         bar.Children.Add(Toolbar.Menu("Emulator", Toolbar.Bin,
             new Toolbar.Entry(Toolbar.Bin, "Connect / disconnect",
-                "Connect to the Moates Ostrich 2.0 / Demon on the port set in Settings and upload the ROM, so the car runs it. Again to disconnect.", ToggleEmulator),
+                "Connect to the emulator on the port set in Settings and upload the ROM, so the car runs it. Again to disconnect.", ToggleEmulator),
             Toolbar.Entry.Line,
             new Toolbar.Entry(Toolbar.Import, "Download", "Read what is in the emulator and make it the ROM here (one undo step).", EmulatorDownload),
             new Toolbar.Entry(Toolbar.Export, "Upload", "Send the whole ROM, with every edit made here, to the emulator.", EmulatorUpload),
             new Toolbar.Entry(Toolbar.Detect, "Validate", "Read the emulator back and check it byte for byte against the ROM here.", EmulatorValidate),
             Toolbar.Entry.Line,
-            new Toolbar.Entry("✓", "Toggle upload on changes",
-                "Send every change to the emulator the moment it is made (only the 256-byte blocks that changed).", ToggleAutoUpload)));
+            new Toolbar.Entry("✓", "Upload on changes",
+                "Send every change to the emulator the moment it is made (only the 256-byte blocks that changed), so the car runs it straight away.",
+                ToggleAutoUpload, Checked: () => _host.AutoUpload)));
+        bar.Children.Add(Toolbar.Menu("Datalogging", Toolbar.Log, () =>
+        {
+            var entries = DatalogMenu?.Invoke(() => _live.IsChecked == true, on => _live.IsChecked = on)
+                          ?? [new Toolbar.Entry("", "Live trace", "Mark the cells the engine is reading on the map on screen.",
+                                                () => _live.IsChecked = _live.IsChecked != true, Checked: () => _live.IsChecked == true)];
+            return [.. entries, Toolbar.Entry.Line,
+                new Toolbar.Entry("", "Lock to live cell", "Keep the table's selection on the cell the engine is in, scrolled into view, so + / - and typing change that cell.",
+                    () => _lock.IsChecked = _lock.IsChecked != true, Checked: () => _lock.IsChecked == true)];
+        }));
         bar.Children.Add(new Separator { Width = 8 });
-        _back = Toolbar.Button("←", "Back", "Back to the table you came from (a header opens the axis it is read from).", GoBack);
+        _back = Toolbar.Button("←", "Back", "Back to where you came from - press again to keep going back, all the way to the first page.", GoBack);
         _back.IsVisible = false;
         bar.Children.Add(_back);
         bar.Children.Add(Toolbar.Button("↶", "Undo", "Undo the last value change (Ctrl+Z in a table).", UndoEdit));
         bar.Children.Add(Toolbar.Button("↷", "Redo", "Redo (Ctrl+Y in a table).", RedoEdit));
+        // "Upload on changes" lives in the Emulator drop-down only: it was on the bar as well, which meant two controls for one setting
         _autoUpload.IsCheckedChanged += (_, _) => { _host.AutoUpload = _autoUpload.IsChecked == true; UpdateEmulator(); };
-        ToolTip.SetTip(_autoUpload, "Send every change to the emulator the moment it is made (only the 256-byte blocks that changed), so the car runs it straight away.");
-        bar.Children.Add(_autoUpload);
         bar.Children.Add(_emuStatus);
         ToolTip.SetTip(_follow, "When you Step / Over / Out and the instruction reads a defined table or setting, switch to it here and select the cell it read.");
-        _live.Margin = _follow.Margin = new Thickness(8, 0, 0, 0);
-        bar.Children.Add(_live);
+        _lock.Margin = _follow.Margin = new Thickness(8, 0, 0, 0);
+        ToolTip.SetTip(_lock, "Keep the table's selection on the cell the engine is in (the live trace), scrolled into view, so + / - and typing change that cell.");
+        _lock.IsCheckedChanged += (_, _) => { _locked = (-1, -1); LockToTrace(); };
+        // Live trace and Lock to live cell are in the Datalogging menu only
         bar.Children.Add(_follow);
-        var ovLabel = new TextBlock { Text = "Overlay", FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 4, 0) };
-        bar.Children.Add(ovLabel);
-        _overlayPick.ItemsSource = new[] { "none" };
-        _overlayPick.SelectedIndex = 0;
-        _overlayPick.SelectionChanged += (_, _) => UpdateOverlay();
-        ToolTip.SetTip(_overlayPick, "Lay a datalogged channel over the map: its average in every cell the engine sat in (wideband AFR over the fuel map, knock over the ignition map...).");
-        bar.Children.Add(_overlayPick);
 
-        _tree.SelectionChanged += (_, _) => { if (!_updating && (_tree.SelectedItem as TreeViewItem)?.Tag is ItemDef it) { _selected = it; ShowSelected(); } };
+        _tree.SelectionChanged += (_, _) =>
+        {
+            if (_updating) return;
+            switch ((_tree.SelectedItem as TreeViewItem)?.Tag)
+            {
+                case ItemDef it: Selected = it; _pageOpen = null; ShowSelected(); break;
+                case CalPage page: ShowPage(page); break;
+            }
+        };
         _tree.DoubleTapped += (_, _) => { if ((_tree.SelectedItem as TreeViewItem)?.Tag is ItemDef it) GoToAddress?.Invoke(it.Address); };
-        ToolTip.SetTip(_tree, "Settings and maps by category. Select one to edit it; double-click to show it in the source.");
+        // right-click: the node under the pointer is selected first, then its menu opens
+        _tree.ContextRequested += (_, e) =>
+        {
+            var node = (e.Source as Visual)?.FindAncestorOfType<TreeViewItem>(includeSelf: true);
+            if (node != null && !ReferenceEquals(_tree.SelectedItem, node)) _tree.SelectedItem = node;
+            TreeMenu(node?.Tag).Open(_tree);
+            e.Handled = true;
+        };
+        ToolTip.SetTip(_tree, "Feature pages at the top, then the ROM's settings and maps by category. Select one to edit it; double-click a setting to show it in the source.");
         _filter.TextChanged += (_, _) => Refresh();
         ToolTip.SetTip(_filter, "Show only items whose name, category or address contains this text.");
 
         var left = new DockPanel { Margin = new Thickness(4, 0, 0, 4) };
         DockPanel.SetDock(_filter, Dock.Top);
         left.Children.Add(_filter);
+        _validBox.IsCheckedChanged += (_, _) => { if (_validOnly != (_validBox.IsChecked == true)) { _validOnly = _validBox.IsChecked == true; Refresh(); } };
+        ToolTip.SetTip(_validBox, "Hide the feature pages this ROM has nothing for (no row bound to one of its definitions). Also on the list's right-click menu.");
+        DockPanel.SetDock(_validBox, Dock.Top);
+        left.Children.Add(_validBox);
         left.Children.Add(new ScrollViewer { Content = _tree, HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto });
 
         var split = new Grid { ColumnDefinitions = new ColumnDefinitions("240,4,*") };
@@ -186,7 +233,7 @@ public sealed class CalibrationView : UserControl
         _grid.PasteCells += list =>
         {
             var dict = list.ToDictionary(x => x.Index, x => x.Value);
-            Write(dict.Keys.ToList(), i => dict[i], false, "paste");
+            Write([.. dict.Keys], i => dict[i], false, "paste");
         };
         _grid.Undo += UndoEdit; _grid.Redo += RedoEdit;
         _grid.HeaderActivated += OpenAxis;
@@ -215,8 +262,7 @@ public sealed class CalibrationView : UserControl
         _views.Items.Add(new TabItem { Header = "3D", Content = _surface });
         foreach (var t in _views.Items.OfType<TabItem>()) { t.FontSize = 12; t.MinHeight = 24; t.Padding = new Thickness(8, 1); }
         _views.SelectionChanged += (_, e) => { if (ReferenceEquals(e.Source, _views)) Redraw(); };
-        // the tip goes on the three tab headers, not on the whole control: a 1 x 10 table leaves
-        // most of the panel empty, and a tip on the panel followed the pointer around it
+        // the tip goes on the three tab headers, not on the whole control: a 1 x 10 table leaves most of the panel empty, and a tip on the panel followed the pointer around it
         foreach (var t in _views.Items.OfType<TabItem>())
             ToolTip.SetTip(t, (string?)t.Header switch
             {
@@ -251,7 +297,7 @@ public sealed class CalibrationView : UserControl
             try
             {
                 _status.Text = what;
-                if (item != null && _host.Defs().Find(item) is { } it) { _selected = it; Refresh(it.Name); }
+                if (item != null && _host.Defs().Find(item) is { } it) { Selected = it; Refresh(it.Name); }
                 else if (_item != null) { Refresh(_item.Name); }
                 else Refresh();
             }
@@ -268,16 +314,21 @@ public sealed class CalibrationView : UserControl
         return b;
     }
 
-    public ItemDef? Selected => _selected;
+    public ItemDef? Selected { get; private set; }
 
     /// Another ROM was opened (or the project was cleared): drop everything from the last one.
     public void ResetForNewRom()
     {
-        _selected = null; _item = null; _model = null;
+        Selected = null; _item = null; _model = null;
         _grid.Model = null; _graph.Model = null; _surface.Model = null;
         _filter.Text = "";
-        _overlayPick.SelectedIndex = 0;
+        _overlayChannel = "none";
         _openCategories.Clear(); _openCategories.Add("Fuel"); _openCategories.Add("Ignition");
+        _pageOpen = null;
+        _guessed.Clear();
+        _layoutApplied = false;
+        _history.Clear();
+        _back?.IsVisible = false;
         _status.Text = "";
         Refresh();
     }
@@ -286,22 +337,64 @@ public sealed class CalibrationView : UserControl
     {
         if (_updating) return;
         var defs = _host.Defs();
-        select ??= _selected?.Name;
-        _items = defs.Items.OrderBy(i => CategoryOrder(i.Category)).ThenBy(i => i.Category)
-            .ThenBy(i => i.IsTable && i.Rows > 1 ? 0 : i.IsTable && i.Count > 1 ? 1 : 2).ThenBy(i => i.Address).ToList();
+        select ??= Selected?.Name;
+        _items = [.. defs.Items.OrderBy(i => CategoryOrder(i.Category)).ThenBy(i => i.Category)
+            .ThenBy(i => i.IsTable && i.Rows > 1 ? 0 : i.IsTable && i.Count > 1 ? 1 : 2).ThenBy(i => i.Address)];
         var f = (_filter.Text ?? "").Trim();
-        var shown = f.Length == 0 ? _items : _items.Where(i =>
+        var shown = f.Length == 0 ? _items : [.. _items.Where(i =>
             i.Name.Contains(f, StringComparison.OrdinalIgnoreCase) || i.Category.Contains(f, StringComparison.OrdinalIgnoreCase) ||
-            i.Address.ToString("X4").Contains(f, StringComparison.OrdinalIgnoreCase)).ToList();
+            i.Address.ToString("X4").Contains(f, StringComparison.OrdinalIgnoreCase))];
         var pick = select == null ? shown.FirstOrDefault() : shown.FirstOrDefault(i => i.Name == select) ?? shown.FirstOrDefault();
         _updating = true;
         try
         {
             // remember which categories are open
             foreach (var node in _tree.Items.OfType<TreeViewItem>())
+            {
                 if (node.Header is string h) { if (node.IsExpanded) _openCategories.Add(h); else _openCategories.Remove(h); }
+                // the page categories are a level deeper, and are worth remembering too
+                if ((node.Header as string) != "Pages") continue;
+                foreach (var sub in node.ItemsSource?.OfType<TreeViewItem>() ?? [])
+                    if (sub.Tag == null && sub.Header is string sh)
+                    {
+                        string key = "Pages/" + sh.Split("  (")[0];
+                        if (sub.IsExpanded) _openCategories.Add(key); else _openCategories.Remove(key);
+                    }
+            }
             var nodes = new List<TreeViewItem>();
             TreeViewItem? pickNode = null;
+            // the feature pages first: the ECU's own features laid out as a tuner expects to find them, rather than as a list of addresses
+            if (f.Length == 0 || "pages".Contains(f, StringComparison.OrdinalIgnoreCase))
+            {
+                var pageNode = new TreeViewItem { Header = "Pages", FontWeight = FontWeight.SemiBold, IsExpanded = _openCategories.Contains("Pages") };
+                // there are a lot of them, so they sit under their own categories the way the established tuning software groups its tabs
+                TreeViewItem PageLeaf(CalPage page)
+                {
+                    var leaf = new TreeViewItem
+                    {
+                        Header = page.Name,
+                        Tag = page, FontWeight = FontWeight.Normal, Padding = new Thickness(2, 0), MinHeight = 0,
+                    };
+                    ToolTip.SetTip(leaf, page.Blurb);
+                    return leaf;
+                }
+                pageNode.ItemsSource = CalPage.All()
+                    .Where(page => !_validOnly || page.Slots().Any(x => CalPage.Bound(defs, x) != null))
+                    .GroupBy(page => page.Category)
+                    .OrderBy(g => PageCategoryOrder(g.Key)).ThenBy(g => g.Key)
+                    .Select(g =>
+                    {
+                        string key = "Pages/" + g.Key;
+                        var cat = new TreeViewItem
+                        {
+                            Header = g.Key, FontWeight = FontWeight.Normal, Padding = new Thickness(2, 0), MinHeight = 0,
+                            IsExpanded = _openCategories.Contains(key),
+                            ItemsSource = g.Select(PageLeaf).ToList(),
+                        };
+                        return cat;
+                    }).ToList();
+                nodes.Add(pageNode);
+            }
             if (shown.Count == 0)
                 nodes.Add(new TreeViewItem { Header = _items.Count == 0 ? "(nothing defined - press Detect)" : "(nothing matches)" });
             foreach (var grp in shown.GroupBy(i => string.IsNullOrWhiteSpace(i.Category) ? "General" : i.Category))
@@ -324,16 +417,24 @@ public sealed class CalibrationView : UserControl
                 nodes.Add(cat);
             }
             _tree.ItemsSource = nodes;
-            _selected = pick;
-            if (pickNode != null) _tree.SelectedItem = pickNode;
+            Selected = pick;
+            if (_pageOpen == null && pickNode != null) _tree.SelectedItem = pickNode;
         }
         finally { _updating = false; }
         var formulas = defs.Formulas.Select(x => x.Name).OrderBy(n => n).ToList();
         _fFormula.ItemsSource = formulas;
         _fRowFormula.ItemsSource = formulas;
         _fColFormula.ItemsSource = formulas;
-        ShowSelected();
+        if (_pageOpen is { } open) ShowPage(open);
+        else ShowSelected();
     }
+
+    /// The order the feature-page categories read in: fuelling and spark first, the way a tuner works through them.
+    static int PageCategoryOrder(string c) => c switch
+    {
+        "Fuel" => 0, "Ignition" => 1, "Limits" => 2, "Boost" => 3, "Protection" => 4,
+        "Idle" => 5, "Outputs" => 6, "GPO" => 7, "Sensors" => 8, "Options" => 9, _ => 10,
+    };
 
     static int CategoryOrder(string c) => c switch
     {
@@ -350,12 +451,30 @@ public sealed class CalibrationView : UserControl
     {
         if (_model == null || _item == null || !IsEffectivelyVisible) return;
         if (_tuner) return;       // the datalog drives the trace (SetEngineState)
-        if (_live.IsChecked != true) { if (_model.Heat.Count > 0) { _model.Heat = new(); Redraw(); } return; }
+        if (_live.IsChecked != true) { _idleTraced = default; if (_model.Heat.Count > 0) { _model.Heat = []; Redraw(); } return; }
+        // with the simulator stopped the trace cannot move until a step: look once, not twenty times a second
+        var idleKey = (_host.IsRunning, _host.StepSerial, _item);
+        if (!idleKey.IsRunning && idleKey == _idleTraced) return;
+        _idleTraced = idleKey;
         var heat = _host.TableHeat(_item, _trail);
         if (heat.Count == 0 && _model.Heat.Count == 0) return;
         if (Same(heat, _model.Heat)) return;        // nothing moved: do not redraw the map
         _model.Heat = heat;
         Redraw();
+        LockToTrace();
+    }
+
+    (bool IsRunning, int StepSerial, ItemDef? Item) _idleTraced;
+
+    /// Lock to live cell: move the selection to where the engine is, when that has changed.
+    void LockToTrace()
+    {
+        if (_lock.IsChecked != true || _model == null || _model.TraceCentre() is not { } at) return;
+        var cell = ((int)Math.Round(at.Row), (int)Math.Round(at.Col));
+        cell = (Math.Clamp(cell.Item1, 0, Math.Max(0, _model.Rows - 1)), Math.Clamp(cell.Item2, 0, Math.Max(0, _model.Cols - 1)));
+        if (cell == _locked) return;
+        _locked = cell;
+        _grid.FocusCell(cell.Item1, cell.Item2);
     }
 
     /// Cheap comparison of two heat maps - a plain loop rather than LINQ, because this runs twenty times a second while the simulator is going.
@@ -400,6 +519,7 @@ public sealed class CalibrationView : UserControl
         if (pos == _model.ExternalTrace) return;
         _model.ExternalTrace = pos;
         Redraw();
+        LockToTrace();
     }
 
     /// What the engine should be running and what the wideband really means (Settings > Targets).
@@ -410,11 +530,34 @@ public sealed class CalibrationView : UserControl
     /// Channels available for the overlay (updated as frames come in).
     public void SetOverlayChannels(IEnumerable<string> channels, string preferred)
     {
-        var list = new[] { "none" }.Concat(channels.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(c => c)).ToList();
-        var cur = _overlayPick.SelectedItem as string ?? "none";
-        if (_overlayPick.ItemsSource is IEnumerable<string> old && old.SequenceEqual(list)) return;
-        _overlayPick.ItemsSource = list;
-        _overlayPick.SelectedItem = list.Contains(cur) && cur != "none" ? cur : list.Contains(preferred) && cur == "none" ? "none" : cur;
+        _overlayChannels = [.. new[] { "none" }.Concat(channels.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(c => c))];
+        _preferredOverlay = preferred;
+        // a channel that has gone away (a new log without it) stops being the overlay
+        if (_overlayChannel != "none" && !_overlayChannels.Contains(_overlayChannel, StringComparer.OrdinalIgnoreCase)) SetOverlayChannel("none");
+    }
+    string _preferredOverlay = "afr";
+
+    /// The Tools > Overlay submenu: "none" and every channel the log has, with a tick on the one in use.
+    Toolbar.Entry[] OverlayEntries()
+    {
+        var list = _overlayChannels.Count > 1 ? _overlayChannels : ["none", _preferredOverlay];
+        return
+        [
+            .. list.Distinct(StringComparer.OrdinalIgnoreCase).Select(ch => new Toolbar.Entry(
+                ch == "none" ? "" : Toolbar.Log,
+                ch == "none" ? "No overlay" : ch,
+                ch == "none" ? "Show the map's own values only."
+                             : $"Show the average of '{ch}' in every cell the engine sat in, under each cell's value.",
+                () => SetOverlayChannel(ch),
+                Checked: () => _overlayChannel.Equals(ch, StringComparison.OrdinalIgnoreCase))),
+        ];
+    }
+
+    void SetOverlayChannel(string channel)
+    {
+        _overlayChannel = channel;
+        _status.Text = channel == "none" ? "overlay off" : $"overlay: {channel}";
+        UpdateOverlay();
     }
 
     DateTime _lastOverlay;
@@ -424,8 +567,8 @@ public sealed class CalibrationView : UserControl
         if (_model == null || _item == null || !_item.IsTable) return;
         if (throttle && (DateTime.UtcNow - _lastOverlay).TotalMilliseconds < 1000) return;
         _lastOverlay = DateTime.UtcNow;
-        var ch = _overlayPick.SelectedItem as string;
-        if (ch == null || ch == "none" || OverlayFrames == null) { if (_model.Overlay != null) { _model.Overlay = null; Redraw(); } return; }
+        var ch = _overlayChannel;
+        if (ch == "none" || OverlayFrames == null) { if (_model.Overlay != null) { _model.Overlay = null; Redraw(); } return; }
         try
         {
             var frames = OverlayFrames();
@@ -463,7 +606,7 @@ public sealed class CalibrationView : UserControl
         var item = defs.Items.Where(i => i.Contains(addr)).OrderByDescending(i => i.IsTable).ThenBy(i => i.Span).FirstOrDefault();
         if (item == null) return false;
         if (_filter.Text?.Length > 0) _filter.Text = "";
-        if (_selected != item) { _selected = item; Refresh(item.Name); }
+        if (Selected != item) { Selected = item; Refresh(item.Name); }
         if (item.CellOf(addr) is { } cell && _model != null)
         {
             _grid.SelectCell(cell.Row, cell.Col);
@@ -485,9 +628,7 @@ public sealed class CalibrationView : UserControl
             var list = cells.Select(i => (i, value(i))).ToList();
             if (item.ColumnScaleAddress != null)
             {
-                // a fuel map: let a cell that runs off the top of its range push the column's
-                // multiplier up instead of flat-topping (the rest of the column is restated so
-                // those values do not move)
+                // a fuel map: let a cell that runs off the top of its range push the column's multiplier up instead of flat-topping (the rest of the column is restated so those values do not move)
                 var report = Rescale.WriteWithRollover(_host.Defs(), _host.RomCopy(), item, list, raw);
                 if (report.Any)
                 {
@@ -495,6 +636,7 @@ public sealed class CalibrationView : UserControl
                     if (report.ColumnsRescaled > 0) _status.Text = report.Summary;
                     AppLog.Action("calibration", report.Summary);
                 }
+                else _nothingChanged = true;
             }
             else
             {
@@ -504,6 +646,13 @@ public sealed class CalibrationView : UserControl
         }
         catch (Exception ex) { _status.Text = ex.Message; AppLog.Error("calibration", "write failed", ex); }
         ReloadValues();
+        if (_nothingChanged)
+        {
+            _nothingChanged = false;
+            _status.Text = $"{item.Name}: nothing changed - {what} is smaller than one step of this table " +
+                           "(a fuel cell steps by its column multiplier; Scale\u2026 > Headroom gives it a finer scale)";
+            return;
+        }
         _status.Text = cells.Count == 1
             ? $"{item.Name}[{cells[0] / Math.Max(1, item.Cols)},{cells[0] % Math.Max(1, item.Cols)}] = {_model?.Format(_model.Values[cells[0]])} - patched in the running ROM{(_host.AutoUpload && _host.Emulator.Connected ? " and the emulator" : "")}"
             : $"{item.Name}: {cells.Count} cells {what} - patched in the running ROM{(_host.AutoUpload && _host.Emulator.Connected ? " and the emulator" : "")}";
@@ -527,8 +676,8 @@ public sealed class CalibrationView : UserControl
     {
         if (_item == null || _model == null) { ShowSelected(); return; }
         var cells = _host.ReadItem(_item);
-        _model.Values = cells.Select(c => c.Value).ToArray();
-        _model.Raw = cells.Select(c => c.Raw).ToArray();
+        _model.Values = [.. cells.Select(c => c.Value)];
+        _model.Raw = [.. cells.Select(c => c.Raw)];
         Redraw();
     }
 
@@ -593,7 +742,7 @@ public sealed class CalibrationView : UserControl
                 _busyEmulator = false;
                 _status.Text = message;
                 UpdateEmulator();
-                Refresh(_selected?.Name);
+                Refresh(Selected?.Name);
             });
         });
     }
@@ -633,14 +782,14 @@ public sealed class CalibrationView : UserControl
         {
             case "set": Write(sel, _ => k, false, $"set to {k}"); break;
             case "add": Write(sel, i => m.Values[i] + k, false, $"{(k >= 0 ? "+" : "")}{k}"); break;
-            case "pct": Write(sel, i => m.Values[i] * (1 + k / 100), false, $"{(k >= 0 ? "+" : "")}{k}%"); break;
+            case "pct": Write(sel, i => m.Values[i] * (1 + (k / 100)), false, $"{(k >= 0 ? "+" : "")}{k}%"); break;
             case "ih":
                 if (c1 - c0 < 2) { _status.Text = "select at least three columns to interpolate across"; return; }
                 Write(sel, i =>
                 {
                     int r = i / m.Cols, c = i % m.Cols;
                     double a = m[r, c0], b = m[r, c1];
-                    return a + (b - a) * (c - c0) / (c1 - c0);
+                    return a + ((b - a) * (c - c0) / (c1 - c0));
                 }, false, "interpolated across");
                 break;
             case "iv":
@@ -649,7 +798,7 @@ public sealed class CalibrationView : UserControl
                 {
                     int r = i / m.Cols, c = i % m.Cols;
                     double a = m[r0, c], b = m[r1, c];
-                    return a + (b - a) * (r - r0) / (r1 - r0);
+                    return a + ((b - a) * (r - r0) / (r1 - r0));
                 }, false, "interpolated down");
                 break;
             case "smooth":
@@ -664,31 +813,136 @@ public sealed class CalibrationView : UserControl
                             {
                                 int rr = r + dr, cc = c + dc;
                                 if (rr < r0 || rr > r1 || cc < c0 || cc > c1) continue;
-                                sum += copy[rr * m.Cols + cc]; n++;
+                                sum += copy[(rr * m.Cols) + cc]; n++;
                             }
                         return sum / n;
                     }, false, "smoothed");
                     break;
                 }
-            case "overlay":
-                {
-                    // AFR overlay: scale each selected fuel cell by measured / target
-                    if (m.Overlay == null) { _status.Text = "pick an AFR or lambda overlay first"; return; }
-                    double target = k > 0 ? k : 14.7;
-                    var cnt = m.OverlayCount;
-                    var pick = sel.Where(i => !double.IsNaN(m.Overlay[i]) && (cnt == null || cnt[i] >= 3)).ToList();
-                    if (pick.Count == 0) { _status.Text = "no selected cell has 3+ logged samples"; return; }
-                    Write(pick, i => m.Values[i] * m.Overlay[i] / target, false, $"corrected to {target} from the log");
-                    break;
-                }
         }
     }
+
+    /// The feature page on screen, or null when a definition is being edited.
+    CalPage? _pageOpen;
+
+    /// Show a feature page (GPO 1, ...) instead of a single definition. The first time a page is opened on a ROM its rows are guessed from the definition names; after that the bindings are the user's, and travel with the definitions.
+    void ShowPage(CalPage page)
+    {
+        _pageOpen = page;
+        _item = null; _model = null;
+        _grid.Model = null; _graph.Model = null; _surface.Model = null;
+        // an HTS 1.15 / HTS120 ROM is bound from the HTS address layout the first time a page is opened (only when a row is still empty, so a ROM whose definitions already carry the bindings is left as it is)
+        if (!_layoutApplied)
+        {
+            _layoutApplied = true;
+            try
+            {
+                var rom = _host.RomCopy();
+                var defs = _host.Defs();
+                if (HtsLayout.Version(rom) == 115 && CalPage.All().SelectMany(pg => pg.Slots()).Any(sl => CalPage.Bound(defs, sl) == null))
+                {
+                    int n = _host.EditDefinitions(d => HtsLayout.Apply(d, rom));
+                    if (n > 0) _status.Text = $"HTS 1.15 layout: {n} page row(s) bound";
+                }
+            }
+            catch (Exception ex) { AppLog.Error("calibration", "HTS layout failed", ex); }
+        }
+        // guessed once per page per ROM: a guess the user then cleared must not come straight back
+        if (_guessed.Add(page.Key))
+            try
+            {
+                int n = _host.EditDefinitions(d => CalPage.GuessBindings(d, page));
+                if (n > 0) _status.Text = $"{page.Name}: {n} row(s) bound by name - worth checking, they are only guesses";
+            }
+            catch (Exception ex) { AppLog.Error("calibration", "binding guess failed", ex); }
+        var view = new FeaturePageView(_host, page, m => _status.Text = m, item =>
+        {
+            Remember();
+            _pageOpen = null;
+            Selected = item;
+            Refresh(item.Name);
+        });
+        var root = new DockPanel { Margin = new Thickness(8, 0, 4, 4) };
+        var def = DefinitionForm(null);
+        DockPanel.SetDock(def, Dock.Bottom);
+        root.Children.Add(def);
+        root.Children.Add(view);
+        _detail.Content = root;
+    }
+
+    /// Show only the pages this ROM has something for (at least one row bound).
+    bool _validOnly = true;
+    readonly CheckBox _validBox = new() { Content = "Show only valid pages", IsChecked = true, FontSize = 11, Margin = new Thickness(2, 2, 0, 2) };
+
+    /// The tree's right-click menu: add, remove, edit and rename definitions, and the valid-pages filter.
+    ContextMenu TreeMenu(object? tag)
+    {
+        var item = tag as ItemDef;
+        var page = tag as CalPage;
+        var menu = new ContextMenu();
+        MenuItem Mi(string text, string tip, Action run, bool enabled = true)
+        {
+            var mi = new MenuItem { Header = text, IsEnabled = enabled };
+            mi.Click += (_, _) => run();
+            ToolTip.SetTip(mi, tip);
+            return mi;
+        }
+        menu.Items.Add(Mi("Add", "Add a new definition at the address in the Definition form (or the selected item's address).", AddNew));
+        menu.Items.Add(Mi("Remove", item == null ? "Pick a definition to remove (pages cannot be removed)." : $"Remove {item.Name} from the list (the ROM bytes are not touched).",
+                          Delete, item != null));
+        menu.Items.Add(Mi("Edit", page != null ? $"Open the {page.Name} page." : item != null ? $"Edit {item.Name} in the Definition form." : "Pick something to edit.",
+                          () => EditNode(tag), item != null || page != null));
+        menu.Items.Add(Mi("Rename…", item == null ? "Pick a definition to rename." : $"Give {item.Name} another name.", () => Rename(item), item != null));
+        menu.Items.Add(new Separator());
+        var valid = new MenuItem { Header = (_validOnly ? "✓  " : "") + "Show only valid pages" };
+        ToolTip.SetTip(valid, "Hide the feature pages this ROM has nothing for (no row bound to one of its definitions).");
+        valid.Click += (_, _) => { _validOnly = !_validOnly; _validBox.IsChecked = _validOnly; Refresh(); };
+        menu.Items.Add(valid);
+        return menu;
+    }
+
+    void EditNode(object? tag)
+    {
+        switch (tag)
+        {
+            case CalPage page: ShowPage(page); break;
+            case ItemDef it:
+                _pageOpen = null; Selected = it; Refresh(it.Name);
+                _fName.Focus();
+                _status.Text = $"editing {it.Name}: change it in the Definition form below, then Update";
+                break;
+        }
+    }
+
+    async void Rename(ItemDef? item)
+    {
+        if (item == null || _top() is not Window owner) return;
+        var box = new TextBox { Text = item.Name, Width = 260 };
+        if (!await Dialogs.Prompt(owner, "Rename", $"A new name for {item.Name} (@{item.Address:X4}).", box)) return;
+        var name = (box.Text ?? "").Trim();
+        if (name.Length == 0 || name == item.Name) return;
+        if (_host.Defs().Items.Any(i => i != item && i.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+        {
+            _status.Text = $"there is already a definition called {name}";
+            return;
+        }
+        var old = item.Name;
+        _host.EditDefinitions(d => { item.Name = name; return true; });
+        Refresh(name);
+        _status.Text = $"renamed {old} to {name}";
+        AppLog.Action("calibration", $"renamed {old} to {name}");
+    }
+
+    /// Pages whose bindings have already been guessed once, so a wrong guess is not put back every time the page is opened.
+    readonly HashSet<string> _guessed = [];
+    /// The HTS layout has been tried on this ROM.
+    bool _layoutApplied;
 
     // ------------------------------------------------------------------ detail view
 
     void ShowSelected()
     {
-        _item = _selected;
+        _item = Selected;
         _model = null;
         var root = new DockPanel { Margin = new Thickness(8, 0, 4, 4) };
         var item = _item;
@@ -718,7 +972,13 @@ public sealed class CalibrationView : UserControl
             FontWeight = FontWeight.Bold, FontSize = 13,
         });
         if (item.Description.Length > 0 || item.Origin != null)
-            head.Children.Add(new TextBlock { Text = item.Description + (item.Origin != null ? $"   ({item.Origin})" : ""), FontSize = 11, Opacity = 0.75, TextWrapping = TextWrapping.Wrap });
+        {
+            // two lines at most (all of it on hover), so a long description does not eat the room the map needs on a laptop screen
+            var about = item.Description + (item.Origin != null ? $"   ({item.Origin})" : "");
+            var aboutText = new TextBlock { Text = about, FontSize = 11, Opacity = 0.75, TextWrapping = TextWrapping.Wrap, MaxLines = 2, TextTrimming = TextTrimming.CharacterEllipsis };
+            ToolTip.SetTip(aboutText, about);
+            head.Children.Add(aboutText);
+        }
         DockPanel.SetDock(head, Dock.Top);
         root.Children.Add(head);
 
@@ -749,18 +1009,18 @@ public sealed class CalibrationView : UserControl
         _model = new TableModel
         {
             Item = item, Rows = item.Rows, Cols = item.Cols,
-            Values = cells.Select(c => c.Value).ToArray(), Raw = cells.Select(c => c.Raw).ToArray(),
-            RowAxis = item.RowAxis == null ? Enumerable.Range(0, item.Rows).Select(i => (double)i).ToArray() : _host.AxisValues(item.RowAxis, item.Rows),
-            ColAxis = item.ColAxis == null ? Enumerable.Range(0, item.Cols).Select(i => (double)i).ToArray() : _host.AxisValues(item.ColAxis, item.Cols),
+            Values = [.. cells.Select(c => c.Value)], Raw = [.. cells.Select(c => c.Raw)],
+            RowAxis = item.RowAxis == null ? [.. Enumerable.Range(0, item.Rows).Select(i => (double)i)] : _host.AxisValues(item.RowAxis, item.Rows),
+            ColAxis = item.ColAxis == null ? [.. Enumerable.Range(0, item.Cols).Select(i => (double)i)] : _host.AxisValues(item.ColAxis, item.Cols),
             RowUnit = AxisUnit(item.RowAxis, "row"), ColUnit = AxisUnit(item.ColAxis, "col"),
             Unit = formula.Unit, Decimals = Math.Min(formula.Decimals, 2),
-            Heat = _live.IsChecked == true && !_tuner ? _host.TableHeat(item) : new(),
+            Heat = _live.IsChecked == true && !_tuner ? _host.TableHeat(item) : [],
         };
         _grid.Model = _model; _graph.Model = _model; _surface.Model = _model;
 
         var tools = new WrapPanel { Margin = new Thickness(0, 2, 0, 4) };
         tools.Children.Add(new TextBlock { Text = "Selection:", VerticalAlignment = VerticalAlignment.Center, FontSize = 11, Margin = new Thickness(0, 0, 4, 0) });
-        ToolTip.SetTip(_adjust, "Amount used by Set / Add / % (and the target AFR for 'AFR fix').");
+        ToolTip.SetTip(_adjust, "Amount used by Set, Add and %.");
         tools.Children.Add(UiStyles.Adopt(_adjust));
         tools.Children.Add(Btn("Set", () => Adjust("set"), "Set every selected cell to the amount."));
         tools.Children.Add(Btn("Add", () => Adjust("add"), "Add the amount to every selected cell (negative subtracts)."));
@@ -773,14 +1033,14 @@ public sealed class CalibrationView : UserControl
             "or rescale a table that has run to the top of its scale so it has room to grow again."));
         tools.Children.Add(Btn("O2 / knock…", () => LogTableTools(item),
             "The O2 / lambda and knock tables from the datalog: what each cell measured, how far it is from target, and a button to apply the offsets."));
-        tools.Children.Add(Btn("AFR fix", () => Adjust("overlay"),
-            "With an AFR overlay: scale each selected cell by measured AFR / the amount in the box (the target AFR), for cells with 3+ logged samples."));
-        tools.Children.Add(new TextBlock
-        {
-            Text = "  type a value + Enter · +/- or [ ] nudge one step · PgUp/PgDn ten · Ctrl+C/V · Ctrl+Z/Y",
-            FontSize = 10.5, Opacity = 0.7, VerticalAlignment = VerticalAlignment.Center,
-        });
-        var panel = new DockPanel();
+        tools.Children.Add(Btn("AFR fix\u2026", () => AfrFix(item),
+            "The correction the log asks for over the cells selected: how far they ran from target on average, the percentage that closes it (with a gain, " +
+            "and a smallest and largest change), and how many of the cells have enough samples to count. Nothing moves until Apply."));
+        // the keys are on hover over the Selection label rather than taking a line of their own
+        const string keys = "Type a value + Enter · +/- or [ ] nudge one step · PgUp/PgDn ten · Ctrl+C/V copy and paste · Ctrl+Z/Y undo and redo";
+        ToolTip.SetTip(tools.Children[0], keys);
+        // clipped, so on a short screen the tools never draw over the Definition bar below
+        var panel = new DockPanel { ClipToBounds = true };
         DockPanel.SetDock(tools, Dock.Top);
         panel.Children.Add(tools);
         panel.Children.Add(UiStyles.Adopt(_views));
@@ -788,56 +1048,38 @@ public sealed class CalibrationView : UserControl
         return panel;
     }
 
-    /// Settings (not tables): every single-value item in the same category as a form, switches as checkboxes and numbers as number boxes, with the selected one first.
+    /// A single-value setting, on its own. One setting to a page: the one picked in the tree, with its own name, what it is for, the unit it is in and the byte it lives at - and nothing else competing with it. Settings that really are one setting (the bits of a single option byte) stay together, because changing one of those means reading the others. Everything else is where it belongs - in the tree on the left. This used to gather every setting whose address fell in the same sixteen bytes onto one page, which put unrelated things - a vacuum fuel-cut throttle position, a tip-out trim, a lean-protection threshold, an alpha-N crossover - side by side as though they belonged together, and there was no telling which one had been picked.
     Control SettingsForm(ItemDef selected)
     {
-        var all = _items.Where(i => i.Category == selected.Category && !(i.IsTable && i.Count > 1)).ToList();
-        var groups = all.GroupBy(GroupKey).OrderBy(g => g.Any(i => i == selected) ? 0 : 1).ThenBy(g => g.Min(i => i.Address)).ToList();
-        var own = groups.First(g => g.Any(i => i == selected));
-
+        var singles = _items.Where(i => !(i.IsTable && i.Count > 1)).ToList();
+        // the bits of one option byte are one setting seen from several sides: keep them as a set
+        var together = singles.Where(i => i != selected && SameByte(i, selected)).OrderBy(i => i.Bit).ToList();
         var page = new StackPanel();
-        page.Children.Add(Group(own, selected, expanded: true));
-        foreach (var g in groups.Skip(1).Take(60))
-            page.Children.Add(Group(g, null, expanded: false));
+
+        page.Children.Add(new TextBlock
+        {
+            Text = together.Count == 0 ? "Setting" : $"Setting  ({together.Count + 1} bits of the byte at 0x{selected.Address:X4})",
+            FontWeight = FontWeight.Bold, FontSize = 12, Margin = new Thickness(0, 2, 0, 2),
+        });
+        page.Children.Add(SettingsGrid([selected, .. together], selected));
+
+        if (selected.Description.Length > 0 || Notes(selected) is { Length: > 0 })
+            page.Children.Add(new TextBlock
+            {
+                Text = string.Join("\n", new[] { selected.Description, Notes(selected) }.Where(x => x.Length > 0)),
+                FontSize = 11, Opacity = 0.75, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 8),
+            });
+
         return new ScrollViewer { Content = page };
     }
 
-    /// What belongs on one page: switches that live in the same ROM byte are one group (they are the bits of a single option byte), everything else groups by the block of addresses it sits in, so a page shows the options around the one selected instead of the whole category.
-    static string GroupKey(ItemDef i) =>
-        i.Type == CellType.Bit || i.Flag ? $"@{i.Address:X4}" : $"#{i.Address / 16:X3}";
+    /// Two settings are really one when they are bits of the same ROM byte.
+    static bool SameByte(ItemDef a, ItemDef b) =>
+        a.Address == b.Address && a.Type == CellType.Bit && b.Type == CellType.Bit;
 
-    /// A titled block of settings; the group the selection is in is open, the rest are folded away but still reachable.
-    Control Group(IGrouping<string, ItemDef> g, ItemDef? selected, bool expanded)
+    string Notes(ItemDef item)
     {
-        var members = g.OrderBy(i => i == selected ? 0 : 1).ThenBy(i => i.Address).ThenBy(i => i.Bit).ToList();
-        string title = GroupTitle(members);
-        var body = SettingsGrid(members, selected);
-        if (expanded)
-        {
-            var sp = new StackPanel();
-            sp.Children.Add(new TextBlock { Text = title, FontWeight = FontWeight.Bold, FontSize = 12, Margin = new Thickness(0, 2, 0, 2) });
-            sp.Children.Add(body);
-            return sp;
-        }
-        return new Expander { Header = title, Content = body, IsExpanded = false, Margin = new Thickness(0, 2) };
-    }
-
-    /// The longest name all the members start with ("vtec_" -> "vtec"), or the address they share.
-    static string GroupTitle(IReadOnlyList<ItemDef> members)
-    {
-        string prefix = members[0].Name;
-        foreach (var m in members)
-        {
-            int n = 0;
-            while (n < prefix.Length && n < m.Name.Length && char.ToLowerInvariant(prefix[n]) == char.ToLowerInvariant(m.Name[n])) n++;
-            prefix = prefix[..n];
-        }
-        prefix = prefix.TrimEnd('_', ' ', '-', '.');
-        string where = members.Count == 1 || members.All(m => m.Address == members[0].Address)
-            ? $"0x{members[0].Address:X4}"
-            : $"0x{members.Min(m => m.Address):X4}-0x{members.Max(m => m.Address):X4}";
-        string what = prefix.Length >= 3 ? prefix : where;
-        return members.Count == 1 ? $"{what}   ({where})" : $"{what}   ({where}, {members.Count} settings)";
+        try { return _host.Defs().Formula(item.Formula).Notes ?? ""; } catch { return ""; }
     }
 
     Control SettingsGrid(IReadOnlyList<ItemDef> group, ItemDef? selected)
@@ -1001,7 +1243,7 @@ public sealed class CalibrationView : UserControl
             if (int.TryParse((_fOn.Text ?? "").TrimEnd('h', 'H'), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var on)) item.OnRaw = on;
             return 0;
         });
-        _selected = item;
+        Selected = item;
         Refresh(item.Name);
         _status.Text = $"updated {item.Name}";
         AppLog.Action("calibration", $"definition {item.Name} updated");
@@ -1028,11 +1270,11 @@ public sealed class CalibrationView : UserControl
     void AddNew()
     {
         var defs = _host.Defs();
-        if (!TryAddress(_fAddr.Text ?? "", out var addr)) addr = _selected?.Address ?? 0;
+        if (!TryAddress(_fAddr.Text ?? "", out var addr)) addr = Selected?.Address ?? 0;
         string name = string.IsNullOrWhiteSpace(_fName.Text) || defs.Items.Any(i => i.Name == _fName.Text) ? $"item_{addr:X4}" : _fName.Text!.Trim();
         var item = new ItemDef { Name = name, Address = addr, Type = CellType.U8, Formula = "raw", Category = "User", Origin = "user" };
         _host.EditDefinitions(d => { d.Items.Add(item); return 0; });
-        _selected = item;
+        Selected = item;
         Refresh(item.Name);
         _status.Text = $"added {item.Name} at {addr:X4}; open Definition to set its type, size, axes and formula, then Apply";
         AppLog.Action("calibration", $"added definition {item.Name} at {addr:X4}");
@@ -1040,9 +1282,9 @@ public sealed class CalibrationView : UserControl
 
     void Delete()
     {
-        if (_selected is not { } item) return;
+        if (Selected is not { } item) return;
         _host.EditDefinitions(d => d.Items.Remove(item));
-        _selected = null;
+        Selected = null;
         Refresh();
         _status.Text = $"removed {item.Name}";
         AppLog.Action("calibration", $"removed definition {item.Name}");
@@ -1076,25 +1318,42 @@ public sealed class CalibrationView : UserControl
             _host.EditDefinitions(d => { d.Items.Add(added); return true; });
             AppLog.Action("calibration", $"added the axis {added.Name} at {addr:X4} from a header");
         }
-        _cameFrom = _item.Name;
-        if (_back != null) _back.IsVisible = true;
+        var from = _item.Name;
+        Remember();
         Refresh(existing.Name);
         _grid.SelectCell(0, Math.Clamp(index, 0, Math.Max(0, existing.Cols - 1)));
-        _status.Text = $"{existing.Name}: breakpoint {index} - edit it here, then pick {_cameFrom} again to see the map against it";
+        _status.Text = $"{existing.Name}: breakpoint {index} - edit it here, then Back to {from} to see the map against it";
     }
 
-    /// The map a header jumped away from: Back returns to it.
-    string? _cameFrom;
-    Button? _back;
+    /// Where a button took the editor from (a page, or a definition), newest last: Back walks it back one step at a time, all the way to where it started.
+    readonly Stack<(CalPage? Page, string? Item)> _history = new();
+    readonly Button? _back;
+
+    /// Note the place on screen before a button moves away from it.
+    void Remember()
+    {
+        if (_pageOpen != null) _history.Push((_pageOpen, null));
+        else if (_item != null) _history.Push((null, _item.Name));
+        else return;
+        _back?.IsVisible = true;
+    }
 
     void GoBack()
     {
-        if (_cameFrom == null) return;
-        var to = _cameFrom;
-        _cameFrom = null;
-        if (_back != null) _back.IsVisible = false;
-        Refresh(to);
-        _status.Text = $"back to {to}";
+        if (_history.Count == 0) { _back?.IsVisible = false; return; }
+        var (page, name) = _history.Pop();
+        _back?.IsVisible = _history.Count > 0;
+        if (page != null)
+        {
+            ShowPage(page);
+            _status.Text = $"back to {page.Name}";
+        }
+        else if (name != null)
+        {
+            _pageOpen = null;
+            Refresh(name);
+            _status.Text = $"back to {name}";
+        }
     }
 
     /// Open the O2 / knock tables on the map on screen, fed by the logged frames.
@@ -1107,7 +1366,57 @@ public sealed class CalibrationView : UserControl
             TargetLow = TargetLow, TargetHigh = TargetHigh, Correction = WidebandCorrection,
         };
         await w.ShowDialog(owner);
-        if (w.Applied) { Refresh(_selected?.Name); UpdateOverlay(); _status.Text = "the log's offsets were applied - Undo puts them back"; }
+        if (w.Applied) { Refresh(Selected?.Name); UpdateOverlay(); _status.Text = "the log's offsets were applied - Undo puts them back"; }
+    }
+
+    /// The injector calibration: stock and fitted size, the multiplier that follows, the injector offset and the fuel trims.
+    async void OpenInjectors()
+    {
+        if (_top() is not Window owner) return;
+        var w = new InjectorWindow(_host);
+        await w.ShowDialog(owner);
+        if (w.Applied) { Refresh(Selected?.Name); _status.Text = "injector calibration applied - Undo puts it all back in one step"; }
+    }
+
+    /// The code patches in the feature file, against the loaded ROM.
+    async void OpenFeatures()
+    {
+        if (_top() is not Window owner) return;
+        var w = new FeaturePatchWindow(_host);
+        await w.ShowDialog(owner);
+        if (w.Changed) { Refresh(Selected?.Name); _status.Text = "feature patches changed - Undo takes each one back"; }
+    }
+
+    /// The MAP sensor: which one is fitted, and the load breakpoints moved to suit it.
+    async void OpenMapSensor()
+    {
+        if (_top() is not Window owner) return;
+        var w = new MapSensorWindow(_host);
+        await w.ShowDialog(owner);
+        if (w.Applied) { Refresh(Selected?.Name); _status.Text = "MAP sensor applied - Undo puts it all back in one step"; }
+    }
+
+    /// The AFR correction over the selected cells, worked out from the log the way the established tuning software does it.
+    async void AfrFix(ItemDef? item)
+    {
+        if (_top() is not Window owner || item == null || _model == null) return;
+        var sel = _grid.Selection();
+        if (sel.Count == 0) { _status.Text = "select the cells to correct first"; return; }
+        if (_model.Overlay == null)
+        {
+            _status.Text = "pick an AFR or lambda overlay first (Tools > Overlay), so there is something to correct against";
+            return;
+        }
+        var w = new AfrFixWindow(item.Name, _model.OverlayName, sel,
+                                 [.. sel.Select(i => _model.Overlay[i])],
+                                 [.. sel.Select(i => _model.OverlayCount is { } c && i < c.Length ? c[i] : 0)],
+                                 TargetLow, TargetHigh, _host.Defs(), _host.RomCopy(), item, MapSide.Side(item) == true);
+        await w.ShowDialog(owner);
+        if (w.Result is not { } fix) { _status.Text = "AFR fix cancelled"; return; }
+        var cells = fix.Cells;
+        if (cells.Count == 0) { _status.Text = "no selected cell has enough samples to correct"; return; }
+        Write(cells, i => _model.Values[i] * (1 + (fix.Percent(i) / 100)), false, fix.What);
+        _status.Text = $"{cells.Count} cell(s) corrected: {fix.What}";
     }
 
     /// Open the scaling tools on the table on screen, and redraw if anything was applied.
@@ -1116,7 +1425,7 @@ public sealed class CalibrationView : UserControl
         if (_top() is not Window owner) return;
         var w = new ScaleWindow(_host, item);
         await w.ShowDialog(owner);
-        if (w.Applied) { Refresh(_selected?.Name); _status.Text = "scaled - Undo puts it all back in one step"; }
+        if (w.Applied) { Refresh(Selected?.Name); _status.Text = "scaled - Undo puts it all back in one step"; }
     }
 
     // ------------------------------------------------------------------ detect
@@ -1131,7 +1440,7 @@ public sealed class CalibrationView : UserControl
             // only the files this ROM was built from: another ROM may still be open in a tab
             var built = asm.SourceMap.Select(e => e.File).Distinct().ToHashSet(StringComparer.OrdinalIgnoreCase);
             var sources = _sources().Where(x => { try { return built.Contains(Path.GetFullPath(x.Path)); } catch { return false; } }).ToList();
-            if (sources.Count == 0) sources = _sources().ToList();
+            if (sources.Count == 0) sources = [.. _sources()];
             var r = _host.EditDefinitions(defs => CalibrationDetector.Detect(defs, asm, rom, sources));
             Refresh();
             _status.Text = "Detect: " + r.Summary + (r.Added + r.Replaced > 0 ? " - check types and formulas" : "");
@@ -1189,8 +1498,8 @@ public sealed class CalibrationView : UserControl
             {
                 Name = Path.GetFileName(_host.LoadedPath ?? ""),
                 RomSize = defs.RomSize,
-                Items = defs.Items.OrderBy(i => i.Address).ToList(),
-                Formulas = defs.Formulas.Where(f => used.Contains(f.Name)).ToList(),
+                Items = [.. defs.Items.OrderBy(i => i.Address)],
+                Formulas = [.. defs.Formulas.Where(f => used.Contains(f.Name))],
             };
             export.Save(path);
             _status.Text = $"exported {export.Items.Count} definitions to {path}";
@@ -1214,6 +1523,20 @@ public sealed class CalibrationView : UserControl
             var path = file?.TryGetLocalPath();
             if (path == null) return;
             var defs = _host.Defs();
+            var layout = XdfExport.Layout.Reference;
+            if (top is Window layoutOwner)
+            {
+                var pick = await Dialogs.Ask(layoutOwner, "How much should the XDF carry?",
+                    "Just the maps: the same handful of elements as the XDFs written for these ECUs that are known to work - a title, " +
+                    "the two axes and the data, and nothing else. If TunerPro has been reading a file from here oddly, this is the one " +
+                    "to use; there is nothing in it for a TunerPro build to disagree about.\n\n" +
+                    "With notes: the same, plus categories down the side, a description on every item saying where it came from and how " +
+                    "the ROM really scales it, and each fuel map's per-column multiplier row as a table of its own. Easier to read, but " +
+                    "more elements that a given TunerPro build has to agree with.",
+                    "Just the maps", "With notes", "Cancel");
+                if (pick == "Cancel" || pick == null) { _status.Text = "XDF export cancelled"; return; }
+                if (pick == "With notes") layout = XdfExport.Layout.Annotated;
+            }
             var values = XdfExport.Values.Raw;
             if (top is Window valueOwner)
             {
@@ -1225,8 +1548,7 @@ public sealed class CalibrationView : UserControl
                 if (pick == "Cancel" || pick == null) { _status.Text = "XDF export cancelled"; return; }
                 if (pick == "Scaled") values = XdfExport.Values.Scaled;
             }
-            // these maps keep more bytes per row than they use; how TunerPro should be told about
-            // that is the one thing the known-good files do not settle, so ask
+            // these maps keep more bytes per row than they use; how TunerPro should be told about that is the one thing the known-good files do not settle, so ask
             var stride = XdfExport.Stride.PaddingAsColumns;
             if (defs.Items.Any(i => i.IsTable && i.Rows > 1 && i.RowStride != i.Cols * i.ElementSize) && top is Window owner)
             {
@@ -1242,8 +1564,9 @@ public sealed class CalibrationView : UserControl
                        : answer == "Padding only" ? XdfExport.Stride.PaddingOnly
                        : XdfExport.Stride.PaddingAsColumns;
             }
-            File.WriteAllText(path, XdfExport.Write(defs, _host.RomBytes(0, Bus.RomSize), Path.GetFileNameWithoutExtension(path), stride, values));
-            _status.Text = $"wrote {path}: {defs.Items.Count} definitions for TunerPro (open it with the matching .bin)";
+            File.WriteAllText(path, XdfExport.Write(defs, _host.RomBytes(0, Bus.RomSize), Path.GetFileNameWithoutExtension(path), stride, values, layout));
+            _status.Text = $"wrote {path}: {defs.Items.Count} definitions for TunerPro " +
+                           $"({(layout == XdfExport.Layout.Reference ? "maps only" : "with notes and categories")}; open it with the matching .bin)";
             AppLog.Action("calibration", "exported XDF " + path);
         }
         catch (Exception ex) { _status.Text = "XDF export failed: " + ex.Message; AppLog.Error("calibration", "XDF export failed", ex); }

@@ -1,9 +1,5 @@
-// Parses FullOpcodes' display-text operands once into a tree that Exec evaluates generically.
-// Addressing notes that are easy to get wrong:
-//   * N8 is an absolute low-RAM/SFR address (0x00..0xFF).
-//   * off N8 is LRB-paged: ((LRB >> 5) << 8) | N8.
-//   * rN / erN live in the local register bank at base ((LRB >> 5) << 8) | ((LRB & 0x1F) << 3).
-//   * LC/CMPC address code space; every other form addresses data space.
+// Copyright (c) bmgjet. All rights reserved.
+// Parses FullOpcodes' display-text operands once into a tree that Exec evaluates generically. Addressing notes that are easy to get wrong: * N8 is an absolute low-RAM/SFR address (0x00..0xFF). * off N8 is LRB-paged: ((LRB >> 5) << 8) | N8. * rN / erN live in the local register bank at base ((LRB >> 5) << 8) | ((LRB & 0x1F) << 3). * LC/CMPC address code space; every other form addresses data space.
 
 namespace OkiRomSim.Core;
 
@@ -26,8 +22,7 @@ public enum MemKind
     Abs16,       // N16 used directly as an address (code-space loads)
 }
 
-/// `Mem` addressing-mode value: kind plus whichever extra selector it needs
-/// (a Reg for AtReg/IdxReg, or an er-bank index for AtEr).
+/// `Mem` addressing-mode value: kind plus whichever extra selector it needs (a Reg for AtReg/IdxReg, or an er-bank index for AtEr).
 public readonly struct Mem
 {
     public readonly MemKind Kind;
@@ -55,11 +50,15 @@ public sealed class Arg
     public readonly Mem Mem;
     public readonly Arg? Inner;     // for Bit
     public readonly byte Bit_;      // bit number, for Bit
+    /// The operand was written with an extra bracket round a memory form - "[N8]", "[off N8]", "[[DP]]", "[S8[USP]]", "[N16[X1]]" - in J, CAL, LC(B) and CMPC(B). Those instructions use the *value* of their object as an address, so the object here is the word in memory, and the address it holds is what is jumped to or read from code space.
+    public readonly bool Deref;
 
-    private Arg(ArgKind kind, Reg reg = default, byte index = 0, Mem mem = default, Arg? inner = null, byte bit = 0)
+    private Arg(ArgKind kind, Reg reg = default, byte index = 0, Mem mem = default, Arg? inner = null, byte bit = 0, bool deref = false)
     {
-        Kind = kind; Reg = reg; Index = index; Mem = mem; Inner = inner; Bit_ = bit;
+        Kind = kind; Reg = reg; Index = index; Mem = mem; Inner = inner; Bit_ = bit; Deref = deref;
     }
+
+    public static Arg Dereferenced(Arg a) => new(a.Kind, a.Reg, a.Index, a.Mem, a.Inner, a.Bit_, deref: true);
 
     public static Arg OfReg(Reg r) => new(ArgKind.Reg, reg: r);
     public static Arg OfEr(byte n) => new(ArgKind.Er, index: n);
@@ -78,8 +77,8 @@ public sealed class Arg
     public override bool Equals(object? obj) =>
         obj is Arg o && Kind == o.Kind && Reg == o.Reg && Index == o.Index &&
         Mem.Kind == o.Mem.Kind && Mem.Reg == o.Mem.Reg && Mem.ErIndex == o.Mem.ErIndex &&
-        Bit_ == o.Bit_ && Equals(Inner, o.Inner);
-    public override int GetHashCode() => (Kind, Reg, Index, Mem.Kind, Mem.Reg, Mem.ErIndex, Bit_).GetHashCode();
+        Bit_ == o.Bit_ && Deref == o.Deref && Equals(Inner, o.Inner);
+    public override int GetHashCode() => (Kind, Reg, Index, Mem.Kind, Mem.Reg, Mem.ErIndex, Bit_, Deref).GetHashCode();
 }
 
 public sealed class Parsed
@@ -113,10 +112,7 @@ public static class OperandParser
         _ => null,
     };
 
-    private static bool TryParseUInt(string s, out byte n)
-    {
-        return byte.TryParse(s, out n);
-    }
+    private static bool TryParseUInt(string s, out byte n) => byte.TryParse(s, out n);
 
     private static Arg? ParseArg(string raw)
     {
@@ -157,11 +153,9 @@ public static class OperandParser
             if (r != null) return Arg.OfMem(Mem.OfReg(MemKind.AtReg, r.Value));
             if (inner.StartsWith("er") && TryParseUInt(inner[2..], out var n))
                 return Arg.OfMem(Mem.OfEr(n));
-            // "[[DP]]", "[off N8]", "[N8]", "[S8[USP]]", "[N16[X1]]": the
-            // extra bracket layer is display notation for jump/call targets,
-            // where the value fetched *is* the destination. The addressing
-            // itself is the inner form.
-            return ParseArg(inner);
+            // "[[DP]]", "[off N8]", "[N8]", "[S8[USP]]", "[N16[X1]]": the object is the inner memory form, and the instruction uses the word held there as its address (see Arg.Deref).
+            var innerArg = ParseArg(inner);
+            return innerArg is { Kind: ArgKind.Mem } ? Arg.Dereferenced(innerArg) : innerArg;
         }
 
         // Indexed: "N16[X1]", "S8[USP]", "N16[N8]".
@@ -180,8 +174,7 @@ public static class OperandParser
                 else if (disp == "N16") { baseReg = ParseReg(basePart); if (baseReg != null) kind = MemKind.IdxReg; }
                 else if (disp == "N'16") { baseReg = ParseReg(basePart); if (baseReg != null) kind = MemKind.IdxRegAlt; }
 
-                if (kind is null) return null;
-                return Arg.OfMem(baseReg != null ? Mem.OfReg(kind.Value, baseReg.Value) : Mem.Of(kind.Value));
+                return kind is null ? null : Arg.OfMem(baseReg != null ? Mem.OfReg(kind.Value, baseReg.Value) : Mem.Of(kind.Value));
             }
         }
 
@@ -233,11 +226,7 @@ public static class OperandParser
             // Operands are comma-separated, and no operand form contains a comma.
             foreach (var part in rest.Split(','))
             {
-                // J / CAL: the outer bracket is display notation for "jump to the value of
-                // the operand", and the operand inside uses the ordinary addressing. So
-                // `J [DP]` (92 22) jumps to the address in DP - the ROMs' jump tables do
-                // LC A,[DP] / MOV DP,A / J [DP] - `J [er0]` to the value of er0, and only
-                // `J [[DP]]` (B2 22) fetches the destination from memory at DP.
+                // J / CAL: the outer bracket is display notation for "jump to the value of the operand", and the operand inside uses the ordinary addressing. So `J [DP]` (92 22) jumps to the address in DP - the ROMs' jump tables do LC A,[DP] / MOV DP,A / J [DP] - `J [er0]` to the value of er0, and only `J [[DP]]` (B2 22) fetches the destination from memory at DP.
                 var operand = part.Trim();
                 if (op is "J" or "CAL" && operand.StartsWith('[') && operand.EndsWith(']')) operand = operand[1..^1];
                 var a = ParseArg(operand);
@@ -255,7 +244,7 @@ public static class OperandParser
     {
         if (_table != null) return _table;
         var all = new HashSet<string>(FullOpcodes.Table.Select(p => p.Mnemonic.Split(' ')[0]));
-        _table = FullOpcodes.Table.Select(p => ParseOne(p.Mnemonic, all)).ToArray();
+        _table = [.. FullOpcodes.Table.Select(p => ParseOne(p.Mnemonic, all))];
         return _table;
     }
 }

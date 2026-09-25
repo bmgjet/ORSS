@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Xml;
 using Avalonia.Controls;
 using Avalonia.Media;
@@ -73,10 +74,10 @@ public sealed class CodeEditor : UserControl
                 if (!Lines.TryGetValue(vl.FirstDocumentLine.LineNumber, out var h)) continue;
                 double y = vl.VisualTop - textView.ScrollOffset.Y;
                 var baseColor = h.Code ? _hitCode : _hitData;
-                byte tint = (byte)(18 + 70 * Math.Clamp(h.Heat, 0, 1));
+                byte tint = (byte)(18 + (70 * Math.Clamp(h.Heat, 0, 1)));
                 dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(tint, baseColor.R, baseColor.G, baseColor.B)), null,
                     new Avalonia.Rect(0, y, Math.Max(textView.Bounds.Width, 2000), vl.Height));
-                dc.DrawRectangle(new SolidColorBrush(Color.FromArgb((byte)(120 + 135 * Math.Clamp(h.Heat, 0, 1)), baseColor.R, baseColor.G, baseColor.B)), null,
+                dc.DrawRectangle(new SolidColorBrush(Color.FromArgb((byte)(120 + (135 * Math.Clamp(h.Heat, 0, 1))), baseColor.R, baseColor.G, baseColor.B)), null,
                     new Avalonia.Rect(0, y, 4, vl.Height));
             }
         }
@@ -87,20 +88,15 @@ public sealed class CodeEditor : UserControl
     {
         get
         {
-            // the visual lines are only valid after a layout pass; asking outside one (a restore
-            // point written on a timer, a background save) throws, and the answer is simply
-            // "wherever it was" - the top line is close enough and nothing depends on it
+            // the visual lines are only valid after a layout pass; asking outside one (a restore point written on a timer, a background save) throws, and the answer is simply "wherever it was" - the top line is close enough and nothing depends on it
             try
             {
                 var tv = _ed.TextArea.TextView;
-                return _lastFirstVisible = tv.VisualLines.FirstOrDefault()?.FirstDocumentLine.LineNumber ?? 1;
+                return field = tv.VisualLines.FirstOrDefault()?.FirstDocumentLine.LineNumber ?? 1;
             }
-            catch { return _lastFirstVisible; }
+            catch { return field; }
         }
-    }
-
-    /// The last line number this reported, kept so a reader outside a layout pass gets something sensible instead of an exception.
-    int _lastFirstVisible = 1;
+    } = 1;
 
     public void ScrollToLine(int line)
     {
@@ -153,7 +149,7 @@ public sealed class CodeEditor : UserControl
     /// Paints a band behind each marked line.
     sealed class LineMarks : IBackgroundRenderer
     {
-        public readonly Dictionary<int, bool> Lines = new();
+        public readonly Dictionary<int, bool> Lines = [];
         static readonly IBrush Error = new SolidColorBrush(Color.FromArgb(90, 230, 40, 40));
         static readonly IBrush Warning = new SolidColorBrush(Color.FromArgb(60, 230, 170, 30));
         static readonly IPen ErrorPen = new Pen(new SolidColorBrush(Color.FromRgb(240, 70, 70)), 1.5);
@@ -172,8 +168,7 @@ public sealed class CodeEditor : UserControl
         }
     }
 
-    // 66K assembly highlighting. Keyword lists are short on purpose: mnemonics are matched by
-    // a word rule so new ones do not need adding here.
+    // 66K assembly highlighting. Keyword lists are short on purpose: mnemonics are matched by a word rule so new ones do not need adding here.
     const string Xshd = """
 <SyntaxDefinition name="oki66" xmlns="http://icsharpcode.net/sharpdevelop/syntaxdefinition/2008">
   <Color name="Comment" foreground="#6A9955" />

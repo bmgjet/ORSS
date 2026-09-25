@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -9,8 +10,7 @@ using OkiRomSim.Core;
 
 namespace OkiRomSim.Desktop;
 
-/// The dashboard on the Datalog page: gauges you build yourself - dials, bars, numbers, trigger lights and rolling graphs - fed by the logged channels.
-/// New / Load / Save / Templates work on a layout (a .gauges.json file); Create widget pops the selected gauge out into its own small window that floats over everything else, so the one reading that matters can sit where you can see it while you drive or tune.
+/// The dashboard on the Datalog page: gauges you build yourself - dials, bars, numbers, trigger lights and rolling graphs - fed by the logged channels. New / Load / Save / Templates work on a layout (a .gauges.json file); Create widget pops the selected gauge out into its own small window that floats over everything else, so the one reading that matters can sit where you can see it while you drive or tune.
 public sealed class GaugePanel : UserControl
 {
     /// Where dashboards are kept between runs.
@@ -18,28 +18,57 @@ public sealed class GaugePanel : UserControl
 
     readonly Canvas _canvas = new() { Background = new SolidColorBrush(Color.FromRgb(0x16, 0x17, 0x1a)) };
     readonly TextBlock _hint = new() { FontSize = 11, Opacity = 0.75, Margin = new Thickness(6, 2), TextWrapping = TextWrapping.Wrap };
-    readonly List<GaugeControl> _gauges = new();
+    readonly List<GaugeControl> _gauges = [];
     readonly Func<IEnumerable<string>> _channels;
     readonly Func<TopLevel?> _top;
     GaugeControl? _selected;
     GaugeLayout _layout = new();
-    readonly List<GaugeWindow> _windows = new();
+    readonly List<GaugeWindow> _windows = [];
+    readonly ScrollViewer _scroll;
+    Button? _hideButton, _unhideButton, _parentButton;
 
     public GaugePanel(Func<IEnumerable<string>> channels, Func<TopLevel?> top)
     {
         _channels = channels; _top = top;
 
-        var bar = new WrapPanel { Margin = new Thickness(4, 2) };
+var bar = new WrapPanel { Margin = new Thickness(4, 2) };
         bar.Children.Add(Toolbar.Button(Toolbar.Add, "New", "Add a gauge to the dashboard.", () => AddGauge(null)));
-        bar.Children.Add(Toolbar.Button(Toolbar.Open, "Load", "Open a dashboard saved earlier.", Load));
-        bar.Children.Add(Toolbar.Button(Toolbar.Save, "Save", "Save this dashboard to a file.", Save));
-        var templates = Toolbar.Menu("Templates", Toolbar.Gauge,
-            GaugeLayout.Templates.Select(t => new Toolbar.Entry(Toolbar.Gauge, t, $"Replace the dashboard with the {t} template.", () => UseTemplate(t))).ToArray());
-        bar.Children.Add(templates);
+        bar.Children.Add(Toolbar.Button(Toolbar.Save, "Save", "Save this dashboard - the gauges, where they sit, and any floating widget made from them - to a file you can come back to.", Save));
+        bar.Children.Add(Toolbar.Button(Toolbar.Open, "Load", "Open a dashboard saved earlier, in place of this one.", Load));
+        bar.Children.Add(Toolbar.Menu("Recent", Toolbar.Restore, Toolbar.Entry.Submenu(Toolbar.Restore, "Dashboards", "Dashboards saved or opened lately.", RecentEntries)));
+        bar.Children.Add(Toolbar.Menu("Templates", Toolbar.Gauge,
+            [.. GaugeLayout.Templates.Select(t => new Toolbar.Entry(Toolbar.Gauge, t, $"Replace the dashboard with the {t} template.", () => UseTemplate(t)))]));
         bar.Children.Add(Toolbar.Button(Toolbar.Gauge, "Create widget",
-            "Pop the selected gauge out into its own floating window: drag it anywhere on screen, resize it, roll it up or close it.", PopOut));
-        bar.Children.Add(Toolbar.Button("✎", "Edit", "Change the selected gauge: channel, range, warning level, kind.", () => { if (_selected != null) AddGauge(_selected); }));
-        bar.Children.Add(Toolbar.Button(Toolbar.Delete, "Remove", "Take the selected gauge off the dashboard.", RemoveSelected));
+            "Float this dashboard over everything else: one window holding every gauge on it, laid out as it is here. Drag it anywhere on screen, " +
+            "resize it (the gauges scale with it), roll it up to its title bar, or close it.",
+            PopOutAll));
+        bar.Children.Add(Toolbar.Button(Toolbar.Gauge, "Widget (selected)",
+            "Float only the selected gauge, in a window of its own.", PopOut));
+        _hideButton = Toolbar.Button("\u25bd", "Hide", "Put the floating widgets out of the way without closing them - Unhide brings them back exactly where they were.", Hide);
+        bar.Children.Add(_hideButton);
+        _unhideButton = Toolbar.Button("\u25b3", "Unhide", "Bring the hidden widgets back.", Unhide);
+        bar.Children.Add(_unhideButton);
+        _parentButton = Toolbar.Button("\u2693", "Parent",
+            "Parent the widgets to the main window (again to let them go): they then sit over the main window only, move with it and minimize with it. " +
+            "Widgets created while this is on are parented too.", ToggleParent);
+        bar.Children.Add(_parentButton);
+        bar.Children.Add(Toolbar.Button("\u25a6", "Arrange",
+            "Line the widgets up next to each other in the free space on the main window, starting from its bottom-right corner.", Arrange));
+        bar.Children.Add(Toolbar.Button("\u270e", "Edit", "Change the selected gauge: channel, range, warning level, kind.", () => { if (_selected != null) AddGauge(_selected); }));
+        bar.Children.Add(Toolbar.Button(Toolbar.Delete, "Remove", "Take the selected gauge off the dashboard (Delete key).", RemoveSelected));
+        bar.Children.Add(Toolbar.Button("↶", "Undo", "Undo the last change to the dashboard - adding, editing, removing, moving or resizing a gauge, a template or a load (Ctrl+Z).", Undo));
+        bar.Children.Add(Toolbar.Button("↷", "Redo", "Put back what Undo took away (Ctrl+Y).", Redo));
+
+        // Delete and Ctrl+Z / Ctrl+Y work while the dashboard has the keyboard (click a gauge or the space around them)
+        Focusable = true;
+        _canvas.PointerPressed += (_, _) => { Select(null); Focus(); };
+        KeyDown += (_, e) =>
+        {
+            bool ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+            if (e.Key == Key.Delete && _selected != null) { RemoveSelected(); e.Handled = true; }
+            else if (ctrl && e.Key == Key.Z && !e.KeyModifiers.HasFlag(KeyModifiers.Shift)) { Undo(); e.Handled = true; }
+            else if (ctrl && (e.Key == Key.Y || (e.Key == Key.Z && e.KeyModifiers.HasFlag(KeyModifiers.Shift)))) { Redo(); e.Handled = true; }
+        };
 
         _hint.Text = "No gauges yet: New adds one, or start from a template. Drag a gauge to move it, drag its bottom-right corner to resize.";
         var dock = new DockPanel();
@@ -47,12 +76,13 @@ public sealed class GaugePanel : UserControl
         DockPanel.SetDock(_hint, Dock.Bottom);
         dock.Children.Add(bar);
         dock.Children.Add(_hint);
-        dock.Children.Add(new ScrollViewer
+        _scroll = new ScrollViewer
         {
             Content = _canvas,
             HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
             VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
-        });
+        };
+        dock.Children.Add(_scroll);
         Content = dock;
     }
 
@@ -61,7 +91,27 @@ public sealed class GaugePanel : UserControl
     /// Readings from outside the ECU (Settings > Datalog), merged into every frame the gauges see so an external channel reads exactly like a logged one.
     public ExternalData? External { get; set; }
 
-    /// Feed every gauge (on the dashboard and in its own window) the newest reading.
+    /// Feed every gauge (on the dashboard and in its own window) the newest reading. A replay's frames from the last one fed (exclusive) to `now` (inclusive): every gauge's history gets all of them, so a fast replay or a jump along the slider draws the same line a slow replay does.
+    public void Feed(IReadOnlyList<LogFrame> log, int lastFed, int now)
+    {
+        if (now < 0 || now >= log.Count) { Show(null); return; }
+        int from = lastFed + 1;
+        if (lastFed < 0 || now < lastFed || now - lastFed > 20000)
+        {
+            // a fresh start (or a jump back): the history is rebuilt from the seconds before this frame
+            ClearHistory();
+            double seconds = _gauges.Concat(_windows.SelectMany(w => w.Gauges)).Select(g => g.Spec.Seconds).DefaultIfEmpty(20).Max();
+            from = now;
+            while (from > 0 && log[from - 1].T >= log[now].T - seconds && now - from < 20000) from--;
+        }
+        for (int i = from; i < now; i++)
+        {
+            foreach (var g in _gauges) g.Add(log[i]);
+            foreach (var w in _windows) foreach (var g in w.Gauges) g.Add(log[i]);
+        }
+        Show(log[now]);
+    }
+
     public void Show(LogFrame? f)
     {
         f = WithExternal(f);
@@ -84,7 +134,7 @@ public sealed class GaugePanel : UserControl
     public void ClearHistory()
     {
         foreach (var g in _gauges) g.Clear();
-        foreach (var w in _windows) w.Gauge.Clear();
+        foreach (var w in _windows) w.ClearHistory();
     }
 
     // ------------------------------------------------------------------ layout
@@ -93,8 +143,9 @@ public sealed class GaugePanel : UserControl
     {
         get
         {
-            _layout.Gauges = _gauges.Select(g => g.Spec).ToList();
-            _layout.Widgets = _windows.Where(w => !w.IsGone).Select(w => w.AsWidget()).ToList();
+            _layout.Gauges = [.. _gauges.Select(g => g.Spec)];
+            var origin = _top() is Window owner ? owner.PointToScreen(new Point(0, 0)) : (PixelPoint?)null;
+            _layout.Widgets = [.. _windows.Where(w => !w.IsGone).Select(w => w.AsWidget(origin))];
             return _layout;
         }
     }
@@ -113,8 +164,54 @@ public sealed class GaugePanel : UserControl
 
     void UseTemplate(string name)
     {
-        Apply(GaugeLayout.Template(name));
+        Remember();
+        var t = GaugeLayout.Template(name);
+        t.Widgets = [];
+        Apply(t);
         AppLog.Action("gauges", "template " + name);
+    }
+
+    // ------------------------------------------------------------------ undo
+
+    readonly Stack<string> _undo = new(), _redo = new();
+
+    /// Remember the dashboard as it is now, before something changes it.
+    void Remember()
+    {
+        _undo.Push(new GaugeLayout { Name = _layout.Name, Gauges = [.. _gauges.Select(g => g.Spec.Clone())] }.ToJson());
+        if (_undo.Count > 100) { var keep = _undo.Take(100).Reverse().ToList(); _undo.Clear(); foreach (var k in keep) _undo.Push(k); }
+        _redo.Clear();
+    }
+
+    string Now() => new GaugeLayout { Name = _layout.Name, Gauges = [.. _gauges.Select(g => g.Spec.Clone())] }.ToJson();
+
+    void Undo()
+    {
+        if (_undo.Count == 0) { _hint.Text = "nothing to undo"; return; }
+        _redo.Push(Now());
+        Restore(_undo.Pop());
+        _hint.Text = $"undone ({_undo.Count} more)";
+    }
+
+    void Redo()
+    {
+        if (_redo.Count == 0) { _hint.Text = "nothing to redo"; return; }
+        _undo.Push(Now());
+        Restore(_redo.Pop());
+        _hint.Text = "redone";
+    }
+
+    /// Put a remembered dashboard back (the floating widgets are left as they are).
+    void Restore(string json)
+    {
+        var l = GaugeLayout.FromJson(json);
+        _canvas.Children.Clear();
+        _gauges.Clear();
+        _selected = null;
+        foreach (var spec in l.Gauges) Place(spec);
+        Select(null);
+        UpdateCanvasSize();
+        UpdateHint();
     }
 
     void Place(GaugeSpec spec)
@@ -156,9 +253,13 @@ public sealed class GaugePanel : UserControl
     Point _grab;
     bool _resizing;
 
+    string? _beforeDrag;
+
     void BeginDrag(GaugeControl g, PointerPressedEventArgs e)
     {
         Select(g);
+        Focus();
+        _beforeDrag = Now();
         _grab = e.GetPosition(g);
         _resizing = _grab.X > g.Bounds.Width - 14 && _grab.Y > g.Bounds.Height - 14;
         e.Pointer.Capture(g);
@@ -169,15 +270,18 @@ public sealed class GaugePanel : UserControl
     {
         if (!Equals(e.Pointer.Captured, g)) return;
         var p = e.GetPosition(_canvas);
+        // kept inside the part of the dashboard that is on screen, so a gauge can't be lost off its edge
+        var view = _scroll.Viewport;
+        double right = _scroll.Offset.X + (view.Width > 0 ? view.Width : 400), bottom = _scroll.Offset.Y + (view.Height > 0 ? view.Height : 300);
         if (_resizing)
         {
-            g.Spec.Width = g.Width = Math.Max(70, p.X - g.Spec.X);
-            g.Spec.Height = g.Height = Math.Max(50, p.Y - g.Spec.Y);
+            g.Spec.Width = g.Width = Math.Max(70, Math.Min(p.X, right) - g.Spec.X);
+            g.Spec.Height = g.Height = Math.Max(50, Math.Min(p.Y, bottom) - g.Spec.Y);
         }
         else
         {
-            g.Spec.X = Math.Max(0, p.X - _grab.X);
-            g.Spec.Y = Math.Max(0, p.Y - _grab.Y);
+            g.Spec.X = Math.Clamp(p.X - _grab.X, 0, Math.Max(0, right - Math.Min(g.Spec.Width, right)));
+            g.Spec.Y = Math.Clamp(p.Y - _grab.Y, 0, Math.Max(0, bottom - Math.Min(g.Spec.Height, bottom)));
             Canvas.SetLeft(g, g.Spec.X); Canvas.SetTop(g, g.Spec.Y);
         }
         g.InvalidateVisual();
@@ -188,6 +292,13 @@ public sealed class GaugePanel : UserControl
         e.Pointer.Capture(null);
         _resizing = false;
         UpdateCanvasSize();
+        // a move or a resize is one step to undo; a click that moved nothing is not
+        if (_beforeDrag != null && _beforeDrag != Now())
+        {
+            _undo.Push(_beforeDrag);
+            _redo.Clear();
+        }
+        _beforeDrag = null;
     }
 
     // ------------------------------------------------------------------ actions
@@ -196,9 +307,10 @@ public sealed class GaugePanel : UserControl
     {
         if (_top() is not Window owner) return;
         var spec = edit?.Spec.Clone() ?? new GaugeSpec { Channel = _channels().FirstOrDefault() ?? "rpm" };
-        var dlg = new GaugeEditor(spec, _channels());
+        var dlg = new GaugeEditor(spec, _channels(), isEdit: edit != null);
         await dlg.ShowDialog(owner);
         if (dlg.Result == null) return;
+        Remember();
         if (edit != null)
         {
             _canvas.Children.Remove(edit);
@@ -211,43 +323,177 @@ public sealed class GaugePanel : UserControl
     void RemoveSelected()
     {
         if (_selected == null) return;
+        Remember();
         _canvas.Children.Remove(_selected);
         _gauges.Remove(_selected);
         Select(_gauges.LastOrDefault());
         UpdateCanvasSize();
     }
 
+    /// Create widget floats the whole dashboard: ONE window holding every gauge that is on it, in the same arrangement. A panel with a dial, a bar and a graph on it becomes a single window with all three, not three windows to place and close one at a time.
+    void PopOutAll()
+    {
+        if (_gauges.Count == 0) { _hint.Text = "there are no gauges to float: New adds one, or start from a template"; return; }
+        var specs = _gauges.Select(g => g.Spec.Clone()).ToList();
+        Open(Widget(specs));
+        _hint.Text = $"{specs.Count} gauge(s) floating in one window - drag its title bar to move it, the corner to resize, \u2715 to close";
+        AppLog.Action("gauges", $"floated the dashboard ({specs.Count} gauges) as one widget");
+    }
+
     void PopOut()
     {
-        if (_selected == null) { _hint.Text = "select a gauge first (click it), then Create widget floats it over everything else"; return; }
-        Open(new GaugeWidget
+        if (_selected == null) { _hint.Text = "select a gauge first (click it), then Widget (selected) floats just that one"; return; }
+        Open(Widget([_selected.Spec.Clone()]));
+        AppLog.Action("gauges", "floated " + _selected.Spec.Title);
+    }
+
+    /// A widget sized to the gauges going into it, packed to the top-left corner of its window.
+    static GaugeWidget Widget(List<GaugeSpec> specs)
+    {
+        double w = specs.Count == 0 ? 200 : specs.Max(g => g.X + g.Width) - specs.Min(g => g.X);
+        double h = specs.Count == 0 ? 140 : specs.Max(g => g.Y + g.Height) - specs.Min(g => g.Y);
+        return new GaugeWidget
         {
-            Gauge = _selected.Spec.Clone(),
-            Width = Math.Max(160, _selected.Spec.Width), Height = Math.Max(110, _selected.Spec.Height) + 28,
+            Gauges = specs,
+            Width = Math.Max(160, w + 12), Height = Math.Max(110, h + 12) + 24,
             X = double.NaN, Y = double.NaN,
-        });
-        AppLog.Action("gauges", "created a floating widget for " + _selected.Spec.Title);
+        };
     }
 
     void Open(GaugeWidget widget)
     {
         if (_top() is not Window owner) return;
+        Hook(owner);
+        // a new widget follows the Parent button; one read back from a file keeps what it was saved as
+        if (double.IsNaN(widget.X)) widget.Parented = _parented;
         var w = new GaugeWindow(widget);
+        if (widget.Parented && !double.IsNaN(widget.X) && !double.IsNaN(widget.Y))
+        {
+            var o = owner.PointToScreen(new Point(0, 0));
+            w.WindowStartupLocation = WindowStartupLocation.Manual;
+            w.Position = new PixelPoint(o.X + (int)widget.X, o.Y + (int)widget.Y);
+        }
         _windows.Add(w);
         w.Show(owner);
+        if (widget.Hidden) w.SetHidden(true);
+        if (widget.Parented && owner.WindowState == WindowState.Minimized) w.SetParked(true);
+        UpdateHideButtons();
     }
 
-    /// Put back the widgets that were on screen last time. They are opened once the owner window exists, so this is safe to call while the page is still being built.
+    // ------------------------------------------------------------------ parent / arrange
+
+    bool _parented;
+    Window? _owner;
+    PixelPoint _ownerPos;
+
+    IEnumerable<GaugeWindow> ParentedWindows() => _windows.Where(w => !w.IsGone && w.Parented);
+
+    /// Follow the main window: parented widgets move with it and go away while it is minimized.
+    void Hook(Window owner)
+    {
+        if (ReferenceEquals(_owner, owner)) return;
+        _owner = owner;
+        _ownerPos = owner.Position;
+        owner.PositionChanged += (_, e) =>
+        {
+            int dx = e.Point.X - _ownerPos.X, dy = e.Point.Y - _ownerPos.Y;
+            _ownerPos = e.Point;
+            // a minimized window reports a far-off position; the widgets are away then anyway
+            if ((dx == 0 && dy == 0) || owner.WindowState == WindowState.Minimized) return;
+            foreach (var w in ParentedWindows())
+                if (w.WindowState == WindowState.Normal) w.Position = new PixelPoint(w.Position.X + dx, w.Position.Y + dy);
+        };
+        owner.PropertyChanged += (_, e) =>
+        {
+            if (e.Property != Window.WindowStateProperty) return;
+            bool min = owner.WindowState == WindowState.Minimized;
+            if (!min) _ownerPos = owner.Position;
+            foreach (var w in ParentedWindows()) w.SetParked(min);
+        };
+    }
+
+    /// Parent every widget to the main window, or let them all go again.
+    void ToggleParent()
+    {
+        var live = _windows.Where(w => !w.IsGone).ToList();
+        _parented = live.Count > 0 ? live.Any(w => !w.Parented) : !_parented;
+        foreach (var w in live) w.SetParented(_parented);
+        if (_parentButton != null) ToolTip.SetTip(_parentButton, _parented
+            ? "The widgets are parented to the main window: they move and minimize with it. Press again to let them float free."
+            : "Parent the widgets to the main window: they then sit over the main window only, move with it and minimize with it. Widgets created while this is on are parented too.");
+        _hint.Text = _parented
+            ? $"{live.Count} widget(s) parented to the main window - they move and minimize with it (Parent again lets them go)"
+            : $"{live.Count} widget(s) floating free again";
+        AppLog.Action("gauges", (_parented ? "parented " : "unparented ") + live.Count + " widget(s)");
+    }
+
+    /// Put the widgets side by side on the main window, in rows filling from its bottom-right corner leftwards and then upwards, the tallest first, so they sit together in one block out of the way of the menus.
+    void Arrange()
+    {
+        if (_top() is not Window owner) return;
+        var live = _windows.Where(w => !w.IsGone && !w.Hidden).OrderByDescending(w => w.PixelSize.Height).ToList();
+        if (live.Count == 0) { _hint.Text = "there are no widgets on screen to arrange"; return; }
+        if (owner.WindowState == WindowState.Minimized) return;
+        double s = owner.RenderScaling;
+        var tl = owner.PointToScreen(new Point(0, 0));
+        var br = owner.PointToScreen(new Point(owner.ClientSize.Width, owner.ClientSize.Height));
+        int gap = (int)(6 * s);
+        // clear of the status line along the bottom of the main window
+        int right = br.X - gap, bottom = br.Y - (int)(26 * s), top = tl.Y + (int)(60 * s);
+        int x = right, y = bottom, rowH = 0, placed = 0;
+        foreach (var w in live)
+        {
+            if (w.WindowState != WindowState.Normal) w.WindowState = WindowState.Normal;
+            var size = w.PixelSize;
+            // the row is full: start another above it
+            if (x != right && x - size.Width < tl.X + gap) { y -= rowH + gap; x = right; rowH = 0; }
+            w.Position = new PixelPoint(Math.Max(tl.X + gap, x - size.Width), Math.Max(top, y - size.Height));
+            x -= size.Width + gap;
+            rowH = Math.Max(rowH, size.Height);
+            placed++;
+        }
+        _hint.Text = $"{placed} widget(s) arranged on the main window" + (_parented ? "" : " - Parent keeps them there when it moves");
+        AppLog.Action("gauges", $"arranged {placed} widget(s)");
+    }
+
+    /// Put the floating widgets away without losing them: the layout, the positions and the sizes are all still there, and Unhide brings them straight back.
+    void Hide()
+    {
+        var live = _windows.Where(w => !w.IsGone && !w.Hidden).ToList();
+        if (live.Count == 0) { _hint.Text = _windows.Any(w => !w.IsGone) ? "the widgets are already hidden - press Unhide" : "there is nothing floating to hide"; return; }
+        foreach (var w in live) w.SetHidden(true);
+        _hint.Text = $"{live.Count} widget(s) hidden - Unhide brings them back where they were";
+        UpdateHideButtons();
+        AppLog.Action("gauges", $"hid {live.Count} widget(s)");
+    }
+
+    void Unhide()
+    {
+        var hidden = _windows.Where(w => !w.IsGone && w.Hidden).ToList();
+        if (hidden.Count == 0) { _hint.Text = "no widget is hidden"; return; }
+        foreach (var w in hidden) w.SetHidden(false);
+        _hint.Text = $"{hidden.Count} widget(s) back on screen";
+        UpdateHideButtons();
+        AppLog.Action("gauges", $"unhid {hidden.Count} widget(s)");
+    }
+
+    void UpdateHideButtons()
+    {
+        int live = _windows.Count(w => !w.IsGone && !w.Hidden), hidden = _windows.Count(w => !w.IsGone && w.Hidden);
+        if (_hideButton != null) _hideButton.IsEnabled = live > 0;
+        if (_unhideButton != null) _unhideButton.IsEnabled = hidden > 0;
+    }
+
+    /// Put back the widgets that were on screen last time (hidden ones stay hidden until Unhide). They are opened once the owner window exists, so this is safe to call while the page is still being built.
     void RestoreWidgets(List<GaugeWidget> widgets)
     {
         if (widgets.Count == 0) return;
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
             foreach (var widget in widgets.Take(24))
-            {
-                if (_windows.Any(w => !w.IsGone && w.Gauge.Spec.Title == widget.Gauge.Title)) continue;
-                Open(widget);
-            }
+                if (widget.Specs().Count > 0) Open(widget);
+            _parented = _windows.Any(w => !w.IsGone && w.Parented);
+            UpdateHideButtons();
         }, Avalonia.Threading.DispatcherPriority.Background);
     }
 
@@ -265,11 +511,19 @@ public sealed class GaugePanel : UserControl
         });
         var path = file?.TryGetLocalPath();
         if (path == null) return;
+        SaveTo(path);
+    }
+
+    void SaveTo(string path)
+    {
         try
         {
             _layout.Name = Path.GetFileNameWithoutExtension(path).Replace(".gauges", "");
             Layout.Save(path);
-            _hint.Text = $"dashboard saved to {path}";
+            Remember(path);
+            _hint.Text = $"dashboard saved to {path} ({_gauges.Count} gauge(s)" +
+                         (_windows.Count(w => !w.IsGone) > 0 ? $", {_windows.Count(w => !w.IsGone)} floating" : "") + ")";
+            AppLog.Action("gauges", "saved the dashboard to " + path);
         }
         catch (Exception ex) { _hint.Text = "could not save: " + ex.Message; AppLog.Error("gauges", "save failed", ex); }
     }
@@ -285,31 +539,118 @@ public sealed class GaugePanel : UserControl
             SuggestedStartLocation = await top.StorageProvider.TryGetFolderFromPathAsync(Dir),
         });
         var path = files.FirstOrDefault()?.TryGetLocalPath();
-        if (path == null) return;
+        if (path != null) LoadFrom(path);
+    }
+
+    /// Open a dashboard file: the gauges come back on the panel and any widget that was floating when it was saved opens again where it was.
+    public void LoadFrom(string path)
+    {
         try
         {
+            Remember();
+            CloseWidgets();
             Apply(GaugeLayout.Load(path));
-            _hint.Text = $"{Path.GetFileName(path)}: {_gauges.Count} gauge(s)";
+            Remember(path);
+            _hint.Text = $"{Path.GetFileName(path)}: {_gauges.Count} gauge(s)" +
+                         (_layout.Widgets.Count > 0 ? $", {_layout.Widgets.Count} floating widget(s)" : "");
+            AppLog.Action("gauges", "opened the dashboard " + path);
         }
         catch (Exception ex) { _hint.Text = "could not open: " + ex.Message; AppLog.Error("gauges", "load failed", ex); }
     }
 
-    /// The dashboard left on screen last time, so it comes back with the program.
-    static string LastPath => Path.Combine(Dir, "last.gauges.json");
+    // ------------------------------------------------------------------ recent
 
-    public void LoadLast()
+    /// Dashboards saved or opened lately, newest first. Kept beside the dashboards themselves so the list survives a new settings file.
+    static string RecentPath => Path.Combine(Dir, "recent.txt");
+
+    static List<string> Recent()
     {
-        try { if (File.Exists(LastPath)) Apply(GaugeLayout.Load(LastPath)); }
-        catch (Exception ex) { AppLog.Error("gauges", "could not read the last dashboard", ex); }
+        try { return File.Exists(RecentPath) ? [.. File.ReadAllLines(RecentPath).Where(l => l.Trim().Length > 0)] : []; }
+        catch { return []; }
     }
 
-    public void SaveLast()
+    static void Remember(string path)
     {
         try
         {
-            if (_gauges.Count == 0 && !File.Exists(LastPath)) return;
+            var list = Recent();
+            list.RemoveAll(p => p.Equals(path, StringComparison.OrdinalIgnoreCase));
+            list.Insert(0, path);
             Directory.CreateDirectory(Dir);
-            Layout.Save(LastPath);
+            File.WriteAllLines(RecentPath, list.Take(12));
+        }
+        catch (Exception ex) { AppLog.Error("gauges", "could not keep the recent list", ex); }
+    }
+
+    Toolbar.Entry[] RecentEntries()
+    {
+        var list = Recent().Where(File.Exists).ToList();
+        if (list.Count == 0) return [new Toolbar.Entry("", "(none yet)", "Save a dashboard and it appears here.", () => { })];
+        return
+        [
+            .. list.Select(path => new Toolbar.Entry(Toolbar.Gauge, Path.GetFileName(path).Replace(".gauges.json", "").Replace(".json", ""),
+                                                     path, () => LoadFrom(path))),
+            Toolbar.Entry.Line,
+            new Toolbar.Entry(Toolbar.Clear, "Forget the list", "Empty this menu (the files themselves are left alone).", () =>
+            {
+                try { File.Delete(RecentPath); } catch { }
+                _hint.Text = "the recent list is empty";
+            }),
+        ];
+    }
+
+    // ------------------------------------------------------------------ profiles
+
+    /// Which dashboard this is: Tuner mode and the simulator keep their own, because they are used for different things (a tuner wants AFR and knock in front of him; the simulator wants what the ROM is driving). Each is kept in its own file, gauges, widgets and all.
+    public string Profile { get; private set; } = "simulator";
+
+    /// The dashboard left on screen last time for a mode, so it comes back with the program.
+    static string PathFor(string profile) => Path.Combine(Dir, $"last-{profile}.gauges.json");
+
+    /// The single dashboard earlier builds kept, used once to start both modes off.
+    static string LegacyPath => Path.Combine(Dir, "last.gauges.json");
+
+    /// Switch to another mode's dashboard: this one (and where its widgets sit) is written out first, then the other is put back exactly as it was left.
+    public void UseProfile(string profile)
+    {
+        if (profile == Profile && _loaded) return;
+        if (_loaded) SaveLast();
+        CloseWidgets();
+        Profile = profile;
+        _loaded = true;
+        try
+        {
+            var path = PathFor(profile);
+            if (!File.Exists(path) && File.Exists(LegacyPath)) path = LegacyPath;
+            if (File.Exists(path))
+            {
+                var layout = GaugeLayout.Load(path);
+                layout.Name = profile;
+                Apply(layout);
+            }
+            else Apply(GaugeLayout.Template(profile.Equals("simulator", StringComparison.OrdinalIgnoreCase) ? "Simulator" : "Wideband tuning"));
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("gauges", "could not read the " + profile + " dashboard", ex);
+            Apply(new GaugeLayout { Name = profile });
+        }
+        _hint.Text = $"{Profile} gauges: {_gauges.Count} on the dashboard" +
+                     (_windows.Count(w => !w.IsGone) > 0 ? $", {_windows.Count(w => !w.IsGone)} floating" : "");
+    }
+    bool _loaded;
+
+    public void LoadLast() => UseProfile(Profile);
+
+    public void SaveLast()
+    {
+        if (UiCheck.Active) return;
+        try
+        {
+            var path = PathFor(Profile);
+            if (_gauges.Count == 0 && _windows.Count == 0 && !File.Exists(path)) return;
+            Directory.CreateDirectory(Dir);
+            Layout.Save(path);
         }
         catch (Exception ex) { AppLog.Error("gauges", "could not keep the dashboard", ex); }
     }
@@ -321,27 +662,53 @@ public sealed class GaugePanel : UserControl
     }
 }
 
-/// One gauge in its own window: floats over the app, can be dragged anywhere on screen, resized, rolled up to its title bar or closed.
+
+/// A floating dashboard: one frameless window holding the whole collection of gauges that was on the panel, in the same arrangement. It sits over everything else, can be dragged anywhere on screen, resized (the gauges scale with the window, so the collection keeps its shape), rolled up to its title bar, hidden out of the way, or closed.
 public sealed class GaugeWindow : Window
 {
-    public GaugeControl Gauge { get; }
+    readonly List<GaugeControl> _gauges = [];
+    readonly Canvas _canvas = new();
+    readonly LayoutTransformControl _scaler = new();
+    readonly Panel _host = new() { ClipToBounds = true };
+    double _contentW, _contentH;
     /// True once this widget has been closed, so the panel can let go of it.
     public bool IsGone { get; private set; }
+    /// Put away by Hide (the window still exists, with everything in it).
+    public bool Hidden { get; private set; }
     double _fullHeight;
+    readonly bool _topmostWanted;
+
+    /// Every gauge in the window, for feeding readings and for writing the layout back out.
+    public IReadOnlyList<GaugeControl> Gauges => _gauges;
 
     public GaugeWindow(GaugeWidget widget)
     {
-        var spec = widget.Gauge;
-        Gauge = new GaugeControl(spec) { HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Stretch };
-        Gauge.Width = double.NaN; Gauge.Height = double.NaN;
-        Title = spec.Title;
+        var specs = widget.Specs();
+        if (specs.Count == 0) specs = [new GaugeSpec()];
+        // pack the collection into the corner of the window, keeping the gaps between the gauges
+        double x0 = specs.Min(g => g.X), y0 = specs.Min(g => g.Y);
+        _contentW = Math.Max(60, specs.Max(g => g.X + g.Width) - x0);
+        _contentH = Math.Max(40, specs.Max(g => g.Y + g.Height) - y0);
+        foreach (var spec in specs)
+        {
+            var g = new GaugeControl(spec) { Width = spec.Width, Height = spec.Height };
+            Canvas.SetLeft(g, spec.X - x0);
+            Canvas.SetTop(g, spec.Y - y0);
+            _canvas.Children.Add(g);
+            _gauges.Add(g);
+            HookGauge(g);
+        }
+        _canvas.Width = _contentW; _canvas.Height = _contentH;
+
+        Title = widget.Title;
         Width = Math.Max(120, widget.Width); Height = Math.Max(80, widget.Height);
         _fullHeight = Height;
         MinWidth = 110; MinHeight = 58;
-        Topmost = widget.Topmost;
+        _topmostWanted = widget.Topmost;
+        Parented = widget.Parented;
+        Topmost = widget.Topmost && !widget.Parented;
         ShowInTaskbar = false;
-        // no frame at all: a border-only window still shows a pale strip along the top on
-        // Windows, which looked like a scratch across the widget
+        // no frame at all: a border-only window still shows a pale strip along the top on Windows, which looked like a scratch across the widget
         SystemDecorations = SystemDecorations.None;
         Background = new SolidColorBrush(DarkChrome.Background);
         Icon = DarkChrome.LoadWindowIcon();
@@ -351,15 +718,28 @@ public sealed class GaugeWindow : Window
             Position = new PixelPoint((int)widget.X, (int)widget.Y);
         }
 
-        var title = new TextBlock { Text = spec.Title, FontSize = 11, Margin = new Thickness(8, 0), VerticalAlignment = VerticalAlignment.Center };
+        var title = new TextBlock
+        {
+            Text = specs.Count > 1 ? $"{specs.Count} gauges" : specs[0].Title,
+            FontSize = 11, Margin = new Thickness(8, 0), VerticalAlignment = VerticalAlignment.Center,
+        };
         var bar = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Height = 24, Background = new SolidColorBrush(DarkChrome.Panel) };
         var drag = new Border { Background = Brushes.Transparent, Child = title };
-        drag.PointerPressed += (_, e) => { if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) BeginMoveDrag(e); };
+        drag.PointerPressed += (_, e) =>
+        {
+            if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+            BeginMoveDrag(e);
+            // on Windows the drag has finished by now: pull the widget back if it was left off the screen
+            KeepOnScreen();
+        };
         drag.DoubleTapped += (_, _) => RollUp();
+        ToolTip.SetTip(drag, specs.Count > 1
+            ? string.Join(", ", specs.Select(g => g.Title)) + "\nDrag to move the whole set; double-click to roll it up."
+            : "Drag to move; double-click to roll it up.");
         Grid.SetColumn(drag, 0); bar.Children.Add(drag);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal };
-        buttons.Children.Add(Small("📌", "Keep the widget above other windows, or let it go behind them.",
-            () => Topmost = !Topmost));
+        buttons.Children.Add(Small("\U0001F4CC", "Keep the widget above other windows, or let it go behind them (a widget parented to the main window only sits over the main window).",
+            () => { if (!Parented) Topmost = !Topmost; }));
         buttons.Children.Add(Small("_", "Roll the widget up to its title bar (again to restore it).", RollUp));
         buttons.Children.Add(Small("□", "Make the widget as big as the screen, or put it back.",
             () => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized));
@@ -373,27 +753,160 @@ public sealed class GaugeWindow : Window
             HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Bottom,
             Child = new TextBlock { Text = "◢", FontSize = 10, Opacity = 0.5 },
         };
-        grip.PointerPressed += (_, e) => BeginResizeDrag(WindowEdge.SouthEast, e);
-        ToolTip.SetTip(grip, "Drag to resize the widget.");
+        grip.PointerPressed += (_, e) => { BeginResizeDrag(WindowEdge.SouthEast, e); KeepOnScreen(); };
+        ToolTip.SetTip(grip, "Drag to resize the widget; the gauges scale with it. Each gauge also moves (drag it) and resizes (drag its own bottom-right corner) on its own.");
 
-        var g = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
-        Grid.SetRow(bar, 0); g.Children.Add(bar);
-        Grid.SetRow(Gauge, 1); g.Children.Add(Gauge);
+        _scaler.Child = _canvas;
+        var g2 = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
+        Grid.SetRow(bar, 0); g2.Children.Add(bar);
+        var host = _host;
+        host.Children.Add(_scaler);
+        Grid.SetRow(host, 1); g2.Children.Add(host);
         var overlay = new Panel();
-        overlay.Children.Add(g);
+        overlay.Children.Add(g2);
         overlay.Children.Add(grip);
         Content = overlay;
+        // the gauges fill whatever room the window has, keeping their proportions
+        host.SizeChanged += (_, e) => Rescale(e.NewSize);
         Closing += (_, _) => IsGone = true;
+        Opened += (_, _) => Avalonia.Threading.Dispatcher.UIThread.Post(KeepOnScreen, Avalonia.Threading.DispatcherPriority.Background);
     }
 
-    /// Where this widget is now, for the dashboard file.
-    public GaugeWidget AsWidget() => new()
+    /// Pull the widget back onto the screen it is mostly on (or the main screen when it is on none), whole if it fits - one saved on a monitor that is no longer plugged in comes back into view.
+    public void KeepOnScreen()
     {
-        Gauge = Gauge.Spec, X = Position.X, Y = Position.Y,
+        if (IsGone || Hidden || WindowState != WindowState.Normal) return;
+        var scr = Screens.ScreenFromWindow(this) ?? Screens.ScreenFromPoint(Position) ?? Screens.Primary;
+        if (scr == null) return;
+        var wa = scr.WorkingArea;
+        var size = PixelSize;
+        int x = Math.Clamp(Position.X, wa.X, Math.Max(wa.X, wa.Right - size.Width));
+        int y = Math.Clamp(Position.Y, wa.Y, Math.Max(wa.Y, wa.Bottom - size.Height));
+        if (x != Position.X || y != Position.Y) Position = new PixelPoint(x, y);
+    }
+
+    // ------------------------------------------------------------------ moving and resizing a gauge inside the widget
+
+    static readonly Cursor CornerCursor = new(StandardCursorType.BottomRightCorner), MoveCursor = new(StandardCursorType.SizeAll);
+    GaugeControl? _editing;
+    bool _editResize;
+    Point _editGrab;
+
+    static bool InCorner(GaugeControl g, Point at) => at.X > g.Bounds.Width - 16 && at.Y > g.Bounds.Height - 16;
+
+    void HookGauge(GaugeControl g)
+    {
+        ToolTip.SetTip(g, "Drag to move this gauge inside the widget; drag its bottom-right corner to resize just this one.");
+        g.PointerPressed += (_, e) =>
+        {
+            if (!e.GetCurrentPoint(g).Properties.IsLeftButtonPressed) return;
+            var at = e.GetPosition(g);
+            _editing = g; _editResize = InCorner(g, at); _editGrab = at;
+            e.Pointer.Capture(g);
+            e.Handled = true;
+        };
+        g.PointerMoved += (_, e) =>
+        {
+            if (_editing != g || !Equals(e.Pointer.Captured, g))
+            {
+                var want = InCorner(g, e.GetPosition(g)) ? CornerCursor : MoveCursor;
+                if (!ReferenceEquals(g.Cursor, want)) g.Cursor = want;
+                return;
+            }
+            var p = e.GetPosition(_canvas);
+            double left = Canvas.GetLeft(g), top = Canvas.GetTop(g);
+            if (_editResize)
+            {
+                g.Width = g.Spec.Width = Math.Max(50, p.X - left);
+                g.Height = g.Spec.Height = Math.Max(36, p.Y - top);
+            }
+            else
+            {
+                Canvas.SetLeft(g, Math.Max(0, p.X - _editGrab.X));
+                Canvas.SetTop(g, Math.Max(0, p.Y - _editGrab.Y));
+            }
+            _canvas.Width = Math.Max(_canvas.Width, Canvas.GetLeft(g) + g.Width);
+            _canvas.Height = Math.Max(_canvas.Height, Canvas.GetTop(g) + g.Height);
+            g.InvalidateVisual();
+        };
+        g.PointerReleased += (_, e) =>
+        {
+            if (_editing != g) return;
+            e.Pointer.Capture(null);
+            _editing = null;
+            Refit();
+        };
+    }
+
+    /// After a gauge moved or changed size: pack the set back into the corner and grow or shrink the window so everything keeps the scale it had (the other gauges do not jump in size).
+    void Refit()
+    {
+        if (_gauges.Count == 0) return;
+        double k = (_scaler.LayoutTransform as ScaleTransform)?.ScaleX ?? 1;
+        double minX = _gauges.Min(Canvas.GetLeft), minY = _gauges.Min(Canvas.GetTop);
+        foreach (var g in _gauges)
+        {
+            Canvas.SetLeft(g, Canvas.GetLeft(g) - minX); Canvas.SetTop(g, Canvas.GetTop(g) - minY);
+            g.Spec.X = Canvas.GetLeft(g); g.Spec.Y = Canvas.GetTop(g);
+        }
+        _contentW = Math.Max(60, _gauges.Max(g => Canvas.GetLeft(g) + g.Width));
+        _contentH = Math.Max(40, _gauges.Max(g => Canvas.GetTop(g) + g.Height));
+        _canvas.Width = _contentW; _canvas.Height = _contentH;
+        if (_rolled) return;
+        Width = Math.Max(MinWidth, (_contentW * k) + 6);
+        Height = _fullHeight = Math.Max(MinHeight, (_contentH * k) + 6 + 24);
+        Rescale(new Size(Width, Height - 24));
+        Avalonia.Threading.Dispatcher.UIThread.Post(KeepOnScreen, Avalonia.Threading.DispatcherPriority.Background);
+    }
+
+    void Rescale(Size area)
+    {
+        if (_rolled || area.Width < 8 || area.Height < 8) return;
+        double k = Math.Min((area.Width - 6) / _contentW, (area.Height - 6) / _contentH);
+        k = Math.Clamp(k, 0.25, 6);
+        _scaler.LayoutTransform = Math.Abs(k - 1) < 0.01 ? null : new ScaleTransform(k, k);
+    }
+
+    /// Where this widget is now, and what is in it, for the dashboard file. A parented widget is kept relative to `origin` (the main window's top-left corner on screen), so it comes back on the main window wherever that opens.
+    public GaugeWidget AsWidget(PixelPoint? origin = null) => new()
+    {
+        Gauges = [.. _gauges.Select(g => g.Spec)],
+        X = Position.X - (Parented && origin is { } o ? o.X : 0), Y = Position.Y - (Parented && origin is { } o2 ? o2.Y : 0),
         Width = double.IsNaN(Width) ? Bounds.Width : Width,
         Height = _rolled ? _fullHeight : (double.IsNaN(Height) ? Bounds.Height : Height),
-        Topmost = Topmost,
+        Topmost = _topmostWanted, Hidden = Hidden, Parented = Parented,
     };
+
+    /// Hide (or bring back) the window without closing it, so the layout and its position survive.
+    public void SetHidden(bool hidden)
+    {
+        Hidden = hidden;
+        if (hidden) { Topmost = false; base.Hide(); }
+        else if (!_parked) { Show(); Topmost = !Parented && _topmostWanted; }
+    }
+
+    /// Parented to the main window: it stays over the main window only (not over other programs), moves when the main window moves, and goes away while the main window is minimized.
+    public bool Parented { get; private set; }
+
+    public void SetParented(bool on)
+    {
+        Parented = on;
+        if (!Hidden && !_parked) Topmost = !on && _topmostWanted;
+    }
+
+    bool _parked;
+
+    /// The main window was minimized (true) or restored (false): a parented widget goes and comes back with it.
+    public void SetParked(bool parked)
+    {
+        if (!Parented || parked == _parked) return;
+        _parked = parked;
+        if (Hidden) return;
+        if (parked) base.Hide(); else Show();
+    }
+
+    /// The window's size on screen, in pixels, as it is drawn now (rolled up or not).
+    public PixelSize PixelSize => new((int)Math.Ceiling(Bounds.Width * RenderScaling), (int)Math.Ceiling(Bounds.Height * RenderScaling));
 
     bool _rolled;
     void RollUp()
@@ -416,5 +929,14 @@ public sealed class GaugeWindow : Window
         return b;
     }
 
-    public void Show(LogFrame? f) => Gauge.Show(f);
+    /// The newest reading, to every gauge in the window.
+    public void Show(LogFrame? f)
+    {
+        foreach (var g in _gauges) g.Show(f);
+    }
+
+    public void ClearHistory()
+    {
+        foreach (var g in _gauges) g.Clear();
+    }
 }

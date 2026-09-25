@@ -1,8 +1,7 @@
+// Copyright (c) bmgjet. All rights reserved.
 // The world outside the MCU: drives the external levels that Bus's pin logic reads.
 //
-// Signals in SignalMap are confirmed from the disassembly or schematic and never
-// overwritten. Untraced input pins get a selectable behaviour and may be flipped by
-// StallMonitor when a ROM provably waits on one; a mapped pin is never touched.
+// Signals in SignalMap are confirmed from the disassembly or schematic and never overwritten. Untraced input pins get a selectable behaviour and may be flipped by StallMonitor when a ROM provably waits on one; a mapped pin is never touched.
 
 namespace OkiRomSim.Core;
 
@@ -30,23 +29,20 @@ public readonly struct PinRef
 
 public sealed class Board
 {
-    // ---- confirmed pin mappings ------------------------------------------
-    // Only signals whose port/bit is actually established go here. Adding a
-    // guess to this table would make StallMonitor stop nudging the pin, so
-    // a wrong entry is worse than no entry.
+    // ---- confirmed pin mappings ------------------------------------------ Only signals whose port/bit is actually established go here. Adding a guess to this table would make StallMonitor stop nudging the pin, so a wrong entry is worse than no entry.
 
     /// P4.1, the run/power-good sense the ROM's shutdown path polls. Documented in Bus (P4RunSense): low = running.
     public static readonly PinRef RunSense = new(Bus.Port4, Bus.P4RunSense);
 
-    /// P4.6, VTEC oil-pressure switch ("vtec_oilpressure_pin_check: MB C, P4.6" in every ROM here). Low = pressure present.
-    public static readonly PinRef VtecPressure = new(4, 6);
+    /// P4.6, the injector-driver test feedback (TRNS2) in the board notes, read in the ROMs' checks behind codes 25/26. It used to be modelled as the VTEC pressure switch, but that switch is bit 1 of the 4700h buffer (what code 22 reads), and pulling P4.6 low with the solenoid set code 25 on the P30. Held high here, which every ROM runs clean on.
+    public static readonly PinRef InjectorTestFeedback = new(4, 6);
 
     /// Signals this model claims to drive correctly. StallMonitor treats every pin listed here as physics and will not touch it.
     public IReadOnlyDictionary<string, PinRef> SignalMap { get; } =
         new Dictionary<string, PinRef>
         {
             ["RunSense"] = RunSense,
-            ["VtecPressureSwitch"] = VtecPressure,
+            ["InjectorTestFeedback"] = InjectorTestFeedback,
         };
 
     // ---- signal states ----------------------------------------------------
@@ -54,8 +50,11 @@ public sealed class Board
     /// True while the ignition is on and the main relay is holding. When this goes false the ROM sees P4.1 go high and runs its shutdown path.
     public bool PowerGood = true;
 
-    /// Oil pressure is available to the VTEC spool. The switch only sees pressure while the ROM holds the VTEC solenoid (P1.0) open; clear this to simulate a failed switch or low oil.
+    /// Oil pressure is available to the VTEC spool. The switch (D6, 4700h bit 1) only sees pressure while the ROM holds the VTEC solenoid (P1.0) open; clear this to simulate a failed switch or low oil.
     public bool VtecPressureSwitch = true;
+
+    /// P4.6 level (see InjectorTestFeedback). High by default.
+    public bool InjectorTestFeedbackHigh = true;
 
     Bus? _bus;
 
@@ -65,7 +64,7 @@ public sealed class Board
     public UnmappedPinPolicy UnmappedPolicy = UnmappedPinPolicy.High;
 
     /// Pins StallMonitor has flipped, for the run report: "P3.5 was nudged 4 times" is the signal that P3.5 is a real input worth tracing.
-    public readonly Dictionary<string, int> NudgeCounts = new();
+    public readonly Dictionary<string, int> NudgeCounts = [];
 
     private readonly bool[,] _mapped = new bool[5, 8];
 
@@ -86,14 +85,13 @@ public sealed class Board
     public bool IsMapped(int port, int bit) => _mapped[port, bit];
 
     /// Resolve the external level on a pin the ROM has configured as an input. Returns null to mean "no opinion" so Bus falls back to its own PortPins array (which Apply keeps in sync anyway). Levels forced by hand (e.g. clicking a pin in the chip view). They override everything else the harness would drive onto an input pin.
-    public readonly Dictionary<(int Port, int Bit), bool> Forced = new();
+    public readonly Dictionary<(int Port, int Bit), bool> Forced = [];
 
     public bool? InputLevel(int port, int bit)
     {
         if (Forced.TryGetValue((port, bit), out var forced)) return forced;
         if (port == RunSense.Port && bit == RunSense.Bit) return !PowerGood;
-        if (port == VtecPressure.Port && bit == VtecPressure.Bit)
-            return !(VtecPressureSwitch && (_bus?.VtecSolenoidActive ?? false));
+        if (port == InjectorTestFeedback.Port && bit == InjectorTestFeedback.Bit) return InjectorTestFeedbackHigh;
 
         if (UnmappedPolicy == UnmappedPinPolicy.ToggleOnRead)
         {

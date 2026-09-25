@@ -1,5 +1,5 @@
-// OKI MSM66207 / 66201 CPU Registers & Flags.
-// Used in Honda OBD1 ECUs (P28, P30, P72, etc.)
+// Copyright (c) bmgjet. All rights reserved.
+// OKI MSM66207 / 66201 CPU Registers & Flags. Used in Honda OBD1 ECUs (P28, P30, P72, etc.)
 namespace OkiRomSim.Core;
 
 public sealed class Cpu
@@ -11,9 +11,7 @@ public sealed class Cpu
     public ushort X2;
     public ushort Usp;     // User Stack Pointer
     public ushort Ssp = 0x07FE; // System Stack Pointer
-    // Local Register Bank pointer. Its own 16-bit register (SFR 0x02), NOT a
-    // field packed into PSW: bits 5..7 select the RAM page and bits 0..4
-    // select the bank within it. See BankBase() / OffPage().
+    // Local Register Bank pointer. Its own 16-bit register (SFR 0x02), NOT a field packed into PSW: bits 5..7 select the RAM page and bits 0..4 select the bank within it. See BankBase() / OffPage().
     public ushort Lrb;
 
     // PSW flags
@@ -21,9 +19,7 @@ public sealed class Cpu
     public bool Cf;   // Carry / Borrow (CF=1 on borrow for SUB/CMP)
     public bool Hc;   // Half carry
     public bool Dd;   // Data width mode: true = 16-bit word mode, false = 8-bit byte mode
-    // PSW bits with no named flag. The ROM uses several as scratch (PSWH.0 is
-    // MIE), so they must survive PUSHS/POPS and interrupt entry/exit rather
-    // than being dropped.
+    // PSW bits with no named flag. The ROM uses several as scratch (PSWH.0 is MIE), so they must survive PUSHS/POPS and interrupt entry/exit rather than being dropped.
     public ushort PswOther;
 
     public ulong Cycles;
@@ -40,13 +36,7 @@ public sealed class Cpu
     public void SetDpl(byte v) => Dp = (ushort)((Dp & 0xFF00) | v);
     public void SetDph(byte v) => Dp = (ushort)((Dp & 0x00FF) | (v << 8));
 
-    // PSW layout, from the MSM66201/66P201/66207/66P207 datasheet, p.9:
-    //   bits 0-2  SCB (System Control Base) -- selects pointing register set
-    //             PR0..PR7, where X1/X2/DP/USP physically live (Fig. 1-5).
-    //   bits 15-12 CF, ZF, HC, DD
-    //   bits 9,5,4 user flags; bit 8 master interrupt enable (MIE)
-    // Bits 3, 6, 7, 10 and 11 are unimplemented and read as 1, which yields
-    // the documented reset PSW of 0x0CC8 with every writable flag cleared.
+    // PSW layout, from the MSM66201/66P201/66207/66P207 datasheet, p.9: bits 0-2 SCB (System Control Base) -- selects pointing register set PR0..PR7, where X1/X2/DP/USP physically live (Fig. 1-5). bits 15-12 CF, ZF, HC, DD bits 9,5,4 user flags; bit 8 master interrupt enable (MIE) Bits 3, 6, 7, 10 and 11 are unimplemented and read as 1, which yields the documented reset PSW of 0x0CC8 with every writable flag cleared.
     private const ushort PswReadsOne = 0x0CC8;
     private const ushort PswStorage = (1 << 9) | (1 << 8) | (1 << 5) | (1 << 4) | 0b0000_0111;
 

@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 namespace OkiRomSim.Assembler;
 
 public abstract class Expr
@@ -13,7 +14,7 @@ public sealed class EvalContext
     public long Pc;
     /// Undefined symbols evaluate to 0 (pass 1). In the final pass they are reported.
     public bool Lenient;
-    public List<string> Undefined { get; } = new();
+    public List<string> Undefined { get; } = [];
     public Func<string, bool>? IsDefined;
 }
 
@@ -78,10 +79,7 @@ sealed class BinExpr(string op, Expr a, Expr b) : Expr
 
 public sealed class AsmException(string message) : Exception(message);
 
-/// Precedence-climbing parser. Levels, lowest precedence first:
-/// << >> ; & | ^ ; + - ; * / % ; unary minus.
-/// `extended` adds comparison/logical operators (lower than all of the above)
-/// for if/assert.
+/// Precedence-climbing parser. Levels, lowest precedence first: << >> ; & | ^ ; + - ; * / % ; unary minus. `extended` adds comparison/logical operators (lower than all of the above) for if/assert.
 public static class ExprParser
 {
     static readonly string[][] AsmLevels =
@@ -110,7 +108,7 @@ public static class ExprParser
         if (++_depth > MaxDepth) { _depth = 0; throw new AsmException("expression nested too deeply"); }
         try
         {
-            var levels = extended ? ExtLevels.Concat(AsmLevels).ToArray() : AsmLevels;
+            var levels = extended ? [.. ExtLevels, .. AsmLevels] : AsmLevels;
             return ParseLevel(toks, ref pos, levels, 0, extended);
         }
         finally { if (_depth > 0) _depth--; }

@@ -1,8 +1,11 @@
+// Copyright (c) bmgjet. All rights reserved.
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
+using Avalonia.Media.Immutable;
 using OkiRomSim.Calibration;
 using OkiRomSim.Core;
+using Avalonia.Threading;
 
 namespace OkiRomSim.Desktop;
 
@@ -11,7 +14,7 @@ public sealed class GaugeControl : Control
 {
     public GaugeSpec Spec { get; }
     double _value = double.NaN;
-    readonly List<(double T, double V)> _history = new();
+    readonly List<(double T, double V)> _history = [];
     double _t;
 
     public GaugeControl(GaugeSpec spec)
@@ -24,20 +27,51 @@ public sealed class GaugeControl : Control
     public void Show(LogFrame? f)
     {
         double v = f?.Get(Spec.Channel) ?? double.NaN;
-        _t = f?.T ?? _t;
-        if (Spec.Kind == GaugeKind.Graph && !double.IsNaN(v))
-        {
-            _history.Add((_t, v));
-            double cut = _t - Math.Max(1, Spec.Seconds);
-            if (_history.Count > 4000 || _history[0].T < cut) _history.RemoveAll(p => p.T < cut);
-        }
-        if (double.IsNaN(v) && double.IsNaN(_value)) return;
-        if (Math.Abs(v - _value) < (Spec.Max - Spec.Min) / 2000.0 && Spec.Kind != GaugeKind.Graph) return;
+        // both graph kinds keep a history: the bar graph draws the very same samples in slots, and leaving it out of this was why it never drew anything
+        if (f != null) Add(f);
+        if (double.IsNaN(v) && double.IsNaN(_value) && !Plots) return;
+        // a graph redraws as time passes even when the reading is standing still
+        if (!Plots && Math.Abs(v - _value) < (Spec.Max - Spec.Min) / 2000.0) return;
         _value = v;
         InvalidateVisual();
     }
 
     public void Clear() { _history.Clear(); _value = double.NaN; InvalidateVisual(); }
+
+    /// One frame into the history without drawing (a replay catching up on the frames it went past). Time going backwards (the slider dragged back, a replay started again) or jumping further than the graph shows starts the history afresh, so old samples are never drawn against the new time.
+    public void Add(LogFrame f)
+    {
+        _t = f.T;
+        if (!Plots) return;
+        if (_history.Count > 0)
+        {
+            double last = _history[^1].T;
+            if (f.T < last - 1e-6 || f.T - last > Math.Max(1, Spec.Seconds)) _history.Clear();
+            else if (f.T <= last) return;                  // the same frame again
+        }
+        double v = f.Get(Spec.Channel) ?? double.NaN;
+        if (double.IsNaN(v)) return;
+        _history.Add((f.T, v));
+        double cut = f.T - Math.Max(1, Spec.Seconds);
+        if (_history.Count > 8000 || _history[0].T < cut) _history.RemoveAll(p => p.T < cut);
+    }
+
+    /// True for the two kinds that draw a history rather than just the latest reading.
+    bool Plots => Spec.Kind is GaugeKind.Graph or GaugeKind.BarGraph;
+
+    /// The range a graph is drawn against: the gauge's own, unless the readings do not fit inside it (a channel left on the default 0-8000 would otherwise sit flat on the floor), in which case the samples decide.
+    (double Lo, double Hi) PlotRange()
+    {
+        double lo = Spec.Min, hi = Spec.Max;
+        if (_history.Count == 0) return hi > lo ? (lo, hi) : (0, 1);
+        double dlo = double.MaxValue, dhi = double.MinValue;
+        foreach (var (_, v) in _history) { if (v < dlo) dlo = v; if (v > dhi) dhi = v; }
+        bool fits = hi > lo && dhi <= hi && dlo >= lo && (dhi - dlo) >= (hi - lo) / 50;
+        if (fits) return (lo, hi);
+        if (dhi - dlo < 1e-9) { dlo -= 1; dhi += 1; }
+        double pad = (dhi - dlo) * 0.08;
+        return (dlo - pad, dhi + pad);
+    }
 
     static readonly IBrush Face = new SolidColorBrush(Color.FromRgb(0x1a, 0x1c, 0x20));
     static readonly IBrush Ink = new SolidColorBrush(Color.FromRgb(0xd7, 0xda, 0xe0));
@@ -46,11 +80,38 @@ public sealed class GaugeControl : Control
     static readonly IBrush Warn = new SolidColorBrush(Color.FromRgb(0xff, 0xb3, 0x3a));
     static readonly IPen Edge = new Pen(new SolidColorBrush(Color.FromRgb(0x3a, 0x3d, 0x44)), 1);
 
-    /// A colour the gauge was given, or the theme's own.
+    /// A colour the gauge was given, or the theme's own. Parsed once per colour and kept: this runs several times every time a gauge draws, and a colour that does not parse used to throw each time.
     static IBrush Pick(string hex, IBrush fallback)
     {
         if (string.IsNullOrWhiteSpace(hex)) return fallback;
-        try { return new SolidColorBrush(Color.Parse(hex)); } catch { return fallback; }
+        if (!Brushes_.TryGetValue(hex, out var b))
+        {
+            b = Color.TryParse(hex.Trim(), out var c) ? new ImmutableSolidColorBrush(c) : null;
+            Brushes_[hex] = b;
+        }
+        return b ?? fallback;
+    }
+
+    static readonly Dictionary<string, IBrush?> Brushes_ = new(StringComparer.OrdinalIgnoreCase);
+
+    /// Pictures, shared by every gauge that uses the same file and decoded 800 pixels wide: a 12-megapixel photo behind a 200-pixel gauge used to sit in memory at full size, once for every gauge showing it.
+    static readonly Dictionary<string, Avalonia.Media.Imaging.Bitmap?> Pictures = new(StringComparer.OrdinalIgnoreCase);
+
+    static Avalonia.Media.Imaging.Bitmap? Picture(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        if (Pictures.TryGetValue(path, out var bmp)) return bmp;
+        try
+        {
+            if (File.Exists(path))
+            {
+                using var s = File.OpenRead(path);
+                bmp = Avalonia.Media.Imaging.Bitmap.DecodeToWidth(s, 800, Avalonia.Media.Imaging.BitmapInterpolationMode.MediumQuality);
+            }
+        }
+        catch (Exception ex) { AppLog.Error("gauges", "could not load " + path, ex); bmp = null; }
+        Pictures[path] = bmp;
+        return bmp;
     }
 
     IBrush FaceBrush => Pick(Spec.FaceColour, Face);
@@ -59,31 +120,36 @@ public sealed class GaugeControl : Control
     IBrush AccentBrush => Alarm ? Warn : Pick(Spec.AccentColour, Good);
     IBrush Accent(IBrush fallback) => Spec.AccentColour.Length > 0 ? Pick(Spec.AccentColour, fallback) : fallback;
 
-    /// The picture behind the gauge, loaded once and kept.
-    Avalonia.Media.Imaging.Bitmap? _image;
-    string _imageFrom = "";
-    Avalonia.Media.Imaging.Bitmap? Image()
-    {
-        if (Spec.ImagePath == _imageFrom) return _image;
-        _imageFrom = Spec.ImagePath;
-        _image?.Dispose();
-        _image = null;
-        try { if (File.Exists(Spec.ImagePath)) _image = new Avalonia.Media.Imaging.Bitmap(Spec.ImagePath); }
-        catch (Exception ex) { AppLog.Error("gauges", "could not load " + Spec.ImagePath, ex); }
-        return _image;
-    }
+    /// The picture behind the gauge.
+    Avalonia.Media.Imaging.Bitmap? Image() => Picture(Spec.ImagePath);
 
     bool Alarm => Spec.Warn is double w && !double.IsNaN(_value) && (Spec.WarnBelow ? _value <= w : _value >= w);
     double Fraction => Spec.Max <= Spec.Min || double.IsNaN(_value) ? 0 : Math.Clamp((_value - Spec.Min) / (Spec.Max - Spec.Min), 0, 1);
     string Text => double.IsNaN(_value) ? "--" : _value.ToString("F" + Math.Clamp(Spec.Decimals, 0, 3));
 
+    /// The picture on the dial face.
+    Avalonia.Media.Imaging.Bitmap? FaceImage() => Picture(Spec.FaceImagePath);
+
+    bool _flashPending;
+
+    double FaceAlpha => Math.Clamp(Spec.FaceOpacity, 0, 1);
+
     public override void Render(DrawingContext c)
     {
         var r = new Rect(0, 0, Bounds.Width, Bounds.Height);
-        c.DrawRectangle(FaceBrush, Edge, r, 6, 6);
+        // the background picture first, then the face over it as solid as FaceOpacity says
         if (Image() is { } bmp)
+            using (c.PushClip(new RoundedRect(r, 6)))
             using (c.PushOpacity(Math.Clamp(Spec.ImageOpacity, 0, 1)))
                 c.DrawImage(bmp, new Rect(0, 0, bmp.Size.Width, bmp.Size.Height), r);
+        using (c.PushOpacity(FaceAlpha))
+            c.DrawRectangle(FaceBrush, null, r, 6, 6);
+        c.DrawRectangle(null, Edge, r, 6, 6);
+        // a face picture on the kinds without a dial covers the gauge's own area
+        if (Spec.Kind != GaugeKind.Dial && Spec.Kind != GaugeKind.Arc && FaceImage() is { } face)
+            using (c.PushClip(new RoundedRect(r.Deflate(2), 5)))
+            using (c.PushOpacity(FaceAlpha))
+                c.DrawImage(face, new Rect(0, 0, face.Size.Width, face.Size.Height), r.Deflate(2));
         switch (Spec.Kind)
         {
             case GaugeKind.Dial: DialFace(c, r); break;
@@ -91,7 +157,76 @@ public sealed class GaugeControl : Control
             case GaugeKind.Light: Light(c, r); break;
             case GaugeKind.Graph: Graph(c, r, bars: false); break;
             case GaugeKind.BarGraph: Graph(c, r, bars: true); break;
+            case GaugeKind.Arc: ArcSweep(c, r); break;
+            case GaugeKind.ShiftLights: ShiftLights(c, r); break;
+            case GaugeKind.Text: Caption(c, r, Spec.Title, Math.Clamp(r.Height * 0.5, 10, 40), InkBrush, (r.Height - Math.Clamp(r.Height * 0.5, 10, 40) * 1.3) / 2); break;
             default: Number(c, r); break;
+        }
+    }
+
+    /// The dial's own face: the sunk disc, its picture, both as solid as FaceOpacity says.
+    void DialDisc(DrawingContext c, Point centre, double radius)
+    {
+        using (c.PushOpacity(FaceAlpha))
+        {
+            c.DrawEllipse(Well, null, centre, radius, radius);
+            if (FaceImage() is { } face)
+            {
+                var box = new Rect(centre.X - radius, centre.Y - radius, radius * 2, radius * 2);
+                using (c.PushGeometryClip(new EllipseGeometry(box)))
+                    c.DrawImage(face, new Rect(0, 0, face.Size.Width, face.Size.Height), box);
+            }
+        }
+    }
+
+    /// A digital-dash sweep: a thick track round the same 270 degrees a dial uses, filled up to the reading (red past the warning level), with the number big in the middle.
+    void ArcSweep(DrawingContext c, Rect r)
+    {
+        var centre = new Point(r.Width / 2, (r.Height * 0.55) + 4);
+        double radius = Math.Min(r.Width * 0.44, r.Height * 0.44);
+        if (radius < 14) { Number(c, r); return; }
+        double thick = Math.Max(4, radius * 0.16);
+        DialDisc(c, centre, radius);
+        c.DrawGeometry(null, new Pen(new SolidColorBrush(Color.FromRgb(0x22, 0x25, 0x2b)), thick, lineCap: PenLineCap.Flat), Arc(centre, radius - (thick / 2), 0, 1));
+        if (Fraction > 0.001)
+            c.DrawGeometry(null, new Pen(AccentBrush, thick, lineCap: PenLineCap.Flat), Arc(centre, radius - (thick / 2), 0, Fraction));
+        double span = Spec.Max - Spec.Min;
+        if (span > 0 && Spec.Warn is double warn)
+        {
+            double wf = Math.Clamp((warn - Spec.Min) / span, 0, 1);
+            var (a, b) = Spec.WarnBelow ? (0.0, wf) : (wf, 1.0);
+            if (b - a > 0.002) c.DrawGeometry(null, new Pen(Red, Math.Max(2, thick * 0.25)), Arc(centre, radius + 1, a, b));
+        }
+        Caption(c, r, Spec.Title, Math.Clamp(radius * 0.16, 9, 13), Dim, 3);
+        double big = Math.Clamp(radius * 0.42, 12, 64);
+        var ft = new FormattedText(Text, System.Globalization.CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+                                   new Typeface(MainWindow.MonoFont, FontStyle.Normal, FontWeight.Bold), big, Alarm ? Warn : InkBrush);
+        c.DrawText(ft, new Point(centre.X - (ft.Width / 2), centre.Y - (ft.Height / 2)));
+        if (Spec.Unit.Length > 0) At(c, Spec.Unit, new Point(centre.X, centre.Y + (ft.Height * 0.62)), Math.Clamp(radius * 0.14, 8, 13), Dim);
+    }
+
+    /// A row of shift lights across the gauge: they come on in turn from Min to the warning level (or Max) - green, amber, then red - and all flash once the reading is past the warning.
+    void ShiftLights(DrawingContext c, Rect r)
+    {
+        int n = Math.Clamp(Spec.Ticks, 3, 20);
+        double top = Spec.Warn ?? Spec.Max, span = top - Spec.Min;
+        double lit = span <= 0 || double.IsNaN(_value) ? 0 : Math.Clamp((_value - Spec.Min) / span, 0, 1) * n;
+        bool flash = Alarm && (DateTime.UtcNow.Millisecond / 125) % 2 == 0;
+        double gap = 4, w = (r.Width - 12 - (gap * (n - 1))) / n;
+        double d = Math.Max(4, Math.Min(w, r.Height - 10));
+        for (int i = 0; i < n; i++)
+        {
+            double f = (double)i / Math.Max(1, n - 1);
+            var on = f < 0.55 ? Color.FromRgb(0x3c, 0xe0, 0x5a) : f < 0.85 ? Color.FromRgb(0xff, 0xc4, 0x2a) : Color.FromRgb(0xff, 0x3a, 0x3a);
+            bool isOn = Alarm ? flash : i < lit;
+            var brush = isOn ? new SolidColorBrush(on) : new SolidColorBrush(Color.FromArgb(0x55, on.R, on.G, on.B));
+            var centre = new Point(6 + (i * (w + gap)) + (w / 2), r.Height / 2);
+            c.DrawEllipse(brush, Edge, centre, d / 2, d / 2);
+        }
+        if (Alarm && !_flashPending)
+        {
+            _flashPending = true;
+            DispatcherTimer.RunOnce(() => { _flashPending = false; InvalidateVisual(); }, TimeSpan.FromMilliseconds(120));
         }
     }
 
@@ -102,27 +237,108 @@ public sealed class GaugeControl : Control
         c.DrawText(ft, new Point(centre ? (r.Width - ft.Width) / 2 : 8, y));
     }
 
-    /// A round dial with a needle, ticks every tenth of the range, and a red zone past the warning.
+    /// Text centred on a point (the dial's scale numbers).
+    void At(DrawingContext c, string text, Point p, double size, IBrush brush)
+    {
+        var ft = new FormattedText(text, System.Globalization.CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+                                   new Typeface(MainWindow.MonoFont), size, brush);
+        c.DrawText(ft, new Point(p.X - (ft.Width / 2), p.Y - (ft.Height / 2)));
+    }
+
+    /// A scale number as short as it can still be read: 8000 rpm as "8000", 14.7 AFR as "14.7", 0.45 V as "0.45".
+    static string Mark(double v, double span) =>
+        span >= 200 || Math.Abs(v) >= 1000 ? v.ToString("0")
+        : span >= 2 ? v.ToString("0.#")
+        : v.ToString("0.##");
+
+    static readonly IBrush Bezel = new SolidColorBrush(Color.FromRgb(0x24, 0x27, 0x2d));
+    static readonly IBrush Well = new SolidColorBrush(Color.FromRgb(0x10, 0x11, 0x14));
+    static readonly IBrush Hub = new SolidColorBrush(Color.FromRgb(0x33, 0x36, 0x3d));
+    static readonly IBrush Red = new SolidColorBrush(Color.FromRgb(0xe0, 0x3a, 0x3a));
+
+    /// An arc along the dial's own sweep, from one fraction of the scale to another.
+    static Geometry Arc(Point centre, double radius, double from, double to)
+    {
+        var geo = new StreamGeometry();
+        using var g = geo.Open();
+        var (sx, sy) = Dial.Direction(from);
+        g.BeginFigure(new Point(centre.X + (sx * radius), centre.Y + (sy * radius)), false);
+        int steps = Math.Max(2, (int)(Math.Abs(to - from) * 60));
+        for (int i = 1; i <= steps; i++)
+        {
+            var (dx, dy) = Dial.Direction(from + ((to - from) * i / steps));
+            g.LineTo(new Point(centre.X + (dx * radius), centre.Y + (dy * radius)));
+        }
+        g.EndFigure(false);
+        return geo;
+    }
+
+    /// A proper round dial: a sunk face inside a bezel, a graded scale with its numbers printed round it, a red zone past the warning level, a tapered needle on a hub, and the reading in a box underneath.
     void DialFace(DrawingContext c, Rect r)
     {
-        var centre = new Point(r.Width / 2, r.Height * 0.68);
-        double radius = Math.Min(r.Width / 2, r.Height * 0.62) - 12;
-        int ticks = Math.Clamp(Spec.Ticks, 2, 40);
-        for (int i = 0; i <= ticks; i++)
+        double span = Spec.Max - Spec.Min;
+        var centre = new Point(r.Width / 2, (r.Height * 0.58) + 5);
+        double radius = Math.Min(r.Width * 0.46, r.Height * 0.45);
+        if (radius < 14) { Number(c, r); return; }
+        double labels = radius * 0.68;
+        double tickOut = radius * 0.94, tickIn = radius * 0.82, minorIn = radius * 0.88;
+        double text = Math.Clamp(radius * 0.18, 6.5, 12);
+
+        DialDisc(c, centre, radius);
+        c.DrawEllipse(null, new Pen(Bezel, Math.Max(2, radius * 0.06)), centre, radius, radius);
+        c.DrawGeometry(null, new Pen(Accent(Dim), Math.Max(1, radius * 0.035)), Arc(centre, tickOut, 0, 1));
+        // the red zone: everything past the warning level (or below it, for a low warning such as battery volts)
+        if (span > 0 && Spec.Warn is double warn)
         {
-            var (dx, dy) = Dial.Direction((double)i / ticks);
-            var dir = new Point(dx, dy);
-            bool hot = Spec.Warn is double wv && Spec.Min + (Spec.Max - Spec.Min) * i / ticks >= wv;
-            c.DrawLine(new Pen(hot ? Warn : Accent(Dim), i % 5 == 0 ? 2 : 1),
-                       new Point(centre.X + dir.X * (radius - 8), centre.Y + dir.Y * (radius - 8)),
-                       new Point(centre.X + dir.X * radius, centre.Y + dir.Y * radius));
+            double wf = Math.Clamp((warn - Spec.Min) / span, 0, 1);
+            var (a, b) = Spec.WarnBelow ? (0.0, wf) : (wf, 1.0);
+            if (b - a > 0.002) c.DrawGeometry(null, new Pen(Red, Math.Max(2, radius * 0.07)), Arc(centre, tickOut, a, b));
         }
+
+        int majors = Math.Clamp(Spec.Ticks, 2, 12);
+        int minors = majors <= 6 ? 5 : 2;
+        for (int i = 0; i <= majors * minors; i++)
+        {
+            double f = (double)i / (majors * minors);
+            var (dx, dy) = Dial.Direction(f);
+            bool major = i % minors == 0;
+            bool hot = span > 0 && Spec.Warn is double wv &&
+                       (Spec.WarnBelow ? Spec.Min + (span * f) <= wv : Spec.Min + (span * f) >= wv);
+            double from = major ? tickIn : minorIn;
+            c.DrawLine(new Pen(hot ? Red : major ? InkBrush : Dim, major ? Math.Max(1.5, radius * 0.045) : 1),
+                       new Point(centre.X + (dx * from), centre.Y + (dy * from)),
+                       new Point(centre.X + (dx * tickOut), centre.Y + (dy * tickOut)));
+            if (major && radius >= 32)
+                At(c, Mark(Spec.Min + (span * f), span), new Point(centre.X + (dx * labels), centre.Y + (dy * labels)),
+                   text, hot ? Red : InkBrush);
+        }
+
+        // the needle: a triangle from the hub, with a short counterweight behind it
         var (ndx, ndy) = Dial.Direction(Fraction);
-        var nd = new Point(ndx, ndy);
-        c.DrawLine(new Pen(AccentBrush, 2.5), centre, new Point(centre.X + nd.X * (radius - 10), centre.Y + nd.Y * (radius - 10)));
-        c.DrawEllipse(AccentBrush, null, centre, 3.5, 3.5);
-        Caption(c, r, Spec.Title, 11, Dim, 6);
-        Caption(c, r, Text + (Spec.Unit.Length > 0 ? " " + Spec.Unit : ""), 15, Alarm ? Warn : InkBrush, r.Height - 24);
+        var tip = new Point(centre.X + (ndx * radius * 0.78), centre.Y + (ndy * radius * 0.78));
+        double w = Math.Max(1.6, radius * 0.055);
+        var needle = new StreamGeometry();
+        using (var g = needle.Open())
+        {
+            g.BeginFigure(tip, true);
+            g.LineTo(new Point(centre.X - (ndy * w) - (ndx * radius * 0.12), centre.Y + (ndx * w) - (ndy * radius * 0.12)));
+            g.LineTo(new Point(centre.X + (ndy * w) - (ndx * radius * 0.12), centre.Y - (ndx * w) - (ndy * radius * 0.12)));
+            g.EndFigure(true);
+        }
+        c.DrawGeometry(AccentBrush, null, needle);
+        double hub = Math.Max(3, radius * 0.11);
+        c.DrawEllipse(Hub, new Pen(AccentBrush, 1.5), centre, hub, hub);
+
+        Caption(c, r, Spec.Title, Math.Clamp(radius * 0.2, 9, 12), Dim, 3);
+        // the reading, in a box under the needle where a digital dial puts it
+        string reading = Text + (Spec.Unit.Length > 0 ? " " + Spec.Unit : "");
+        double rs = Math.Clamp(radius * 0.26, 10, 18);
+        var rft = new FormattedText(reading, System.Globalization.CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+                                    new Typeface(MainWindow.MonoFont, FontStyle.Normal, FontWeight.Bold), rs, Alarm ? Warn : InkBrush);
+        var box = new Rect(((r.Width - rft.Width) / 2) - 6, centre.Y + (radius * 0.32), rft.Width + 12, rft.Height + 4);
+        if (box.Bottom > r.Height - 2) box = box.WithY(Math.Max(centre.Y, r.Height - 2 - box.Height));
+        c.DrawRectangle(Well, new Pen(Bezel, 1), box, 3, 3);
+        c.DrawText(rft, new Point(box.X + 6, box.Y + 2));
     }
 
     void Bar(DrawingContext c, Rect r)
@@ -146,33 +362,58 @@ public sealed class GaugeControl : Control
     void Light(DrawingContext c, Rect r)
     {
         bool on = Alarm || (Spec.Warn == null && _value >= 0.5);
-        var centre = new Point(r.Width / 2, r.Height / 2 + 6);
+        var centre = new Point(r.Width / 2, (r.Height / 2) + 6);
         double rad = Math.Min(r.Width, r.Height) * 0.22;
         c.DrawEllipse(on ? (Spec.AccentColour.Length > 0 ? Pick(Spec.AccentColour, Warn) : Warn) : new SolidColorBrush(Color.FromRgb(0x33, 0x36, 0x3c)),
                       Edge, centre, rad, rad);
         Caption(c, r, Spec.Title, 11, on ? InkBrush : Dim, 6);
     }
 
-    /// A rolling graph of the last `Seconds` of the channel: a line, or bars.
+    /// A rolling graph of the last `Seconds` of the channel: a line, or bars. The vertical range is the gauge's own unless the readings do not fit inside it, and its ends are printed down the left so the trace can be read off.
     void Graph(DrawingContext c, Rect r, bool bars)
     {
         Caption(c, r, $"{Spec.Title}  {Text}{(Spec.Unit.Length > 0 ? " " + Spec.Unit : "")}", 11, Alarm ? Warn : Dim, 4, centre: false);
-        var plot = new Rect(6, 20, Math.Max(4, r.Width - 12), Math.Max(4, r.Height - 28));
-        c.DrawRectangle(null, Edge, plot);
-        if (_history.Count < 2) return;
+        var (lo, hi) = PlotRange();
+        double gutter = r.Width > 120 ? 34 : 6;
+        var plot = new Rect(gutter, 20, Math.Max(4, r.Width - gutter - 6), Math.Max(4, r.Height - 30));
+        c.DrawRectangle(Well, Edge, plot);
+        for (int i = 0; i <= 2; i++)
+        {
+            double y = plot.Y + (plot.Height * i / 2);
+            c.DrawLine(new Pen(Bezel, 1), new Point(plot.X, y), new Point(plot.Right, y));
+            if (gutter <= 6) continue;
+            var ft = new FormattedText(Mark(hi - ((hi - lo) * i / 2), hi - lo), System.Globalization.CultureInfo.InvariantCulture,
+                                       FlowDirection.LeftToRight, new Typeface(MainWindow.MonoFont), 8.5, Dim);
+            c.DrawText(ft, new Point(Math.Max(1, plot.X - ft.Width - 3), y - (ft.Height / 2)));
+        }
+        if (Spec.Warn is double warn && hi > lo && warn > lo && warn < hi)
+        {
+            double y = plot.Bottom - (plot.Height * (warn - lo) / (hi - lo));
+            c.DrawLine(new Pen(Red, 1, DashStyle.Dash), new Point(plot.X, y), new Point(plot.Right, y));
+        }
+        if (_history.Count < 2)
+        {
+            Caption(c, r, _history.Count == 0 ? "waiting for " + Spec.Channel : "\u2026", 10, Dim, plot.Y + (plot.Height / 2));
+            return;
+        }
         double t1 = _history[^1].T, t0 = t1 - Math.Max(1, Spec.Seconds);
+        double tspan = Math.Max(1e-6, t1 - t0), vspan = Math.Max(1e-9, hi - lo);
+        double F(double v) => Math.Clamp((v - lo) / vspan, 0, 1);
         if (bars)
         {
-            int slots = Math.Clamp((int)(plot.Width / 5), 8, 120);
+            int slots = Math.Clamp((int)(plot.Width / 5), 8, 200);
             double w = plot.Width / slots;
             for (int i = 0; i < slots; i++)
             {
-                double a0 = t0 + (t1 - t0) * i / slots, a1 = t0 + (t1 - t0) * (i + 1) / slots;
+                double a0 = t0 + (tspan * i / slots), a1 = t0 + (tspan * (i + 1) / slots);
                 double sum = 0; int n = 0;
                 foreach (var (t, v) in _history) if (t >= a0 && t < a1) { sum += v; n++; }
                 if (n == 0) continue;
-                double f = Spec.Max <= Spec.Min ? 0 : Math.Clamp((sum / n - Spec.Min) / (Spec.Max - Spec.Min), 0, 1);
-                c.DrawRectangle(AccentBrush, null, new Rect(plot.X + i * w + 0.5, plot.Bottom - plot.Height * f, Math.Max(1, w - 1), plot.Height * f));
+                double mean = sum / n;
+                double h = Math.Max(1, plot.Height * F(mean));
+                bool hot = Spec.Warn is double wv && (Spec.WarnBelow ? mean <= wv : mean >= wv);
+                c.DrawRectangle(hot ? Warn : AccentBrush, null,
+                                new Rect(plot.X + (i * w) + 0.5, plot.Bottom - h, Math.Max(1, w - 1), h));
             }
             return;
         }
@@ -183,14 +424,12 @@ public sealed class GaugeControl : Control
             foreach (var (t, v) in _history)
             {
                 if (t < t0) continue;
-                double x = plot.X + plot.Width * Math.Clamp((t - t0) / (t1 - t0), 0, 1);
-                double f = Spec.Max <= Spec.Min ? 0 : Math.Clamp((v - Spec.Min) / (Spec.Max - Spec.Min), 0, 1);
-                var pt = new Point(x, plot.Bottom - plot.Height * f);
+                var pt = new Point(plot.X + (plot.Width * Math.Clamp((t - t0) / tspan, 0, 1)), plot.Bottom - (plot.Height * F(v)));
                 if (!started) { g.BeginFigure(pt, false); started = true; }
                 else g.LineTo(pt);
             }
             if (started) g.EndFigure(false);
         }
-        c.DrawGeometry(null, new Pen(AccentBrush, 1.5), geo);
+        c.DrawGeometry(null, new Pen(AccentBrush, 1.6, lineJoin: PenLineJoin.Round), geo);
     }
 }

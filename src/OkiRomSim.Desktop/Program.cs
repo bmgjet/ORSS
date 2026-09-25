@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Styling;
@@ -10,8 +11,7 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
-        // `OkiRomSimStudio --mcp [--root DIR]... [--read-only]` runs the MCP server over stdio for a
-        // local LLM agent instead of opening the window (same tools as okirom-mcp).
+        // `OkiRomSimStudio --mcp [--root DIR]... [--read-only]` runs the MCP server over stdio for a local LLM agent instead of opening the window (same tools as okirom-mcp).
         if (args.Contains("--mcp")) return RunMcp(args);
         // Errors on background threads are logged (Debug page and %TEMP%) rather than lost.
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
@@ -38,8 +38,7 @@ public static class Program
         {
             Log = c => Console.Error.WriteLine($"{DateTime.Now:HH:mm:ss} {c.Client} {(c.Ok ? "ok " : "ERR")} {c.Tool} {c.Milliseconds} ms"),
         };
-        // stdout carries the protocol and nothing else: anything else that writes to the
-        // console goes to stderr, so a stray message cannot corrupt a reply
+        // stdout carries the protocol and nothing else: anything else that writes to the console goes to stderr, so a stray message cannot corrupt a reply
         var protocolOut = new StreamWriter(Console.OpenStandardOutput(), new System.Text.UTF8Encoding(false));
         Console.SetOut(Console.Error);
         OkiRomSim.Mcp.McpStdio.RunAsync(server, new StreamReader(Console.OpenStandardInput(), System.Text.Encoding.UTF8), protocolOut).GetAwaiter().GetResult();
@@ -58,9 +57,7 @@ public sealed class App : Application
     public override void Initialize()
     {
         Styles.Add(new FluentTheme());
-        // AvaloniaEdit ships its own control theme; without it the editor renders unstyled.
-        // The resource path moved between AvaloniaEdit versions, so try both and carry on if
-        // neither is there - the editor still works, it just looks plain.
+        // AvaloniaEdit ships its own control theme; without it the editor renders unstyled. The resource path moved between AvaloniaEdit versions, so try both and carry on if neither is there - the editor still works, it just looks plain.
         foreach (var path in new[] { "avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml",
                                      "avares://AvaloniaEdit/Themes/Fluent.xaml" })
         {
@@ -89,10 +86,14 @@ public sealed class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            var path = desktop.Args?.FirstOrDefault(a => !a.StartsWith('-'));
+            var args = desktop.Args ?? [];
+            var check = UiCheck.Folder(args);
+            var path = args.Where((a, i) => !a.StartsWith('-') && (i == 0 || args[i - 1] != "--ui-check")).FirstOrDefault();
             // the title bar is decided before the first window is built
             try { DarkChrome.PreferSystemTitleBar = AppSettings.Load().SystemTitleBar; } catch { }
-            desktop.MainWindow = new MainWindow(path);
+            var main = new MainWindow(path);
+            desktop.MainWindow = main;
+            if (check != null) main.Opened += async (_, _) => await UiCheck.Run(main, check);
         }
         base.OnFrameworkInitializationCompleted();
     }

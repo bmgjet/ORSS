@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -7,8 +8,7 @@ using OkiRomSim.Core;
 
 namespace OkiRomSim.Desktop;
 
-/// The O2 / lambda and knock tables: what the log measured in every cell of a map, how far that is from the target, and the change that closes the gap.
-/// The channel can be a wideband's AFR or lambda, the ECU's own O2 voltage, or any analog input scaled between two voltages, so whatever is wired in reads in the right units here. "Compare to target" fills the difference column; "Apply offset changes" writes the corrections to the map as one undo step (fuel by proportion, ignition by degrees pulled where it knocked).
+/// The O2 / lambda and knock tables: what the log measured in every cell of a map, how far that is from the target, and the change that closes the gap. The channel can be a wideband's AFR or lambda, the ECU's own O2 voltage, or any analog input scaled between two voltages, so whatever is wired in reads in the right units here. "Compare to target" fills the difference column; "Apply offset changes" writes the corrections to the map as one undo step (fuel by proportion, ignition by degrees pulled where it knocked).
 public sealed class LogTableWindow : Window
 {
     readonly SimHost _host;
@@ -23,14 +23,16 @@ public sealed class LogTableWindow : Window
     readonly NumericUpDown _authority = Num(100, 5, 100, 5);
     readonly NumericUpDown _knockPull = Num(2, 0.25, 10, 0.25);
     readonly ComboBox _mode = new() { Width = 150, ItemsSource = new[] { "O2 / lambda (fuel)", "Knock (ignition)" }, SelectedIndex = 0 };
-    readonly TextBox _grid = new()
+    /// The measured table, drawn as the very same grid the fuel and ignition maps use: RPM down the left, load across the top, every cell coloured by its value, the samples and the distance from target under each one. Nothing in it is edited here - the numbers came from the log - so it shows only, and Apply writes the changes to the map itself.
+    readonly GridBox _grid = new() { Editable = false };
+    readonly ComboBox _show = new()
     {
-        IsReadOnly = true, AcceptsReturn = true, FontFamily = MainWindow.MonoFont, FontSize = 11.5,
-        Height = 320, TextWrapping = TextWrapping.NoWrap,
+        Width = 190, SelectedIndex = 0,
+        ItemsSource = new[] { "measured", "difference from target", "what the map would become" },
     };
     readonly TextBlock _status = new() { FontSize = 11.5, Opacity = 0.9, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6) };
     LogTable? _measured;
-    List<CellChange> _changes = new();
+    List<CellChange> _changes = [];
     public bool Applied { get; private set; }
 
     static NumericUpDown Num(double v, double min, double max, double step) => new()
@@ -57,8 +59,8 @@ public sealed class LogTableWindow : Window
         _table.SelectedItem = preferred?.Name ?? tables.FirstOrDefault(i => i.Category.Equals("Fuel", StringComparison.OrdinalIgnoreCase))?.Name ?? tables.FirstOrDefault()?.Name;
         ToolTip.SetTip(_table, "The map the log is laid over: its rows and columns are the cells measured (normally a fuel map for O2, an ignition map for knock).");
 
-        var channels = _frames().SelectMany(f => f.Channels()).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(c => c).ToList();
-        if (channels.Count == 0) channels = new List<string> { "afr", "lambda", "o2_v", "knock" };
+        var channels = LogFrame.AllChannels(_frames()).OrderBy(c => c, StringComparer.OrdinalIgnoreCase).ToList();
+        if (channels.Count == 0) channels = ["afr", "lambda", "o2_v", "knock"];
         _channel.ItemsSource = channels;
         _channel.SelectedItem = channels.FirstOrDefault(c => c.Equals("afr", StringComparison.OrdinalIgnoreCase))
                                 ?? channels.FirstOrDefault(c => c.Equals("lambda", StringComparison.OrdinalIgnoreCase)) ?? channels[0];
@@ -93,6 +95,11 @@ public sealed class LogTableWindow : Window
         Add("Authority %", _authority);
         Add("Knock pull °", _knockPull);
 
+        Add("Cells show", _show);
+        ToolTip.SetTip(_show, "What the big number in each cell is: what the log measured there, how far that is from target as the fuel it is short of, " +
+                              "or the value the map would hold after Apply. The small number underneath is always the samples that cell had.");
+        _show.SelectionChanged += (_, _) => Draw();
+
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(12, 4) };
         buttons.Children.Add(Btn("Read the log", Measure, "Average the channel into every cell of the map."));
         buttons.Children.Add(Btn("Compare to target", Compare, "Show how far each cell is from the target, and what would change."));
@@ -100,9 +107,10 @@ public sealed class LogTableWindow : Window
         buttons.Children.Add(apply);
         buttons.Children.Add(Btn("Close", Close, "Close this window."));
 
-        var body = new StackPanel { Margin = new Thickness(12, 0) };
-        body.Children.Add(_grid);
+        var body = new DockPanel { Margin = new Thickness(12, 0, 12, 4) };
+        DockPanel.SetDock(_status, Dock.Bottom);
         body.Children.Add(_status);
+        body.Children.Add(_grid);
 
         var g = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,Auto,*") };
         Grid.SetRow(chrome, 0); g.Children.Add(chrome);
@@ -148,8 +156,7 @@ public sealed class LogTableWindow : Window
     double[]? Targets(ItemDef item)
     {
         var map = MapSide.Side(item) == true ? (TargetHigh?.Any == true ? TargetHigh : TargetLow) : TargetLow;
-        if (map is not { Any: true }) return null;
-        return map.ForTable(_host.Defs(), _host.RomCopy(), item, (double)(_target.Value ?? 14.7m));
+        return map is not { Any: true } ? null : map.ForTable(_host.Defs(), _host.RomCopy(), item, (double)(_target.Value ?? 14.7m));
     }
 
     void Measure()
@@ -157,10 +164,11 @@ public sealed class LogTableWindow : Window
         var item = Item();
         if (item == null) { _status.Text = "no table to lay the log over"; return; }
         var frames = _frames();
-        if (frames.Count == 0) { _status.Text = "no logged frames yet: log a drive, or load one on the Datalog page"; _grid.Text = ""; return; }
+        if (frames.Count == 0) { _status.Text = "no logged frames yet: log a drive, or load one on the Datalog page"; _grid.Note = ""; return; }
         _measured = LogTables.Build(_host.Defs(), _host.RomCopy(), item, frames, Scale());
-        _changes = new();
-        _grid.Text = Render(_measured, null);
+        _changes = [];
+        _diff = null;
+        Draw();
         int seen = _measured.Count.Count(c => c > 0);
         _status.Text = $"{_measured.Frames:N0} frames landed in {seen} of {_measured.Cells} cells. Compare to target to see what would change.";
     }
@@ -176,8 +184,9 @@ public sealed class LogTableWindow : Window
             ? LogTables.KnockPulls(_host.Defs(), _host.RomCopy(), _measured, target, (double)(_knockPull.Value ?? 2), (int)(_minSamples.Value ?? 2))
             : LogTables.FuelOffsets(_host.Defs(), _host.RomCopy(), _measured, target, targetTable, (int)(_minSamples.Value ?? 3),
                                     (double)(_limit.Value ?? 15), (double)(_authority.Value ?? 100) / 100);
-        var diff = _mode.SelectedIndex == 1 ? null : LogTables.Difference(_measured, target, targetTable);
-        _grid.Text = Render(_measured, diff) + "\n" + LogTables.Describe(_measured, _changes, _mode.SelectedIndex == 1 ? "°" : "");
+        _diff = _mode.SelectedIndex == 1 ? null : LogTables.Difference(_measured, target, targetTable);
+        if (_diff != null && _show.SelectedIndex == 0) _show.SelectedIndex = 1;
+        Draw();
         string where = targetTable != null
             ? $"targets from Settings > Targets ({(MapSide.Side(item) == true ? "high" : "low")} cam). "
             : "";
@@ -202,29 +211,43 @@ public sealed class LogTableWindow : Window
         catch (Exception ex) { _status.Text = "could not apply: " + ex.Message; AppLog.Error("calibration", "log offsets failed", ex); }
     }
 
-    /// The measured table, and the difference column when there is one.
-    string Render(LogTable t, double[]? diff)
+    double[]? _diff;
+
+    /// Put the measured table (and whatever the "cells show" box asks for) into the grid.
+    void Draw()
     {
-        var sb = new System.Text.StringBuilder();
-        sb.Append("          ");
-        for (int c = 0; c < t.Item.Cols; c++) sb.Append($"{(c < t.ColAxis.Length ? t.ColAxis[c] : c),10:0.#}");
-        sb.AppendLine();
-        for (int r = 0; r < t.Item.Rows; r++)
+        var t = _measured;
+        if (t == null) return;
+        var item = t.Item;
+        int rows = Math.Max(1, item.Rows), cols = Math.Max(1, item.Cols);
+        var rowAxis = t.RowAxis.Length >= rows ? t.RowAxis[..rows] : [.. Enumerable.Range(0, rows).Select(i => (double)i)];
+        var colAxis = t.ColAxis.Length >= cols ? t.ColAxis[..cols] : [.. Enumerable.Range(0, cols).Select(i => (double)i)];
+
+        var after = new double[t.Cells];
+        var now = RomData.Read(_host.Defs(), _host.RomCopy(), item);
+        for (int i = 0; i < after.Length; i++) after[i] = i < now.Length ? now[i].Value : double.NaN;
+        foreach (var c in _changes) if (c.Index >= 0 && c.Index < after.Length) after[c.Index] = c.To;
+
+        bool knock = _mode.SelectedIndex == 1;
+        var (values, unit, decimals, what) = _show.SelectedIndex switch
         {
-            sb.Append($"{(r < t.RowAxis.Length ? t.RowAxis[r] : r),8:0.#}  ");
-            for (int c = 0; c < t.Item.Cols; c++)
-            {
-                int i = r * t.Item.Cols + c;
-                if (t.Count[i] == 0) { sb.Append("         ."); continue; }
-                sb.Append(diff == null || double.IsNaN(diff[i])
-                    ? $"{t.Mean[i],7:0.##}({Math.Min(t.Count[i], 99),2})"
-                    : $"{diff[i],8:+0.#;-0.#}% ");
-            }
-            sb.AppendLine();
-        }
-        sb.AppendLine(diff == null
-            ? $"measured {t.Channel} per cell (samples in brackets)"
-            : $"how far {t.Channel} is from target, as the fuel each cell is short (+) or over (-)");
-        return sb.ToString();
+            1 when _diff != null => (_diff, "%", 1, "how far each cell is from target, as the fuel it is short of (+) or over on (-)"),
+            1 => (Blank(t.Cells), "", 1, "press Compare to target first"),
+            2 => (after, knock ? "\u00b0" : "", 2, "the value the map would hold after Apply"),
+            _ => (t.Mean, "", 2, $"what the log measured for {t.Channel} in each cell"),
+        };
+        _grid.Set(rowAxis, colAxis, [.. values], AxisUnit(item.RowAxis, "rpm"), AxisUnit(item.ColAxis, "load"), unit, decimals);
+        // under each cell: how many samples it had, which is what decides whether it is corrected
+        _grid.SetOverlay([.. t.Count.Select(n => n == 0 ? double.NaN : (double)n)], t.Count, "samples");
+        _grid.Note = what + (_changes.Count > 0 ? $"  \u00b7  {_changes.Count} cell(s) would change" : "");
+    }
+
+    static double[] Blank(int n) => [.. Enumerable.Repeat(double.NaN, n)];
+
+    string AxisUnit(AxisDef? a, string fallback)
+    {
+        if (a == null) return fallback;
+        if (a.Unit.Length > 0) return a.Unit;
+        try { return _host.Defs().Formula(a.Formula).Unit is { Length: > 0 } u ? u : fallback; } catch { return fallback; }
     }
 }

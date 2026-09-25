@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
@@ -38,10 +39,8 @@ public sealed class ChipView : UserControl
     readonly SimHost _host;
     readonly Canvas _canvas = new();
     readonly Viewbox _view = new() { Stretch = Stretch.Uniform, StretchDirection = StretchDirection.DownOnly };
-    // one tooltip control per host: a single TextBlock cannot be the tip of both the pin and
-    // its label, because Avalonia reparents it into whichever tooltip opens ("already has a visual parent")
-    readonly List<(Pin Pin, Border Box, TextBlock[] Tips)> _pins = new();
-    Package _package = Package.Sdip64;
+    // one tooltip control per host: a single TextBlock cannot be the tip of both the pin and its label, because Avalonia reparents it into whichever tooltip opens ("already has a visual parent")
+    readonly List<(Pin Pin, Border Box, TextBlock[] Tips)> _pins = [];
     SimHost.Snapshot? _last;
     (double[] Direct, double[] MuxA, double[] MuxB, int MuxSelect) _analog;
 
@@ -61,9 +60,9 @@ public sealed class ChipView : UserControl
 
     public Package CurrentPackage
     {
-        get => _package;
-        set { if (_package != value) { _package = value; Build(); if (_last != null) Update(_last); } }
-    }
+        get;
+        set { if (field != value) { field = value; Build(); if (_last != null) Update(_last); } }
+    } = Package.Sdip64;
 
     // ------------------------------------------------------------------ layout
 
@@ -74,10 +73,10 @@ public sealed class ChipView : UserControl
         _canvas.Children.Clear();
         _pins.Clear();
         var p = Profile;
-        var names = (_package == Package.Sdip64 ? p.SdipPins : p.QfpPins).ToArray();
-        if (names.Length != 64) names = (_package == Package.Sdip64 ? OkiRomSim.Core.ProcessorProfile.Msm66207().SdipPins : OkiRomSim.Core.ProcessorProfile.Msm66207().QfpPins).ToArray();
+        var names = (CurrentPackage == Package.Sdip64 ? p.SdipPins : p.QfpPins).ToArray();
+        if (names.Length != 64) names = [.. CurrentPackage == Package.Sdip64 ? OkiRomSim.Core.ProcessorProfile.Msm66207().SdipPins : OkiRomSim.Core.ProcessorProfile.Msm66207().QfpPins];
         var pins = names.Select((n, i) => MakePin(i + 1, n)).ToList();
-        if (_package == Package.Sdip64) BuildDip(pins); else BuildQfp(pins);
+        if (CurrentPackage == Package.Sdip64) BuildDip(pins); else BuildQfp(pins);
     }
 
     static Pin MakePin(int number, string name)
@@ -88,13 +87,13 @@ public sealed class ChipView : UserControl
 
     void BuildDip(List<Pin> pins)
     {
-        double bodyW = 84, top = 20, bodyH = 32 * Pitch + 10;
+        double bodyW = 84, top = 20, bodyH = (32 * Pitch) + 10;
         double bodyX = LabelW + PinW;
-        _canvas.Width = bodyX * 2 + bodyW; _canvas.Height = bodyH + top * 2;
+        _canvas.Width = (bodyX * 2) + bodyW; _canvas.Height = bodyH + (top * 2);
         AddBody(bodyX, top, bodyW, bodyH, $"{Profile.Name}\nSDIP-64", notchTop: true);
         for (int i = 0; i < 32; i++)
         {
-            double y = top + 8 + i * Pitch;
+            double y = top + 8 + (i * Pitch);
             AddPin(pins[i], bodyX - PinW, y, Side.Left);                  // 1..32 down the left
             AddPin(pins[63 - i], bodyX + bodyW, y, Side.Right);           // 64..33 down the right
         }
@@ -102,12 +101,12 @@ public sealed class ChipView : UserControl
 
     void BuildQfp(List<Pin> pins)
     {
-        double body = 16 * Pitch + 16, margin = LabelW + PinW;
-        _canvas.Width = body + margin * 2; _canvas.Height = body + margin * 2;
+        double body = (16 * Pitch) + 16, margin = LabelW + PinW;
+        _canvas.Width = body + (margin * 2); _canvas.Height = body + (margin * 2);
         AddBody(margin, margin, body, body, $"{Profile.Name}\nQFP-64", notchTop: false);
         for (int i = 0; i < 16; i++)
         {
-            double off = 8 + i * Pitch;
+            double off = 8 + (i * Pitch);
             AddPin(pins[i], margin - PinW, margin + off, Side.Left);                       // 1..16 left, top-down
             AddPin(pins[16 + i], margin + off, margin + body, Side.Bottom);                // 17..32 bottom, left-right
             AddPin(pins[32 + i], margin + body, margin + body - off - PinH, Side.Right);   // 33..48 right, bottom-up
@@ -136,7 +135,7 @@ public sealed class ChipView : UserControl
         if (notchTop)
         {
             var notch = new Avalonia.Controls.Shapes.Ellipse { Width = 16, Height = 16, Fill = new SolidColorBrush(Color.FromRgb(24, 25, 28)) };
-            Canvas.SetLeft(notch, x + w / 2 - 8); Canvas.SetTop(notch, y - 8);
+            Canvas.SetLeft(notch, x + (w / 2) - 8); Canvas.SetTop(notch, y - 8);
             _canvas.Children.Add(notch);
         }
     }
@@ -222,7 +221,7 @@ public sealed class ChipView : UserControl
             if (pin.Port == 5)
             {
                 double v = _analog.Direct[pin.Bit];
-                byte shade = (byte)Math.Clamp(60 + v / 5.0 * 195, 0, 255);
+                byte shade = (byte)Math.Clamp(60 + (v / 5.0 * 195), 0, 255);
                 box.Background = new SolidColorBrush(Color.FromRgb(shade, (byte)(shade * 0.6), 30));
                 bool forced = _host.AnalogOverride(pin.Bit) != null ||
                               (pin.Bit < 2 && Enumerable.Range(0, 8).Any(n => _host.AnalogOverride((pin.Bit == 0 ? 100 : 200) + n) != null));
@@ -230,7 +229,7 @@ public sealed class ChipView : UserControl
                 SetTip(tips, AnalogTip(pin));
                 continue;
             }
-            var row = s.Outputs.Pins[pin.Port * 8 + pin.Bit];
+            var row = s.Outputs.Pins[(pin.Port * 8) + pin.Bit];
             bool isForced = _host.ForcedLevel(pin.Port, pin.Bit) != null;
             box.BorderBrush = isForced ? ForcedBorder : Brushes.Transparent;
             box.Background = row.Dir switch
@@ -295,7 +294,7 @@ public sealed class ChipView : UserControl
             Message?.Invoke($"{pin.Name} carries the {(src == "rpm" ? "crank/cam" : "vehicle speed")} pulse train from the engine model; change it with the {(src == "rpm" ? "RPM" : "speed")} slider.");
             return;
         }
-        var row = _last?.Outputs.Pins[pin.Port * 8 + pin.Bit];
+        var row = _last?.Outputs.Pins[(pin.Port * 8) + pin.Bit];
         if (row != null && row.Dir == "out")
         {
             Message?.Invoke($"{pin.Name} is an output driven by the ROM; it cannot be set from outside.");

@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Globalization;
 using OkiRomSim.Assembler;
 using OkiRomSim.Calibration;
@@ -28,6 +29,10 @@ public static class CalCommands
       List the built-in scaling formulas (and what they were derived from).
   okisim defs-export <file.asm> [-o defs.okidef.json]
       Build a definition file from ";@" annotations and the symbol table.
+  okisim features <rom> [--file features.json] [--apply id[,id..]] [--remove id[,id..]] [-o out.bin]
+      The code patches in a feature file and whether each one fits this ROM (can be applied,
+      applied, partly applied, or not for this ROM). --apply / --remove write a new image
+      (default <rom>.patched.bin); every site is checked against the bytes it expects first.
 """;
 
     sealed class Target
@@ -48,7 +53,7 @@ public static class CalCommands
 
     static Target Load(string path, string? defsPath)
     {
-        var t = new Target { Rom = Array.Empty<byte>(), Defs = new DefinitionSet(), Path = path };
+        var t = new Target { Rom = [], Defs = new DefinitionSet(), Path = path };
         if (path.EndsWith(".asm", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".inc", StringComparison.OrdinalIgnoreCase))
         {
             var r = new OkiAssembler().AssembleFile(path);
@@ -119,6 +124,49 @@ public static class CalCommands
     {
         switch (cmd)
         {
+            case "features":
+                {
+                    var file = Opt(args, "--file") ?? FeatureFile.DefaultPath;
+                    var apply = (Opt(args, "--apply") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries);
+                    var remove = (Opt(args, "--remove") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries);
+                    var output = Opt(args, "-o");
+                    if (args.Count < 1) { Console.WriteLine(Usage); return 2; }
+                    if (!File.Exists(file)) { Console.Error.WriteLine($"no feature file at {file} (pass --file)"); return 1; }
+                    var ff = FeatureFile.Load(file);
+                    var t = Load(args[0], null);
+                    var rom = t.Rom.ToArray();
+                    if (apply.Length == 0 && remove.Length == 0)
+                    {
+                        foreach (var g in ff.Features.GroupBy(f => f.Category))
+                        {
+                            Console.WriteLine(g.Key);
+                            foreach (var f in g)
+                            {
+                                var c = FeaturePatches.Check(f, rom);
+                                string st = c.State switch
+                                {
+                                    FeatureState.Applied => "ON ", FeatureState.Available => "off", FeatureState.Partial => "~  ", _ => " - ",
+                                };
+                                Console.WriteLine($"  [{st}] {f.Id,-30} {f.Name}{(c.State == FeatureState.NotApplicable ? "  (not for this ROM)" : "")}");
+                            }
+                        }
+                        return 0;
+                    }
+                    int errors = 0;
+                    foreach (var (ids, off) in new[] { (remove, true), (apply, false) })
+                        foreach (var id in ids)
+                        {
+                            var f = ff.Features.FirstOrDefault(x => x.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+                            if (f == null) { Console.Error.WriteLine($"no feature '{id}' in {file}"); errors++; continue; }
+                            var msg = FeaturePatches.Apply(f, rom, off, ff.ChecksumByte);
+                            Console.WriteLine(msg);
+                            if (msg.EndsWith("not for this ROM")) errors++;
+                        }
+                    output ??= Path.ChangeExtension(args[0], ".patched.bin");
+                    File.WriteAllBytes(output, rom);
+                    Console.WriteLine($"wrote {output}");
+                    return errors == 0 ? 0 : 1;
+                }
             case "formulas":
                 {
                     var defs = new DefinitionSet();
@@ -226,7 +274,7 @@ public static class CalCommands
                     {
                         var rc = cell.Split(',');
                         int r = int.Parse(rc[0]), c = rc.Length > 1 ? int.Parse(rc[1]) : 0;
-                        indices.Add(r * Math.Max(item.Cols, 1) + c);
+                        indices.Add((r * Math.Max(item.Cols, 1)) + c);
                     }
                     else indices.Add(indexOpt != null ? int.Parse(indexOpt) : 0);
 

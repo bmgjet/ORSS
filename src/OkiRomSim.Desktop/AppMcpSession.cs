@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Globalization;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -18,11 +19,13 @@ public sealed class AppMcpSession : IMcpSession
     readonly Action<string> _notify;
     readonly Func<(string Port, string Protocol, int Baud)> _datalogSettings;
     readonly Action<byte[], string> _loadRom;
+    readonly Action<string> _openFile;
 
     public AppMcpSession(SimHost host, DatalogView datalog, Func<IReadOnlyList<(string Path, string Text)>> sources, Action<string> notify,
-                         Func<(string, string, int)> datalogSettings, Action<byte[], string> loadRom)
+                         Func<(string, string, int)> datalogSettings, Action<byte[], string> loadRom, Action<string> openFile)
     {
-        _host = host; _datalog = datalog; _sources = sources; _notify = notify; _datalogSettings = datalogSettings; _loadRom = loadRom;
+        _host = host; _datalog = datalog; _sources = sources; _notify = notify; _datalogSettings = datalogSettings;
+        _loadRom = loadRom; _openFile = openFile;
     }
 
     static T Ui<T>(Func<T> f) => Dispatcher.UIThread.CheckAccess() ? f() : Dispatcher.UIThread.Invoke(f);
@@ -94,6 +97,22 @@ public sealed class AppMcpSession : IMcpSession
         return msg;
     }
 
+    public string OpenFile(string path)
+    {
+        if (!File.Exists(path)) throw new ToolException($"'{path}' is not a file on this machine");
+        var msg = Ui(() =>
+        {
+            _openFile(path);
+            var sb = new StringBuilder($"opened {path} in the app");
+            if (_host.LoadedPath != null) sb.Append("\nROM: ").Append(_host.LoadedPath);
+            if (_host.Assembly is { } asm) sb.Append($"\nbuild: {asm.UsedBytes} bytes used, {asm.SourceMap.Count} source lines");
+            sb.Append($"\ndefinitions: {_host.Defs().Items.Count}");
+            return sb.ToString();
+        });
+        Notify("MCP opened " + Path.GetFileName(path));
+        return msg;
+    }
+
     public string Emulator(string action, string? port)
     {
         switch (action.ToLowerInvariant())
@@ -157,7 +176,7 @@ public sealed class AppMcpSession : IMcpSession
                     int from = Math.Clamp(I("from", Math.Max(0, frames.Count - 20)), 0, Math.Max(0, frames.Count));
                     int count = Math.Clamp(I("count", 20), 1, 500);
                     var chans = (args["channels"] as JsonArray)?.Select(x => x!.ToString()).ToList()
-                                ?? frames.Skip(from).FirstOrDefault()?.Channels().ToList() ?? new List<string>();
+                                ?? frames.Skip(from).FirstOrDefault()?.Channels().ToList() ?? [];
                     var sb = new StringBuilder($"frames {from}-{Math.Min(frames.Count, from + count) - 1} of {frames.Count}\nt," + string.Join(",", chans) + "\n");
                     foreach (var f in frames.Skip(from).Take(count))
                         sb.AppendLine(f.T.ToString("0.00", CultureInfo.InvariantCulture) + "," + string.Join(",", chans.Select(c => f.Get(c)?.ToString("0.###", CultureInfo.InvariantCulture) ?? "")));

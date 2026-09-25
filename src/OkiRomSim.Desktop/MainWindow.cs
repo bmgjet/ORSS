@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
@@ -33,9 +34,9 @@ public sealed class MainWindow : Window
     readonly HitTraceView _hitView;
     readonly DatalogView _datalog;
     readonly DebugView _debug;
-    readonly Dictionary<string, ZoomHost> _zoom = new();
+    readonly Dictionary<string, ZoomHost> _zoom = [];
     ProcessorProfile _profile = ProcessorProfile.Current;
-    Control? _simRoot, _tunerRoot;
+    readonly Control? _simRoot, _tunerRoot;
     bool _tuner;
     ZoomHost? _zCalibration, _zDatalog, _zTunerDatalog, _zInputs;
     StackPanel? _leftStack;
@@ -61,25 +62,27 @@ public sealed class MainWindow : Window
     // toolbar / status
     readonly TextBlock _status = new() { Text = "ready", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0) };
     string _sticky = "";
-    bool _ready;
+    readonly bool _ready;
     readonly Button _run, _pause, _step, _over, _into, _out, _reset, _buildBtn;
     readonly Button _tunerButton;
     AppSettings _settings = AppSettings.Load();
     readonly LayoutTransformControl _scaler = new();
     OkiRomSim.Mcp.McpHttp? _mcpHttp;
     string _mcpState = "off";
+    /// Where an MCP agent on another machine can always put a file, and read one back.
+    public static string McpTransferDir => Path.Combine(AppSettings.Dir, "transfer");
 
-    readonly Dictionary<string, string> _buffers = new();        // open file -> text as on screen
-    readonly HashSet<string> _dirty = new();                     // differs from the file on disk
+    readonly Dictionary<string, string> _buffers = [];        // open file -> text as on screen
+    readonly HashSet<string> _dirty = [];                     // differs from the file on disk
     string? _current;
-    List<Diagnostic> _diags = new();
-    List<(string file, int line)> _problemLoc = new();
-    List<int> _disasmAddrs = new();
-    List<(string Name, int Address, int Offset, string Kind)> _lookupRows = new();
-    List<string> _lookupLines = new();
+    List<Diagnostic> _diags = [];
+    List<(string file, int line)> _problemLoc = [];
+    List<int> _disasmAddrs = [];
+    List<(string Name, int Address, int Offset, string Kind)> _lookupRows = [];
+    List<string> _lookupLines = [];
 
     // build state: what the loaded image was built from, to decide whether Build is needed
-    Dictionary<string, string> _builtTexts = new();
+    Dictionary<string, string> _builtTexts = [];
     byte[]? _builtImage;
     readonly DispatcherTimer _checkTimer = new() { Interval = TimeSpan.FromMilliseconds(600) };
     int _checkGeneration;
@@ -97,6 +100,14 @@ public sealed class MainWindow : Window
         Title = $"OkiRomSim Studio {BuildInfo.Version}";
         AppLog.Info("app", $"{BuildInfo.Product} {BuildInfo.Version} starting on {Environment.OSVersion} ({Environment.ProcessorCount} cores, .NET {Environment.Version})");
         MinWidth = 900; MinHeight = 600;
+        // the UI scale and panel layout picked for this screen, the first time the app starts on it
+        try
+        {
+            var scr = (_settings.WindowX is double sx && _settings.WindowY is double sy ? Screens.ScreenFromPoint(new PixelPoint((int)sx, (int)sy)) : null) ?? Screens.Primary;
+            if (ScreenFit.Fit(_settings, scr)) _settings.Save();
+            if (scr != null) { MinWidth = Math.Min(MinWidth, ScreenFit.Dip(scr).Width * 0.9); MinHeight = Math.Min(MinHeight, ScreenFit.Dip(scr).Height * 0.9); }
+        }
+        catch (Exception ex) { AppLog.Error("app", "could not fit the window to the screen", ex); }
         Width = Math.Max(MinWidth, _settings.WindowWidth); Height = Math.Max(MinHeight, _settings.WindowHeight);
         if (_settings.WindowX is double wx && _settings.WindowY is double wy)
         {
@@ -120,6 +131,7 @@ public sealed class MainWindow : Window
         _calibration.ExpandRequested += ToggleExpand;
         _calibration.CompareRequested += OpenCompare;
         _calibration.OverlayFrames = () => _datalog.Frames();
+        _calibration.DatalogMenu = (live, setLive) => _datalog.MenuEntries(live, setLive);
         _datalog.CurrentFrameChanged += f => { if (_tuner || _datalog.Engine.Running && _datalog.Engine.Source != "simulator") _calibration.SetEngineState(f); };
         // an .rlog carries the ROM the car was running: offer to open it
         _datalog.RomFromLog += async (rom, name) =>
@@ -203,12 +215,22 @@ public sealed class MainWindow : Window
         _ready = true;
         if (_target == null) UpdateBuildButton(false, "Nothing to build yet: open a .asm or .bin.");
         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
-        timer.Tick += (_, _) => SafeRefresh();
+        timer.Tick += (_, _) =>
+        {
+            // nothing to show while minimized; and with the simulator stopped and nothing logging or replaying, the screen only changes when you do something, so it is looked at less often
+            if (WindowState == WindowState.Minimized) return;
+            SafeRefresh();
+            bool busy = _host.IsRunning || _host.PlaybackActive || _datalog.Engine.Running;
+            var want = TimeSpan.FromMilliseconds(busy ? 150 : 300);
+            if (timer.Interval != want) timer.Interval = want;
+        };
         timer.Start();
     }
 
     /// The File drop-down: the things done once in a while, out of the way of the everyday buttons.
     Button FileMenu() => Toolbar.Menu("File", Toolbar.Open,
+        new Toolbar.Entry(Toolbar.Project, "New ROM…",
+            "Start a new ROM: copy a template from the Templates folder (HTS120 and friends) to a file of your own and open it.", NewRom),
         new Toolbar.Entry(Toolbar.Open, "Open…  (Ctrl+O)", "Open a .asm source, a .bin/.rom image (disassembled to source) or a saved project .zip.", OpenFileDialog),
         new Toolbar.Entry(Toolbar.Save, "Save  (Ctrl+S)", "Write the source on screen to its file.", SaveCurrent),
         new Toolbar.Entry(Toolbar.SaveAs, "Save as…", "Write the source on screen to a new file.", SaveAs),
@@ -268,6 +290,10 @@ public sealed class MainWindow : Window
         reset.FontSize = 11; reset.Padding = new Thickness(6, 1); reset.Margin = new Thickness(0, 6, 0, 0);
         DockPanel.SetDock(reset, Dock.Right);
         inHead.Children.Add(reset);
+        var mil = ToolButton("Check engine…", OpenMil, "The check-engine lamp: what it is flashing, the codes the ECU has stored and the faults it sees now.");
+        mil.FontSize = 11; mil.Padding = new Thickness(6, 1); mil.Margin = new Thickness(0, 6, 6, 0);
+        DockPanel.SetDock(mil, Dock.Right);
+        inHead.Children.Add(mil);
         BuildInputs();
         var inputsBox = new StackPanel();
         inputsBox.Children.Add(inHead);
@@ -298,7 +324,7 @@ public sealed class MainWindow : Window
         // SelectionChanged bubbles: lists inside the tabs raise it too, so react only to the tab strip itself
         _bottom.SelectionChanged += (_, e) => { if (ReferenceEquals(e.Source, _bottom) && SelectedTab() == "Calibration") _calibration.Refresh(); };
 
-        var centre = _centre = new Grid { RowDefinitions = new RowDefinitions("Auto,*,4,360") };
+        var centre = _centre = new Grid { RowDefinitions = new RowDefinitions("Auto,*,4,1.5*") };
         Grid.SetRow(_docHeader, 0); centre.Children.Add(_docHeader);
         var zEditor = new ZoomHost("Source", _editor, z => _editor.SetFontSize(_settings.EditorFontSize * z));
         zEditor.ZoomChanged += RememberZoom;
@@ -340,7 +366,7 @@ public sealed class MainWindow : Window
         // fixed height, so the panels below do not jump as calls come and go
         right.Children.Add(new ScrollViewer
         {
-            Content = _calls, Height = CallStackLines * 15 + 4,
+            Content = _calls, Height = (CallStackLines * 15) + 4,
             HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
             VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
         });
@@ -487,8 +513,8 @@ public sealed class MainWindow : Window
         _expanded = !_expanded;
         if (_expanded)
         {
-            _savedColumns = _mainGrid.ColumnDefinitions.Select(c => c.Width).ToArray();
-            _savedRows = _centre.RowDefinitions.Select(r => r.Height).ToArray();
+            _savedColumns = [.. _mainGrid.ColumnDefinitions.Select(c => c.Width)];
+            _savedRows = [.. _centre.RowDefinitions.Select(r => r.Height)];
             _mainGrid.ColumnDefinitions[0].Width = new GridLength(0);
             _mainGrid.ColumnDefinitions[1].Width = new GridLength(0);
             _mainGrid.ColumnDefinitions[2].Width = GridLength.Star;
@@ -508,7 +534,7 @@ public sealed class MainWindow : Window
             if (_savedRows != null) for (int i = 0; i < _savedRows.Length; i++) _centre.RowDefinitions[i].Height = _savedRows[i];
         }
         foreach (var c in new[] { _leftPane, _rightPane, _split1, _split2, _editorSplit, _zoom["Source"] })
-            if (c != null) c.IsVisible = !_expanded;
+            c?.IsVisible = !_expanded;
         _miniInputs.IsVisible = _expanded;
         if (_miniInputs.Tag is Control mini) mini.IsVisible = _expanded;
         _calibration.SetExpanded(_expanded);
@@ -519,44 +545,99 @@ public sealed class MainWindow : Window
     void OpenSettings()
     {
         SaveLayout();
-        var w = new SettingsWindow(_settings, () => _mcpState, _profile);
+        var original = _settings;
+        var originalProfile = _profile;
+        bool previewed = false;
+        var w = new SettingsWindow(_settings, () => _mcpState, _profile, FuelMapAxes);
+        // Apply: show the changes now without writing them to disk; Cancel puts back what was there
+        w.Applied += (s, profile) => { previewed = true; UseSettings(s, profile, save: false); SetStatus("settings applied (Save keeps them)"); };
         w.Closed += (_, _) =>
         {
-            if (w.Result == null) return;
-            var pw = w.Result.McpPassword;
-            w.Result.WindowX = _settings.WindowX; w.Result.WindowY = _settings.WindowY;
-            w.Result.WindowWidth = _settings.WindowWidth; w.Result.WindowHeight = _settings.WindowHeight; w.Result.Maximized = _settings.Maximized;
-            w.Result.LeftColumn = _settings.LeftColumn; w.Result.CentreColumn = _settings.CentreColumn; w.Result.RightColumn = _settings.RightColumn;
-            w.Result.BottomPanel = _settings.BottomPanel; w.Result.SelectedTab = _settings.SelectedTab;
-            w.Result.Package = _settings.Package; w.Result.LastFile = _settings.LastFile;
-            bool tunerChanged = w.Result.TunerMode != _tuner;
-            _settings = w.Result;
-            _settings.McpPassword = pw;
-            _settings.Save();
-            if (w.ResultProfile != null) ApplyProfile(w.ResultProfile);
-            ApplySettings(first: false);
-            if (tunerChanged) SetTunerMode(_settings.TunerMode);
+            if (w.Result == null)
+            {
+                if (previewed) { UseSettings(original, originalProfile != _profile ? originalProfile : null, save: false); SetStatus("settings put back"); }
+                return;
+            }
+            UseSettings(w.Result, w.ResultProfile, save: true);
             SetStatus("settings saved");
             AppLog.Action("settings", "saved");
         };
         w.ShowDialog(this);
     }
 
+    /// Put settings from the Settings window into effect, keeping the window and layout values it does not edit; `save` writes them to disk.
+    void UseSettings(AppSettings r, ProcessorProfile? profile, bool save)
+    {
+        var pw = r.McpPassword;
+        if (!ReferenceEquals(r, _settings))
+        {
+            r.WindowX = _settings.WindowX; r.WindowY = _settings.WindowY;
+            r.WindowWidth = _settings.WindowWidth; r.WindowHeight = _settings.WindowHeight; r.Maximized = _settings.Maximized;
+            r.LeftColumn = _settings.LeftColumn; r.CentreColumn = _settings.CentreColumn; r.RightColumn = _settings.RightColumn;
+            r.BottomPanel = _settings.BottomPanel; r.SelectedTab = _settings.SelectedTab;
+            r.Package = _settings.Package; r.LastFile = _settings.LastFile;
+        }
+        bool tunerChanged = r.TunerMode != _tuner;
+        // "Fit to the screen" ticked again: pick the scale and the layout for this screen now
+        bool refit = r.FitToScreen && r.FittedFor.Length == 0 && ScreenFit.Fit(r, Screens.ScreenFromWindow(this) ?? Screens.Primary);
+        _settings = r;
+        _settings.McpPassword = pw;
+        if (refit) ApplyLayout();
+        if (save) _settings.Save();
+        if (profile != null) ApplyProfile(profile);
+        ApplySettings(first: false);
+        if (tunerChanged) SetTunerMode(_settings.TunerMode);
+    }
+
+    /// The RPM and load breakpoints of the ROM's own fuel map, so the AFR target table on the Settings page can be laid out on the very same axes as the map it is tuning. Empty arrays when nothing suitable is open.
+    (double[] Rpm, double[] Load) FuelMapAxes()
+    {
+        try
+        {
+            var defs = _host.Defs();
+            // the low-cam fuel map first (it is the one a target table is normally built around), then any map with both axes in the ROM
+            var item = defs.Items.FirstOrDefault(i => i.IsTable && i.Rows > 1 && i.Cols > 1 && i.ColumnScaleAddress != null && MapSide.Side(i) != true)
+                       ?? defs.Items.FirstOrDefault(i => i.IsTable && i.Rows > 1 && i.Cols > 1 && i.ColumnScaleAddress != null)
+                       ?? defs.Items.FirstOrDefault(i => i.IsTable && i.Rows > 1 && i.Cols > 1 && i.RowAxis?.Address != null && i.ColAxis?.Address != null);
+            if (item == null) return ([], []);
+            var rpm = _host.AxisValues(item.RowAxis, item.Rows).Where(v => !double.IsNaN(v)).ToArray();
+            var load = _host.AxisValues(item.ColAxis, item.Cols).Where(v => !double.IsNaN(v)).ToArray();
+            // a load axis kept in mbar reads in the same numbers as kPa once divided by ten, which is the unit the targets and the datalog both use
+            if (load.Length > 0 && load.Max() > 400) load = [.. load.Select(v => Math.Round(v / 10, 1))];
+            return (rpm, load);
+        }
+        catch (Exception ex) { AppLog.Error("settings", "could not read the fuel map axes", ex); return ([], []); }
+    }
+
     /// Put the settings into effect: layout (at start), scale, fonts, colours, simulation options, ports, and the MCP server.
     void ApplySettings(bool first)
     {
         var s = _settings;
-        if (first && _mainGrid != null && _centre != null)
+        if (first) ApplyLayout();
+        ApplyRest(s, first);
+    }
+
+    /// The column widths and the bottom panel's height from the settings.
+    void ApplyLayout()
+    {
+        var s = _settings;
+        if (_mainGrid != null && _centre != null)
         {
             GridLength G(string v, GridLength fallback) { try { return GridLength.Parse(v); } catch { return fallback; } }
             _mainGrid.ColumnDefinitions[0].Width = G(s.LeftColumn, new GridLength(3, GridUnitType.Star));
             _mainGrid.ColumnDefinitions[2].Width = G(s.CentreColumn, new GridLength(4, GridUnitType.Star));
             _mainGrid.ColumnDefinitions[4].Width = G(s.RightColumn, new GridLength(3, GridUnitType.Star));
-            _centre.RowDefinitions[3].Height = G(s.BottomPanel, new GridLength(360));
+            // the old fixed 360 left a map two rows high on a 1080p screen: an untouched default now takes three fifths of the height, whatever the screen
+            _centre.RowDefinitions[3].Height = s.BottomPanel == "360" ? new GridLength(1.5, GridUnitType.Star) : G(s.BottomPanel, new GridLength(1.5, GridUnitType.Star));
             _package.SelectedIndex = s.Package == nameof(ChipView.Package.Qfp64) ? 1 : 0;
             if (s.SelectedTab.Length > 0) SelectTab(s.SelectedTab);
         }
+    }
+
+    void ApplyRest(AppSettings s, bool first)
+    {
         double scale = Math.Clamp(s.UiScale, 0.5, 3);
+        ScreenFit.UiScale = scale;
         _scaler.LayoutTransform = Math.Abs(scale - 1) < 0.001 ? null : new ScaleTransform(scale, scale);
         foreach (var (key, z) in _zoom) z.Zoom = s.Zoom(key);        // the source editor's zoom sets its font size
         _host.Speed = s.SpeedIndex switch { 0 => 0.1, 1 => 0.5, 2 => 1, 3 => 4, 4 => 0, _ => 1 };
@@ -578,12 +659,12 @@ public sealed class MainWindow : Window
         var eng = _datalog.Engine;
         eng.IntervalMs = s.DatalogIntervalMs; eng.KeepFrames = s.DatalogKeepFrames;
         var curves = ParseNamedCurves(s.AnalogCurves);
-        eng.AuxChannels = s.AuxChannels.Select(a =>
+        eng.AuxChannels = [.. s.AuxChannels.Select(a =>
         {
             var ch = a.ToChannel();
             if (curves.TryGetValue(ch.Name, out var curve)) ch.Curve = curve;
             return ch;
-        }).ToList();
+        })];
         eng.Wideband.Stoich = s.StoichAfr;
         if (s.WidebandType != "none" && s.WidebandPort.Length > 0 && (eng.Wideband.Type != s.WidebandType || !eng.Wideband.Running))
         {
@@ -600,6 +681,19 @@ public sealed class MainWindow : Window
         }
         else if (s.WidebandType == "none") Task.Run(() => { try { eng.Wideband.Stop(); } catch { } });
         _hitView.SetOptions(s.MoatesPort, s.MoatesBase, s.HitSkipRepeats, s.HitColourSource);
+        // the emulator link: which device, how fast, and how patient to be with the cable
+        var emu = _host.Emulator;
+        emu.Kind = s.EmulatorType; emu.Baud = s.EmulatorBaud;
+        emu.PostWritePauseMs = Math.Clamp(s.PostWritePauseMs, 0, 500);
+        emu.TimeoutMs = Math.Clamp(s.SerialTimeoutMs * 3, 100, 5000);
+        emu.Retries = Math.Clamp(s.SerialRetries, 0, 20);
+        if (int.TryParse(s.MoatesBase, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var emuBase)) emu.Base = emuBase;
+        // the same numbers drive the car's datalog link
+        DatalogProtocol.TimeoutMsDefault = Math.Clamp(s.SerialTimeoutMs, 20, 5000);
+        DatalogProtocol.PostWritePauseMsDefault = Math.Clamp(s.PostWritePauseMs, 0, 500);
+        DatalogProtocol.RetriesDefault = Math.Clamp(s.SerialRetries, 0, 20);
+        SerialLink.RaiseDtrRts = s.SerialDtrRts;
+        SerialLink.WriteTimeoutMs = Math.Clamp(s.SerialWriteTimeoutMs, 50, 10000);
         _calibration.EmulatorPort = s.MoatesPort;
         if (first) _host.AutoUpload = s.EmulatorAutoUpload;
         _calibration.UpdateEmulator();
@@ -624,7 +718,7 @@ public sealed class MainWindow : Window
         return map;
     }
 
-    Dictionary<string, KeyGesture> _hotKeys = new();
+    Dictionary<string, KeyGesture> _hotKeys = [];
     /// Readings polled from outside the ECU (Settings > Datalog), shown on the gauges.
     readonly ExternalData _external = new();
 
@@ -640,8 +734,8 @@ public sealed class MainWindow : Window
         }
         if (_mainGrid != null && _centre != null)
         {
-            var cols = _expanded && _savedColumns != null ? _savedColumns : _mainGrid.ColumnDefinitions.Select(c => c.Width).ToArray();
-            var rows = _expanded && _savedRows != null ? _savedRows : _centre.RowDefinitions.Select(r => r.Height).ToArray();
+            var cols = _expanded && _savedColumns != null ? _savedColumns : [.. _mainGrid.ColumnDefinitions.Select(c => c.Width)];
+            var rows = _expanded && _savedRows != null ? _savedRows : [.. _centre.RowDefinitions.Select(r => r.Height)];
             s.LeftColumn = cols[0].ToString(); s.CentreColumn = cols[2].ToString(); s.RightColumn = cols[4].ToString();
             s.BottomPanel = rows[3].ToString();
         }
@@ -664,12 +758,17 @@ public sealed class MainWindow : Window
             var roots = s.McpRoots.Where(Directory.Exists).ToList();
             if (roots.Count == 0)
                 roots.Add(Path.GetDirectoryName(_target ?? _current ?? "") is { Length: > 0 } d ? d : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments));
+            // An agent may be on another computer altogether, with no path in common with this one. This folder is always in the workspace and always writable, so such an agent can send a file across with file_upload and then ask for it with app_open, whatever else is or is not configured.
+            var transfer = McpTransferDir;
+            try { Directory.CreateDirectory(transfer); if (!roots.Contains(transfer)) roots.Add(transfer); }
+            catch (Exception ex) { AppLog.Error("mcp", "could not make the transfer folder", ex); }
             var session = new AppMcpSession(_host, _datalog,
                 () => { if (_current != null) _buffers[_current] = _editor.Text ?? ""; return _buffers.Select(kv => (kv.Key, kv.Value)).ToList(); },
                 m => Dispatcher.UIThread.Post(() => SetStatus(m)),
                 () => (_settings.DatalogPort, _settings.DatalogProtocol, _settings.DatalogBaud),
-                (rom, name) => OpenRomImage(rom, name));
-            var workspace = new OkiRomSim.Mcp.Workspace(roots) { ReadOnly = s.McpReadOnly };
+                (rom, name) => OpenRomImage(rom, name),
+                path => OpenFile(path));
+            var workspace = new OkiRomSim.Mcp.Workspace(roots) { ReadOnly = s.McpReadOnly, TransferDir = transfer };
             // an agent on another machine can ask for a folder here; the user decides
             workspace.AskToAddRoot = (folder, why) => Dispatcher.UIThread.Invoke(async () =>
             {
@@ -678,7 +777,7 @@ public sealed class MainWindow : Window
                     "Allowing it lets the agent read (and, unless the server is read-only, write) files in that folder until this program is closed.",
                     "Allow", "Refuse");
                 AppLog.Write(LogKind.Mcp, "mcp", $"workspace_allow {folder}: {(yes ? "allowed" : "refused")}", why);
-                if (yes) { _settings.McpRoots = _settings.McpRoots.Append(folder).Distinct().ToList(); _settings.Save(); }
+                if (yes) { _settings.McpRoots = [.. _settings.McpRoots.Append(folder).Distinct()]; _settings.Save(); }
                 return yes;
             }).GetAwaiter().GetResult();
             var server = new OkiRomSim.Mcp.McpServer(workspace, session)
@@ -724,8 +823,8 @@ public sealed class MainWindow : Window
             finally { _updatingLists.Remove(list); }
         }, DispatcherPriority.Background);
     }
-    readonly HashSet<ListBox> _updatingLists = new();
-    readonly Dictionary<ListBox, string> _lastItems = new();
+    readonly HashSet<ListBox> _updatingLists = [];
+    readonly Dictionary<ListBox, string> _lastItems = [];
 
     static TextBlock Header(string t) => new()
     {
@@ -747,7 +846,7 @@ public sealed class MainWindow : Window
 
     Control MemoryPanel()
     {
-        var bar = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(4) };
+        var bar = new WrapPanel { Margin = new Thickness(4) };   // wraps on a narrow panel instead of pushing the buttons out of sight
         bar.Children.Add(new TextBlock { Text = "Address ", VerticalAlignment = VerticalAlignment.Center });
         Tip(_memAddr, "Start address (hex) or a label.");
         bar.Children.Add(_memAddr);
@@ -762,15 +861,40 @@ public sealed class MainWindow : Window
 
     Control BreakpointPanel()
     {
-        var bar = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(4) };
-        var box = Tip(Mono(new TextBox { Watermark = "label or address", Width = 220 }), "Label or hex address to set or clear a breakpoint on.");
+        var bar = new WrapPanel { Margin = new Thickness(4) };   // wraps on a narrow panel instead of pushing the buttons out of sight
+        var box = Tip(Mono(new TextBox { Watermark = "label or address (3DDE, 0d9h, fuelpump)", Width = 260 }),
+                      "Type a label or a hex address here, then Add to set a breakpoint on it (or Toggle to set it if it is not there and clear it if it is). Enter does the same as Add.");
         bar.Children.Add(box);
+        // Add says what it does: Toggle on its own was awkward when the point was simply to put a breakpoint on an address read off a disassembly listing
+        void Add()
+        {
+            var text = (box.Text ?? "").Trim();
+            if (text.Length == 0) { SetStatus("type a label or a hex address first"); return; }
+            var r = _host.AddBreakpoint(text);
+            SetStatus(r.ok
+                ? r.added ? $"breakpoint set at {Hex(r.address)}" : $"there is already a breakpoint at {Hex(r.address)}"
+                : r.error);
+            if (r.ok) { box.Text = ""; RefreshDisassembly(true); }
+        }
+        bar.Children.Add(ToolButton("Add", Add, "Set a breakpoint at the label or address typed (it stays set if it is already there)."));
         bar.Children.Add(ToolButton("Toggle", () =>
         {
             var r = _host.ToggleBreakpoint(box.Text ?? "");
             SetStatus(r.ok ? $"breakpoint {(r.enabled ? "set" : "cleared")} at {Hex(r.address)}" : r.error);
-        }, "Set or clear a breakpoint at the label/address typed."));
-        bar.Children.Add(ToolButton("Clear all", () => _host.ClearBreakpoints(), "Remove every breakpoint."));
+            if (r.ok) RefreshDisassembly(true);
+        }, "Set a breakpoint at the label/address typed, or clear it if it is already there."));
+        box.KeyDown += (_, e) => { if (e.Key == Key.Enter) { Add(); e.Handled = true; } };
+        bar.Children.Add(ToolButton("Remove", () =>
+        {
+            var state = _host.State();
+            int i = _bpList.SelectedIndex;
+            if (i < 0 || i >= state.Breakpoints.Count) { SetStatus("pick a breakpoint in the list first"); return; }
+            int addr = state.Breakpoints[i].Address;
+            _host.RemoveBreakpoint(addr);
+            SetStatus($"breakpoint at {Hex(addr)} removed");
+            RefreshDisassembly(true);
+        }, "Remove the breakpoint selected in the list below, leaving the rest alone."));
+        bar.Children.Add(ToolButton("Clear all", () => { _host.ClearBreakpoints(); RefreshDisassembly(true); }, "Remove every breakpoint."));
         bar.Children.Add(Small("  double-click a disassembly line to toggle, F9 toggles at the caret"));
         _bpList.DoubleTapped += (_, _) =>
         {
@@ -787,7 +911,7 @@ public sealed class MainWindow : Window
 
     Control LookupPanel()
     {
-        var bar = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(4) };
+        var bar = new WrapPanel { Margin = new Thickness(4) };   // wraps on a narrow panel instead of pushing the buttons out of sight
         Tip(_lookupQ, "Type a label, a calibration name or an address; Enter looks it up.");
         bar.Children.Add(_lookupQ);
         bar.Children.Add(ToolButton("Look up", DoLookup, "Find labels and settings matching the text, or what lives at an address."));
@@ -814,15 +938,19 @@ public sealed class MainWindow : Window
             ("rpm", "RPM", 0, 9000, 800, "Engine speed: drives the crank (CKP), TDC and CYP signals."),
             ("map", "MAP kPa", 10, 250, 33, "Manifold pressure on AI6."),
             ("tps", "TPS %", 0, 100, 0, "Throttle position on AI7 (0.5-4.5 V)."),
-            ("ect", "ECT °C", -40, 120, 85, "Coolant temperature (thermistor on mux A channel 0)."),
-            ("iat", "IAT °C", -40, 120, 25, "Intake air temperature (thermistor on mux A channel 7)."),
-            ("o2", "O2 V", 0, 1, 0.45, "Oxygen sensor voltage (mux B channel 0)."),
-            ("vbatt", "Battery V", 8, 16, 14.2, "Battery voltage (AI5)."),
+            ("ect", "ECT °C", -40, 120, 85, "Coolant temperature (thermistor on mux B channel 2). The ROM filters it and ignores a sudden drop while running, so lowering it takes effect slowly or not at all - raise it, or reset, to see a new value."),
+            ("iat", "IAT °C", -40, 120, 25, "Intake air temperature (thermistor on mux A channel 2)."),
+            ("o2", "O2 V", 0, 1, 0.45, "Oxygen sensor voltage (mux A channel 0)."),
+            ("vbatt", "Battery V", 8, 16, 14.2, "Battery voltage (mux A channel 7, through the ECU divider)."),
             ("speed", "km/h", 0, 250, 0, "Road speed: drives the vehicle speed sensor pulses on INT0."),
+            ("baro", "Baro kPa", 60, 105, 101, "Barometric pressure (mux A channel 3). Sea level is about 101 kPa."),
+            ("eld", "ELD V", 0, 5, 1.5, "Electrical load detector (mux B channel 0): lower volts = more electrical load."),
+            ("egr", "EGR lift %", 0, 100, 0, "EGR valve lift feedback on AI3 (0.5-4.5 V)."),
+            ("crankvbatt", "Crank batt V", 6, 12, 9.2, "Battery voltage while the starter is engaged (replaces Battery V when cranking is ticked)."),
         };
         foreach (var (key, label, min, max, val, tip) in defs)
         {
-            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("68,*,50"), Margin = new Thickness(0, -3) };
+            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("76,*,50"), Margin = new Thickness(0, -3) };
             var name = new TextBlock { Text = label, FontSize = 10.5, VerticalAlignment = VerticalAlignment.Center };
             var slider = new Slider { Minimum = min, Maximum = max, Value = val, Margin = new Thickness(0, -4) };
             _defaults[key] = val;
@@ -845,29 +973,89 @@ public sealed class MainWindow : Window
             _inputs.Children.Add(row);
         }
         var checks = new WrapPanel();
-        var crank = Tip(new CheckBox { Content = "cranking (starter on)", FontSize = 10.5, Margin = new Thickness(0, 0, 16, 0) },
-            "Starter engaged: battery sags. Start at a few hundred rpm for a realistic engine start.");
-        crank.IsCheckedChanged += (_, _) => _host.SetInput("cranking", crank.IsChecked == true ? 1 : 0);
-        var oil = Tip(new CheckBox { Content = "VTEC oil pressure", FontSize = 10.5, IsChecked = true },
-            "Oil pressure reaches the VTEC spool when the solenoid opens; untick to simulate a failed switch or low oil.");
-        oil.IsCheckedChanged += (_, _) => _host.SetInput("oilpressure", oil.IsChecked == true ? 1 : 0);
-        _host.SetInput("oilpressure", 1);
-        checks.Children.Add(crank); checks.Children.Add(oil);
-        _crankBox = crank; _oilBox = oil;
+        CheckBox Box(string key, string text, bool on, string tip)
+        {
+            var b = Tip(new CheckBox { Content = text, FontSize = 10.5, IsChecked = on, Margin = new Thickness(0, 0, 12, 0) }, tip);
+            b.IsCheckedChanged += (_, _) => _host.SetInput(key, b.IsChecked == true ? 1 : 0);
+            _host.SetInput(key, on ? 1 : 0);
+            _boxes[key] = (b, on);
+            checks.Children.Add(b);
+            return b;
+        }
+        Box("cranking", "cranking (starter on)", false, "Starter engaged: battery sags. Start at a few hundred rpm for a realistic engine start.");
+        Box("oilpressure", "VTEC oil pressure", true, "Oil pressure reaches the VTEC spool when the solenoid opens; untick to simulate a failed switch or low oil.");
+        Box("power", "ignition on", true, "Main relay holding (P4.1 low). Untick for key-off: the ROM runs its shutdown path.");
+        Box("ac", "A/C switch", false, "A/C request (pin B5): bit 2 of the 4700h switch buffer on the P28.");
+        Box("starter", "starter signal (P13)", false, "P13 only: starter signal on port 4 pin 51.");
+        Box("psp", "PS pressure (P13)", false, "P13 only: power-steering pressure switch on port 4 pin 52.");
         _inputs.Children.Add(checks);
+
+        // the P28's two switch buffers, as the pins read (traced from the ROMs' 3B0h status byte, their GIO input selector and HTS's names). Bits the simulator drives itself are shown but locked.
+        void Bits(string key, string label, byte start, string tip, (string Name, string Tip, string? Owner)[] bits)
+        {
+            _inputs.Children.Add(Tip(new TextBlock { Text = label, FontSize = 10.5, FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 4, 0, 0) }, tip));
+            var grid = new Avalonia.Controls.Primitives.UniformGrid { Columns = 2 };
+            var boxes = new CheckBox[8];
+            byte Value() { byte v = 0; for (int i = 0; i < 8; i++) if (boxes[i].IsChecked == true) v |= (byte)(1 << i); return v; }
+            for (int i = 0; i < 8; i++)
+            {
+                var (name, bitTip, owner) = bits[i];
+                var bx = new CheckBox { Content = $"{i} {name}", FontSize = 9.5, Margin = new Thickness(0, -2), IsChecked = (start & (1 << i)) != 0 };
+                ToolTip.SetTip(bx, $"{label} bit {i}: {bitTip}" + (owner != null ? $"\nDriven by the simulator: {owner}" : "\nTicked = pin high."));
+                if (owner != null) bx.IsEnabled = false;
+                bx.IsCheckedChanged += (_, _) => _host.SetInput(key, Value());
+                boxes[i] = bx; grid.Children.Add(bx);
+            }
+            _host.SetInput(key, start);
+            _bitRows[key] = (boxes, start);
+            _inputs.Children.Add(grid);
+        }
+        Bits("porta", "Switches: 8255 port A", 0x38, "P28 8255 port A pins. The ROM stores them XOR 38h at RAM 210h.",
+        [
+            ("knock det. A", "knock detector output, sampled at every spark into the history the knock check reads (0ECh)", null),
+            ("knock det. B", "second knock detector output, sampled with bit 0", null),
+            ("code 24 pulse", "has to keep changing, or code 24 sets; together with bits 0/1 it is the knock circuit's check", "a 10 Hz square wave from the board model"),
+            ("PS pressure", "power-steering pressure switch (B8); logged inverted as 3B0h bit 7", null),
+            ("spare", "unused by the P28 ROMs (the P08 reads it as a feedback behind its fault bit 14)", null),
+            ("VTEC feedback", "VTEC solenoid feedback: low while the solenoid is energised (code 21)", "follows the VTEC solenoid"),
+            ("O2 heater fb", "O2 sensor heater feedback: has to follow the heater output, or code 41 sets", null),
+            ("service check", "service check connector (D4); logged as 3B0h bit 5", null),
+        ]);
+        Bits("sw4700", "Switches: 4700h buffer", 0x00, "P28 second switch buffer at 4700h. The ROM stores it XOR 1Ah at RAM 211h.",
+        [
+            ("start signal", "start signal (B9); logged as 3B0h bit 4", "on while cranking is ticked"),
+            ("VTEC pressure", "VTEC oil-pressure switch (D6): low = pressure (code 22)", "low while the solenoid is open and VTEC oil pressure is ticked"),
+            ("A/C", "A/C request (B5); logged as 3B0h bit 2", "the A/C switch box above"),
+            ("unused", "not read by any of the ROMs", null),
+            ("brake", "brake switch (D2); logged as 3B0h bit 1", null),
+            ("park/neutral", "park/neutral input (B7); logged as 3B0h bit 0", null),
+            ("A/T shift 1", "A/T shift position input 1 (A/T ROMs read it in the timing task)", null),
+            ("A/T shift 2", "A/T shift position input 2", null),
+        ]);
     }
-    readonly Dictionary<string, Slider> _sliders = new();
-    readonly Dictionary<string, double> _defaults = new();
-    CheckBox? _crankBox, _oilBox;
+    MilWindow? _milWindow;
+    void OpenMil()
+    {
+        if (_milWindow != null) { _milWindow.Activate(); return; }
+        // the service check jumper is port A bit 7: set it through the panel's own box so both agree
+        _milWindow = new MilWindow(_host, on => { if (_bitRows.TryGetValue("porta", out var r)) r.Bits[7].IsChecked = on; });
+        _milWindow.Closed += (_, _) => _milWindow = null;
+        _milWindow.Show(this);
+    }
+
+    readonly Dictionary<string, (CheckBox Box, bool Default)> _boxes = [];
+    readonly Dictionary<string, (CheckBox[] Bits, byte Default)> _bitRows = [];
+    readonly Dictionary<string, Slider> _sliders = [];
+    readonly Dictionary<string, double> _defaults = [];
     bool _syncingSliders;
 
     void ResetInputs()
     {
         foreach (var (k, v) in _defaults)
             if (_sliders.TryGetValue(k, out var sl)) { sl.Value = v; _host.SetInput(k, v); }
-        _host.SetInput("baro", 101);
-        if (_crankBox != null) _crankBox.IsChecked = false;
-        if (_oilBox != null) _oilBox.IsChecked = true;
+        foreach (var (b, on) in _boxes.Values) b.IsChecked = on;
+        foreach (var (bits, v) in _bitRows.Values)
+            for (int i = 0; i < 8; i++) bits[i].IsChecked = (v & (1 << i)) != 0;
         SetStatus("engine inputs back to their defaults");
     }
 
@@ -886,6 +1074,13 @@ public sealed class MainWindow : Window
     }
 
     // ------------------------------------------------------------------ files
+
+    async void NewRom()
+    {
+        var w = new NewRomWindow();
+        await w.ShowDialog(this);
+        if (w.Created is { } path && await ConfirmReplaceCurrent(path)) OpenFile(path);
+    }
 
     async void OpenFileDialog()
     {
@@ -912,8 +1107,9 @@ public sealed class MainWindow : Window
         if (_current == null && _target == null) return false;
         if (path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".rom", StringComparison.OrdinalIgnoreCase)
             || path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) return true;
-        if (!path.EndsWith(".asm", StringComparison.OrdinalIgnoreCase)) return false;
-        return !SamePath(path, _target) && !(_host.Assembly?.SourceMap.Any(e => SamePath(e.File, path)) ?? false);
+        return !path.EndsWith(".asm", StringComparison.OrdinalIgnoreCase)
+            ? false
+            : !SamePath(path, _target) && !(_host.Assembly?.SourceMap.Any(e => SamePath(e.File, path)) ?? false);
     }
 
     /// Before replacing what is open: offer to save the source files edited on screen and any calibration changes made to the ROM. False means the user chose to stay where they are.
@@ -974,6 +1170,9 @@ public sealed class MainWindow : Window
             ShowBuffer(path);
             if (isMain)
             {
+                // a source that says which part it is for ("; processor: MSM66911") gets that part, or its SFR names would resolve against whatever profile happened to be active
+                if (ProcessorProfile.Declared(_buffers[path]) is { } declared && !declared.Name.Equals(_profile.Name, StringComparison.OrdinalIgnoreCase))
+                    ApplyProfile(declared);
                 _target = path;
                 Build();
             }
@@ -1033,11 +1232,11 @@ public sealed class MainWindow : Window
             if (!SamePath(k, keep) && !_dirty.Contains(k)) _buffers.Remove(k);
         _diags.Clear();
         _problemLoc.Clear();
-        SetItems(_problems, Array.Empty<string>());
-        _builtTexts = new();
+        SetItems(_problems, []);
+        _builtTexts = [];
         _builtImage = null;
-        _lookupRows = new(); _lookupLines = new();
-        SetItems(_lookupList, Array.Empty<string>());
+        _lookupRows = []; _lookupLines = [];
+        SetItems(_lookupList, []);
         _lastSourceShown = ""; _lastPcShown = -1;
         _host.ResetRomState();
         _calibration.ResetForNewRom();
@@ -1053,12 +1252,12 @@ public sealed class MainWindow : Window
         _dirty.Clear();
         _current = null; _target = null;
         _diags.Clear(); _problemLoc.Clear();
-        SetItems(_problems, Array.Empty<string>());
-        _lookupRows = new(); _lookupLines = new();
-        SetItems(_lookupList, Array.Empty<string>());
-        SetItems(_disasm, Array.Empty<string>());
-        SetItems(_bpList, Array.Empty<string>());
-        _builtTexts = new(); _builtImage = null;
+        SetItems(_problems, []);
+        _lookupRows = []; _lookupLines = [];
+        SetItems(_lookupList, []);
+        SetItems(_disasm, []);
+        SetItems(_bpList, []);
+        _builtTexts = []; _builtImage = null;
         _suppressEdit = true;
         _editor.Text = "";
         _suppressEdit = false;
@@ -1191,14 +1390,14 @@ public sealed class MainWindow : Window
         var res = _host.Build(target, ReadBuffer);
         _diags = res.Diagnostics;
         var ordered = _diags.OrderByDescending(d => d.Severity).ToList();
-        _problemLoc = ordered.Select(d => (d.File, d.Line)).ToList();
+        _problemLoc = [.. ordered.Select(d => (d.File, d.Line))];
         SetItems(_problems, ordered.Select(d => $"{d.Severity.ToString().ToLowerInvariant(),-7} {Path.GetFileName(d.File)}:{d.Line}  {d.Message}"));
         if (res.Success && res.Assembly != null)
         {
             // remember exactly what was built, to tell later whether the screen differs
             var files = res.Assembly.SourceMap.Select(e => e.File).Append(Path.GetFullPath(target)).Distinct(StringComparer.OrdinalIgnoreCase);
             _builtTexts = files.ToDictionary(f => f, f => ReadBuffer(f) ?? (File.Exists(f) ? File.ReadAllText(f) : ""), StringComparer.OrdinalIgnoreCase);
-            _builtImage = res.Assembly.Image.ToArray();
+            _builtImage = [.. res.Assembly.Image];
             UpdateBuildButton(false, "Up to date: the loaded image was built from the source on screen.");
             SetStatus($"build ok: {res.Assembly.UsedBytes} / {res.Assembly.Image.Length} bytes " +
                       $"({100.0 * res.Assembly.UsedBytes / res.Assembly.Image.Length:F1}%), " +
@@ -1263,7 +1462,7 @@ public sealed class MainWindow : Window
                 {
                     _diags = fresh;
                     var ordered2 = _diags.OrderByDescending(d => d.Severity).ToList();
-                    _problemLoc = ordered2.Select(d => (d.File, d.Line)).ToList();
+                    _problemLoc = [.. ordered2.Select(d => (d.File, d.Line))];
                     SetItems(_problems, ordered2.Select(d => $"{d.Severity.ToString().ToLowerInvariant(),-7} {Path.GetFileName(d.File)}:{d.Line}  {d.Message}"));
                     _editor.SetDiagnostics(_diags.Where(d => SamePath(d.File, _current)).Select(d => (d.Line, d.Severity == Severity.Error)).ToList());
                 }
@@ -1303,9 +1502,9 @@ public sealed class MainWindow : Window
             var p = new ProjectData
             {
                 Target = _target, Current = _current, CaretLine = _editor.CaretLine, FirstVisibleLine = _editor.FirstVisibleLine,
-                Sources = _buffers.Select(kv => new ProjectSource { Path = kv.Key, Text = kv.Value, Unsaved = _dirty.Contains(kv.Key) }).ToList(),
+                Sources = [.. _buffers.Select(kv => new ProjectSource { Path = kv.Key, Text = kv.Value, Unsaved = _dirty.Contains(kv.Key) })],
                 MemoryAddress = _memAddr.Text ?? "", DisassemblyAddress = _disAddr.Text ?? "",
-                LookupQuery = _lookupQ.Text ?? "", LookupLines = _lookupLines.ToList(),
+                LookupQuery = _lookupQ.Text ?? "", LookupLines = [.. _lookupLines],
                 SelectedTab = SelectedTab(), SpeedIndex = _settings.SpeedIndex,
                 Package = _chip.CurrentPackage.ToString(), CrystalMHz = Bus.CrystalMHz,
                 Machine = machine, Ram = ram, Rom = rom, Definitions = _host.Defs(),
@@ -1426,7 +1625,7 @@ public sealed class MainWindow : Window
             foreach (var (k, v) in p.Machine.Inputs)
                 if (_sliders.TryGetValue(k, out var sl)) sl.Value = Math.Clamp(v, sl.Minimum, sl.Maximum);
         _memAddr.Text = p.MemoryAddress; _disAddr.Text = p.DisassemblyAddress; _lookupQ.Text = p.LookupQuery;
-        _lookupLines = p.LookupLines; _lookupRows = new();
+        _lookupLines = p.LookupLines; _lookupRows = [];
         SetItems(_lookupList, _lookupLines);
         _package.SelectedIndex = p.Package == nameof(ChipView.Package.Qfp64) ? 1 : 0;
         if (p.SelectedTab.Length > 0) SelectTab(p.SelectedTab);
@@ -1464,6 +1663,11 @@ public sealed class MainWindow : Window
     }
 
     string _lastLogged = "";
+
+    // for the --ui-check layout pass
+    internal SimHost Host => _host;
+    internal List<string> TabNames() => [.. _bottom.Items.OfType<TabItem>().Select(t => t.Tag as string ?? "")];
+    internal void ShowTab(string header) => SelectTab(header);
 
     void SelectTab(string header)
     {
@@ -1506,7 +1710,7 @@ public sealed class MainWindow : Window
         _hot.Text = s.HotWindow > 0
             ? $"hot {Hex(s.HotAddress)} {_host.NearestLabel(s.HotAddress)} {100.0 * s.HotCount / s.HotWindow:F0}% of the recent window · coverage {s.Coverage} addresses"
             : "";
-        var calls = s.Calls.Count == 0 ? new List<string> { "(top level)" } : s.Calls.Take(24).ToList();
+        var calls = s.Calls.Count == 0 ? ["(top level)"] : s.Calls.Take(24).ToList();
         while (calls.Count < CallStackLines) calls.Add("");
         _calls.Text = string.Join("\n", calls);
         _outputs.Text = OutputsText(s.Outputs);
@@ -1605,7 +1809,7 @@ public sealed class MainWindow : Window
         var sb = new System.Text.StringBuilder();
         string Ago(double ms) => ms < 0 ? "never" : ms < 1000 ? $"{ms:F0} ms ago" : $"{ms / 1000:F1} s ago";
         sb.AppendLine($"Fuel pump relay  8255 PB7 (P0.7)  {(o.FuelPump ? "ON " : "off")}");
-        sb.AppendLine($"VTEC solenoid    8255 PC0 (P1.0)  {(o.Vtec ? "ON " : "off")}   P4.6 {(o.VtecPressure ? "low" : "high")}");
+        sb.AppendLine($"VTEC solenoid    8255 PC0 (P1.0)  {(o.Vtec ? "ON " : "off")}   pressure sw (4700h.1) {(o.VtecPressure ? "closed" : "open")}");
         sb.AppendLine($"Ignition coil    {o.SparksPerSec,5:F0} timer-3 events/s (dwell start + fire)");
         sb.AppendLine();
         sb.AppendLine("Injector  pattern  pulse ms  events/s  duty %  last event");
@@ -1641,7 +1845,7 @@ public sealed class MainWindow : Window
         if (want.Length > 0 && _host.Definitions?.TryResolve(want, out var a) == true) from = a;
         else if (want.Length > 0 && int.TryParse(want.TrimEnd('h', 'H'), NumberStyles.HexNumber, null, out var hx)) from = hx;
         var lines = _host.Disassemble(from, 60);
-        _disasmAddrs = lines.Select(l => l.Addr).ToList();
+        _disasmAddrs = [.. lines.Select(l => l.Addr)];
         SetItems(_disasm, lines.Select(l =>
             (l.Bp ? "●" : " ") + (l.Current ? "▶" : " ") + $"{Hex(l.Addr)}  {l.Bytes,-10} {(l.Label.Length > 0 ? l.Label + ": " : "")}{l.Text}"));
         int cur = lines.FindIndex(l => l.Current);
@@ -1659,12 +1863,12 @@ public sealed class MainWindow : Window
         var sb = new System.Text.StringBuilder();
         for (int row = 0; row < 16; row++)
         {
-            sb.Append(Hex(addr + row * 16)).Append("  ");
-            for (int c = 0; c < 16; c++) sb.Append(bytes[row * 16 + c].ToString("X2")).Append(' ');
+            sb.Append(Hex(addr + (row * 16))).Append("  ");
+            for (int c = 0; c < 16; c++) sb.Append(bytes[(row * 16) + c].ToString("X2")).Append(' ');
             sb.Append(' ');
             for (int c = 0; c < 16; c++)
             {
-                byte v = bytes[row * 16 + c];
+                byte v = bytes[(row * 16) + c];
                 sb.Append(v >= 32 && v < 127 ? (char)v : '.');
             }
             sb.Append('\n');
@@ -1679,18 +1883,18 @@ public sealed class MainWindow : Window
         var rows = _host.Lookup(_lookupQ.Text ?? "");
         _lookupRows = rows;
         _lookupLines = rows.Count == 0
-            ? new List<string> { "nothing matches" }
-            : rows.Select(r => $"{Hex(r.Address)}  {r.Name}{(r.Offset != 0 ? " + " + r.Offset : "")}   {r.Kind}").ToList();
+            ? ["nothing matches"]
+            : [.. rows.Select(r => $"{Hex(r.Address)}  {r.Name}{(r.Offset != 0 ? " + " + r.Offset : "")}   {r.Kind}")];
         SetItems(_lookupList, _lookupLines);
     }
 
     void DoXref()
     {
         var hits = _host.Xref(_lookupQ.Text ?? "");
-        _lookupRows = hits.Select(h => (h.Label, h.Address, 0, h.Kind)).ToList();
+        _lookupRows = [.. hits.Select(h => (h.Label, h.Address, 0, h.Kind))];
         _lookupLines = hits.Count == 0
-            ? new List<string> { "no references found (or the target could not be resolved)" }
-            : hits.Select(h => $"{Hex(h.Address)}  {h.Label,-22} {h.Text,-32} {h.Source}").ToList();
+            ? ["no references found (or the target could not be resolved)"]
+            : [.. hits.Select(h => $"{Hex(h.Address)}  {h.Label,-22} {h.Text,-32} {h.Source}")];
         SetItems(_lookupList, _lookupLines);
     }
 
@@ -1749,6 +1953,11 @@ public sealed class MainWindow : Window
         s.DatalogProtocol = r.DatalogProtocol; s.DatalogBaud = r.DatalogBaud; s.DatalogIntervalMs = r.DatalogIntervalMs; s.DatalogDrivesSimulator = r.DatalogDrivesSimulator;
         s.AuxChannels = r.AuxChannels; s.OverlayChannel = r.OverlayChannel; s.StoichAfr = r.StoichAfr;
         s.MoatesBase = r.MoatesBase; s.HitSkipRepeats = r.HitSkipRepeats;
+        s.EmulatorType = r.EmulatorType; s.EmulatorBaud = r.EmulatorBaud;
+        s.SerialTimeoutMs = r.SerialTimeoutMs; s.SerialWriteTimeoutMs = r.SerialWriteTimeoutMs;
+        s.PostWritePauseMs = r.PostWritePauseMs; s.SerialRetries = r.SerialRetries; s.SerialDtrRts = r.SerialDtrRts;
+        s.AfrTargetLow = r.AfrTargetLow; s.AfrTargetHigh = r.AfrTargetHigh;
+        s.WidebandCorrection = r.WidebandCorrection; s.AnalogCurves = r.AnalogCurves;
         ApplySettings(first: false);
     }
 

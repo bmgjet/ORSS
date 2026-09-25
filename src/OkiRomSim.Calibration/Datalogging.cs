@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Globalization;
 using System.Text;
 namespace OkiRomSim.Calibration;
@@ -12,8 +13,11 @@ public sealed class LogFrame
     /// The frame exactly as the ECU sent it, when the log came from its datalog stream.
     public byte[]? Raw;
     public string? Protocol;
-    /// Extra channels: "afr", "lambda", "knock", aux channels named in Settings...
-    public Dictionary<string, double> Extra { get; } = new(StringComparer.OrdinalIgnoreCase);
+    /// Extra channels: "afr", "lambda", "knock", aux channels named in Settings... Made the first time one is set, so a frame without any costs nothing for it.
+    public Dictionary<string, double> Extra => _extra ??= new(StringComparer.OrdinalIgnoreCase);
+    Dictionary<string, double>? _extra;
+    /// Names for the bytes of Raw ("b12", "h05"...), shared by every frame of one protocol and read from Raw when asked for. They used to be copied into Extra for every frame - a few kilobytes a frame, over a hundred megabytes for a long log on a laptop that has little to spare.
+    public RawNames? RawChannels;
 
     public static readonly string[] Fields =
         { "rpm", "map_kpa", "tps_pct", "ect_c", "iat_c", "o2_v", "batt_v", "speed_kmh", "baro_kpa", "inj_ms", "ign_deg", "ign_table_deg", "vtec", "fuel_pump" };
@@ -22,7 +26,7 @@ public sealed class LogFrame
     {
         ["rpm"] = "rpm", ["map_kpa"] = "kPa", ["tps_pct"] = "%", ["ect_c"] = "°C", ["iat_c"] = "°C", ["o2_v"] = "V", ["batt_v"] = "V",
         ["speed_kmh"] = "km/h", ["baro_kpa"] = "kPa", ["inj_ms"] = "ms", ["ign_deg"] = "°", ["ign_table_deg"] = "°", ["vtec"] = "", ["fuel_pump"] = "",
-        ["afr"] = "AFR", ["lambda"] = "λ",
+        ["afr"] = "AFR", ["lambda"] = "λ", ["tc_retard_deg"] = "°",
     };
 
     public double? Get(string field) => field.ToLowerInvariant() switch
@@ -32,7 +36,7 @@ public sealed class LogFrame
         "ign_table_deg" => IgnTableDeg, "vtec" => Vtec is bool v ? (v ? 1 : 0) : null,
         "fuel_pump" => FuelPump is bool f ? (f ? 1 : 0) : null,
         "t" or "time_s" => T,
-        var other => Extra.TryGetValue(other, out var x) ? x : null,
+        var other => _extra != null && _extra.TryGetValue(other, out var x) ? x : RawChannels?.Get(Raw, other),
     };
 
     public void Set(string field, double v)
@@ -49,7 +53,55 @@ public sealed class LogFrame
     }
 
     /// Every channel this frame has, in display order.
-    public IEnumerable<string> Channels() => Fields.Where(f => Get(f) != null).Concat(Extra.Keys.OrderBy(k => k));
+    public IEnumerable<string> Channels() => Fields.Where(f => Get(f) != null).Concat(ExtraNames().OrderBy(k => k, StringComparer.OrdinalIgnoreCase));
+
+    /// The channels beyond the fixed fields: set ones, then the named bytes of Raw.
+    public IEnumerable<string> ExtraNames() =>
+        (_extra?.Keys ?? Enumerable.Empty<string>()).Concat((RawChannels?.Names ?? []).Where(n => _extra?.ContainsKey(n) != true));
+
+    /// Which channels the frame has, as a number: frames with the same one list the same channels, so a scan over a long log only lists them again when it changes.
+    int Shape()
+    {
+        int mask = 0, bit = 1;
+        foreach (var v in new[] { Rpm, MapKpa, TpsPct, EctC, IatC, O2V, BattV, SpeedKmh, BaroKpa, InjMs, IgnDeg, IgnTableDeg })
+        { if (v != null) mask |= bit; bit <<= 1; }
+        if (Vtec != null) mask |= bit; bit <<= 1;
+        if (FuelPump != null) mask |= bit;
+        return HashCode.Combine(mask, _extra?.Count ?? 0, RawChannels);
+    }
+
+    /// Every channel any frame of a log has, in display order - quick on a long log (see Shape).
+    public static List<string> AllChannels(IEnumerable<LogFrame> frames)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var shapes = new HashSet<int>();
+        foreach (var f in frames)
+            if (shapes.Add(f.Shape())) foreach (var c in f.Channels()) seen.Add(c);
+        return [.. Fields.Where(seen.Contains), .. seen.Where(c => !Fields.Contains(c)).OrderBy(c => c, StringComparer.OrdinalIgnoreCase)];
+    }
+}
+
+/// Names for the bytes of a raw frame, made once per protocol (and frame length) and shared by every frame.
+public sealed class RawNames
+{
+    public readonly string[] Names;
+    readonly Dictionary<string, int> _index = new(StringComparer.OrdinalIgnoreCase);
+
+    public RawNames(IEnumerable<(string Name, int Index)> map)
+    {
+        foreach (var (n, i) in map) _index[n] = i;
+        Names = [.. _index.Keys];
+    }
+
+    public double? Get(byte[]? raw, string name) => raw != null && _index.TryGetValue(name, out var i) && i < raw.Length ? raw[i] : null;
+
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<string, RawNames> Made = new();
+
+    /// The shared set called `key`, made by `make` the first time.
+    public static RawNames Of(string key, Func<RawNames> make) => Made.GetOrAdd(key, _ => make());
+
+    /// "b0", "b1"... for every byte of a frame this long.
+    public static RawNames Bytes(int length) => Of("b" + length, () => new(Enumerable.Range(0, length).Select(i => ($"b{i}", i))));
 }
 
 /// Honda OBD1 frame layouts and scalings, as the established tuning tools read them.
@@ -58,7 +110,7 @@ public static class HondaDatalog
     public const int FrameLength = 51;
 
     public static double Volts(byte b) => b * 5.0 / 255.0;
-    public static double MapKpa(byte b) => (b * 7.221 - 59) / 10;
+    public static double MapKpa(byte b) => ((b * 7.221) - 59) / 10;
     public static double TpsPct(byte b) => Math.Clamp((b - 25.0) / 2.04, 0, 100);
 
     /// The coolant / intake temperature curve for these sensors: byte -> degrees C, 0 = 141 C down to 255 = -26 C. The same 256-entry curve the established tuning tools use, so logged temperatures read the same everywhere.
@@ -103,20 +155,20 @@ public static class HondaDatalog
     /// The 51-byte main table (request 90h or 20h, or byte requests C0h+n).
     public static LogFrame Decode(byte[] f, double t)
     {
-        ushort period = (ushort)(f[6] | f[7] << 8);
-        ushort inj = (ushort)(f[17] | f[18] << 8);
+        ushort period = (ushort)(f[6] | (f[7] << 8));
+        ushort inj = (ushort)(f[17] | (f[18] << 8));
         return new LogFrame
         {
-            T = t, Raw = f.ToArray(),
+            T = t, Raw = [.. f],
             EctC = ThermistorC(f[0]), IatC = ThermistorC(f[1]), O2V = Math.Round(Volts(f[2]), 3),
-            BaroKpa = f[3] == 0 ? null : Math.Round(MapKpa((byte)Math.Min(255, f[3] / 2 + 24)), 1),
+            BaroKpa = f[3] == 0 ? null : Math.Round(MapKpa((byte)Math.Min(255, (f[3] / 2) + 24)), 1),
             MapKpa = Math.Round(MapKpa(f[4]), 1), TpsPct = Math.Round(TpsPct(f[5]), 1),
             Rpm = period == 0 ? 0 : Math.Round(1875000.0 / period),
             SpeedKmh = f[16],
             InjMs = Math.Round(inj * 3.2 / 1000, 2),
-            IgnDeg = f[19] * 0.25 - 6, IgnTableDeg = f[20] * 0.25 - 6,
+            IgnDeg = (f[19] * 0.25) - 6, IgnTableDeg = (f[20] * 0.25) - 6,
             BattV = Math.Round(26.0 * f[25] / 270.0, 2),
-            Vtec = (f[8] >> 3 & 1) != 0,
+            Vtec = ((f[8] >> 3) & 1) != 0,
             FuelPump = (f[22] & 1) != 0,
         };
     }
@@ -124,13 +176,13 @@ public static class HondaDatalog
     /// QD3 frame: 40 bytes, starting 46h 26h.
     public static LogFrame DecodeQd3(byte[] f, double t)
     {
-        ushort period = (ushort)(f[2] | f[3] << 8);
-        ushort inj = (ushort)(f[7] | f[8] << 8);
+        ushort period = (ushort)(f[2] | (f[3] << 8));
+        ushort inj = (ushort)(f[7] | (f[8] << 8));
         var fr = new LogFrame
         {
-            T = t, Raw = f.ToArray(),
+            T = t, Raw = [.. f],
             Rpm = period == 0 ? 0 : Math.Round(1875000.0 / period),
-            IgnDeg = f[9] * 0.25 - 6,
+            IgnDeg = (f[9] * 0.25) - 6,
             O2V = Math.Round(Volts(f[11]), 3),
             SpeedKmh = f[20],
             BattV = Math.Round(26.0 * f[21] / 270.0, 2),
@@ -161,6 +213,12 @@ public interface IByteLink
     /// Read up to `count` bytes, waiting at most `timeoutMs` for them; returns how many arrived.
     int Read(byte[] buffer, int offset, int count, int timeoutMs);
     void Discard();
+    /// A single-wire K-line (the stock Honda tester link): the ECU hears its own bytes. Links that can model it (the simulator) do; a real cable is one already, or is not, whatever is asked here.
+    void SetKLine(bool on) { }
+    /// Let `ms` pass on the line (a pause between bytes). A real port just waits; a simulated one runs the ROM.
+    void Wait(int ms) => Thread.Sleep(ms);
+    /// Change the line speed (auto-detection tries each protocol at its own). Links that cannot, ignore it.
+    void SetBaud(int baud) { }
 }
 
 public enum PacketDir { Tx, Rx }
@@ -172,7 +230,15 @@ public abstract class DatalogProtocol
     public abstract string Name { get; }
     public abstract string Description { get; }
     public virtual int Baud => 38400;
-    public int TimeoutMs { get; set; } = 250;
+    public int TimeoutMs { get; set; } = TimeoutMsDefault;
+    /// A pause between writing a request and reading the answer. Several USB-serial cables drop the first byte of the answer without one, which is why the established tuning software always waits 10 ms here; it is the single thing that most often makes an OBD1 link "not work".
+    public int PostWritePauseMs { get; set; } = PostWritePauseMsDefault;
+    /// How many times a handshake is tried before the protocol is called wrong.
+    public int Retries { get; set; } = RetriesDefault;
+
+    /// What a new protocol object starts with (Settings > Datalog sets these).
+    public static int TimeoutMsDefault = 250, PostWritePauseMsDefault = 10, RetriesDefault = 3;
+
     /// Called with every packet sent and received (for the packet monitor).
     public Action<Packet>? OnPacket { get; set; }
 
@@ -185,6 +251,7 @@ public abstract class DatalogProtocol
     {
         link.Write(b);
         OnPacket?.Invoke(new Packet(DateTime.Now, PacketDir.Tx, b, ""));
+        if (PostWritePauseMs > 0) Thread.Sleep(PostWritePauseMs);
     }
 
     /// Let the line go quiet: read and drop whatever is still arriving (a long answer to an earlier probe), until nothing comes for a while. A buffer discard alone misses the bytes still on the wire.
@@ -214,19 +281,32 @@ public abstract class DatalogProtocol
 
     protected bool HandshakeByte(IByteLink link, byte send, byte expect, out string note)
     {
-        Drain(link);
-        Send(link, send);
-        var r = Receive(link, 1, "handshake");
-        if (r.Length == 1 && r[0] == expect) { note = $"handshake {send:X2} -> {expect:X2}"; return true; }
-        note = r.Length == 0 ? $"no answer to {send:X2}" : r[0] == send ? $"echo of {send:X2}: the datalog jumper (J12 USDM / J4 JDM) is still fitted" : $"answer {r[0]:X2} to {send:X2}, expected {expect:X2}";
+        // an ECU that has just been powered up, or a cable that was mid-answer, misses the first try: the tuning software retries the handshake several times before giving up on it
+        note = "";
+        for (int attempt = 0; attempt <= Math.Max(0, Retries); attempt++)
+        {
+            Drain(link);
+            Send(link, send);
+            var r = Receive(link, 1, "handshake");
+            if (r.Length == 1 && r[0] == expect)
+            {
+                note = $"handshake {send:X2} -> {expect:X2}" + (attempt > 0 ? $" (after {attempt} retry/retries)" : "");
+                return true;
+            }
+            note = r.Length == 0 ? $"no answer to {send:X2}"
+                 : r[0] == send ? $"echo of {send:X2}: the datalog jumper (J12 USDM / J4 JDM) is still fitted"
+                 : r.Length == 1 && r[0] == 0xBC ? $"answer BC to {send:X2}: this is a different ROM family, not one that speaks {Name}"
+                 : $"answer {r[0]:X2} to {send:X2}, expected {expect:X2}";
+            // an echo means the wiring is wrong, not that the ECU is slow: retrying will not help
+            if (r.Length == 1 && (r[0] == send || r[0] == 0xBC)) return false;
+        }
         return false;
     }
 
     protected LogFrame? Framed(IByteLink link, byte request, int dataLength, Func<byte[], LogFrame> decode, double t, out string note)
     {
-        // the ECU ignores a request that arrives straight on the heels of its handshake answer
-        // straight on the heels of their handshake answer
-        Drain(link, quietMs: 12);
+        // Only the buffer is cleared, not the wire: the old code waited for the line to fall quiet before every single request, which cost more than the frame interval itself and, on a fast link, swallowed the beginning of the answer to the request just sent. The tuning software writes the request and reads the answer, and only discards the buffer after something has actually gone wrong.
+        link.Discard();
         Send(link, request);
         var r = Receive(link, dataLength + 1, "frame");
         if (r.Length < dataLength + 1) { note = "timeout"; return null; }
@@ -239,11 +319,14 @@ public abstract class DatalogProtocol
 
     public static IReadOnlyList<DatalogProtocol> All() => new DatalogProtocol[]
     {
-        // order matters for Detect: the single-byte probe would accept any ROM that answers C6h
-        new MultiByte90(), new IsrMultiByte(), new Qd3Protocol(), new RawFrame10(), new ByteRequestC0(),
+        // order matters for Detect: the single-byte probe would accept any ROM that answers C6h, and the 66207 multi-byte handshake is the same one the P13 loggers use, so the protocols that ask for a particular frame length come before the ones that take any
+        new MultiByte90(), new IsrMultiByte(), new Qd3Protocol(),
+        new P13Protocol(0x46), new P13Protocol(0x20),
+        new Custom1Protocol(), new Custom2Protocol(),
+        new RawFrame10(), new ByteRequestC0(), new HondaStockTester(),
     };
 
-    /// Older names these protocols were saved under, so a settings file from an earlier build still picks the same protocol.
+    /// Older names these protocols were saved under, so a settings file from an earlier build still picks the same protocol. (P13 46h and P13 20h are new, so they have none.)
     static readonly Dictionary<string, string> Aliases = new(StringComparer.OrdinalIgnoreCase)
     {
         ["multi-byte"] = "Multi-byte 90h",
@@ -258,13 +341,17 @@ public abstract class DatalogProtocol
         return All().FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
     }
 
-    /// Try every protocol's handshake and first frame; the first that works wins.
-    public static (DatalogProtocol? Protocol, string Report) Detect(IByteLink link, Action<Packet>? onPacket = null)
+    /// Try every protocol's handshake and first frame; the first that works wins. `quick` tries each handshake once, with short timeouts (Settings > Detect, going through every port).
+    public static (DatalogProtocol? Protocol, string Report) Detect(IByteLink link, Action<Packet>? onPacket = null, bool quick = false)
     {
         var report = new StringBuilder();
         foreach (var p in All())
         {
             p.OnPacket = onPacket;
+            if (quick) { p.Retries = 0; p.TimeoutMs = Math.Min(p.TimeoutMs, 150); }
+            // each at its own line speed (the stock tester link is 9600, the rest 38400), on a plain line
+            link.SetKLine(false);
+            link.SetBaud(p.Baud);
             try
             {
                 if (!p.Handshake(link, out var note)) { report.AppendLine($"{p.Name}: {note}"); continue; }
@@ -276,6 +363,252 @@ public abstract class DatalogProtocol
             catch (Exception ex) { report.AppendLine($"{p.Name}: {ex.Message}"); }
         }
         return (null, report.ToString());
+    }
+}
+
+/// Custom 1: 00h, 01h, 02h answer its ID (14h 72h 41h); every byte 10h-5Fh answers one logged value; 0Eh hi lo reads any byte of memory and 0Fh hi lo value writes one. Traced in the simulator one input at a time: 10h-11h the crank period (low, high), 18h throttle, 19h O2, 1Ah MAP, 1Bh baro, 1Ch coolant, 1Dh intake air, 1Eh road speed, 29h battery. The requests go out in one burst; the ECU answers each as it arrives, in order.
+public sealed class Custom1Protocol : DatalogProtocol
+{
+    public override string Name => "Custom 1";
+    public override string Description => "00/01/02 -> ID 14 72 41, then one byte per request (10h-1Eh, 29h)";
+    /// The requests asked each frame: the ones the decode uses, plus 12h-13h.
+    static readonly byte[] Asked = [0x10, 0x11, 0x12, 0x13, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x29];
+
+    public override bool Handshake(IByteLink link, out string note)
+    {
+        for (int attempt = 0; attempt <= Math.Max(0, Retries); attempt++)
+        {
+            Drain(link);
+            Send(link, 0x00, 0x01, 0x02);
+            var r = Receive(link, 3, "Custom 1 ID");
+            if (r.Length == 3 && r[0] == 0x14 && r[1] == 0x72 && r[2] == 0x41) { note = "ID 14 72 41"; return true; }
+            note = r.Length == 0 ? "no answer to 00 01 02" : $"ID {string.Join(" ", r.Select(b => b.ToString("X2")))}, expected 14 72 41";
+            if (r.Length == 3 && r.SequenceEqual(new byte[] { 0, 1, 2 })) { note = "echo of 00 01 02: the datalog jumper is still fitted"; return false; }
+        }
+        note = "no Custom 1 ID";
+        return false;
+    }
+
+    public override LogFrame? Poll(IByteLink link, double t, out string note)
+    {
+        // one request at a time: the ECU has a one-byte receive buffer, and a burst loses bytes to it
+        link.Discard();
+        var d = new byte[Asked.Length];
+        var one = new byte[1];
+        for (int i = 0; i < Asked.Length; i++)
+        {
+            link.Write([Asked[i]]);
+            if (link.Read(one, 0, 1, Math.Max(20, TimeoutMs / 4)) != 1) { note = $"no answer to {Asked[i]:X2}"; return null; }
+            d[i] = one[0];
+        }
+        OnPacket?.Invoke(new Packet(DateTime.Now, PacketDir.Rx, d, "Custom 1 values " + string.Join(" ", Asked.Select(a => a.ToString("X2")))));
+        byte V(int cmd) => d[Array.IndexOf(Asked, (byte)cmd)];
+        int period = V(0x10) | (V(0x11) << 8);
+        var f = new LogFrame
+        {
+            T = t, Raw = d, Protocol = Name,
+            Rpm = period == 0 || period == 0xFFFF ? 0 : Math.Round(1875000.0 / period),
+            TpsPct = Math.Round(HondaDatalog.TpsPct(V(0x18)), 1), O2V = Math.Round(HondaDatalog.Volts(V(0x19)), 3),
+            MapKpa = Math.Round(HondaDatalog.MapKpa(V(0x1A)), 1), BaroKpa = Math.Round(HondaDatalog.MapKpa(V(0x1B)), 1),
+            EctC = HondaDatalog.ThermistorC(V(0x1C)), IatC = HondaDatalog.ThermistorC(V(0x1D)),
+            SpeedKmh = V(0x1E), BattV = Math.Round(26.0 * V(0x29) / 270.0, 2),
+        };
+        f.RawChannels = RawNames.Of("custom1", () => new(Asked.Select((a, i) => ($"n{a:X2}", i))));
+        note = "ok";
+        return f;
+    }
+}
+
+/// Custom 2: locked at power-up, it sends a 131-byte frame (82h 81h, random bytes, checksum) over and over; bytes 38h-3Fh of it are the seed. The tool answers straight after a frame with 83h and 83h more bytes: the second picks the key (9105h, or E0A4h if its bit 0 is set), each byte up to 65h runs one round of a 16-bit TEA-like cipher (delta 9E37h) over the seed, bytes 66h-6Dh must be the cipher state after those 99 rounds, and the whole message sums to 00h. It answers 0Fh (F0h if wrong) and stops the seed frames. Then 90h answers 90h, 3Bh and 58 bytes, checksum. The cipher runs inside the receive interrupt, so the message goes a byte at a time with a pause after each. Fields traced in the simulator one input at a time (byte offsets from the 3Bh): 2-3 rpm, 4-5 speed-sensor period, 6-7 MAP in mBar, 8 throttle, 15 O2, 26 gear, 31 baro, 32 coolant, 33 intake air, 35 battery.
+public sealed class Custom2Protocol : DatalogProtocol
+{
+    public override string Name => "Custom 2";
+    public override string Description => "seed frames 82 81 -> 83h cipher unlock, then 90h -> 90 3B + 58 bytes + checksum";
+    const int SeedFrame = 131, Data = 59;
+
+    public override bool Handshake(IByteLink link, out string note)
+    {
+        // locked, it sends seed frames without being asked: unlock it, which stops them (they would otherwise share the line with every answer); unlocked, it is quiet and 90h just answers
+        string unlock = "";
+        for (int attempt = 0; attempt <= Math.Max(0, Retries); attempt++)
+        {
+            var seed = Seed(link, attempt == 0 ? 400 : 1500);
+            if (seed == null) break;
+            OnPacket?.Invoke(new Packet(DateTime.Now, PacketDir.Rx, seed, "Custom 2 seed"));
+            var msg = Unlock(seed, 0);
+            foreach (var b in msg)
+            {
+                link.Write([b]);
+                // give the cipher round time to finish before the next byte lands in the one-byte buffer
+                link.Wait(2);
+            }
+            OnPacket?.Invoke(new Packet(DateTime.Now, PacketDir.Tx, msg, "Custom 2 unlock"));
+            var r = Receive(link, 1, "Custom 2 unlock answer");
+            if (r.Length == 1 && r[0] == 0x0F) { unlock = "unlocked (0F), "; Drain(link); break; }
+            unlock = r.Length == 1 && r[0] == 0xF0 ? "unlock refused (F0), " : "no answer to the unlock, ";
+        }
+        if (Frame90(link) != null) { note = unlock + "90h frame ok"; return true; }
+        note = unlock + "no 90h frame";
+        return false;
+    }
+
+    /// The seed of a whole 82h 81h frame, read only up to its end so an answer goes out in the gap before the next.
+    static byte[]? Seed(IByteLink link, int ms)
+    {
+        var buf = new List<byte>();
+        var one = new byte[1];
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < ms)
+        {
+            if (link.Read(one, 0, 1, 50) == 0) continue;
+            buf.Add(one[0]);
+            int j = buf.Count - SeedFrame;
+            if (j >= 0 && buf[j] == 0x82 && buf[j + 1] == 0x81 && (buf.Skip(j).Take(SeedFrame).Sum(b => b) & 0xFF) == 0)
+                return [.. buf.Skip(j + 0x38).Take(8)];
+        }
+        return null;
+    }
+
+    /// The unlock message for a seed: 83h, the key byte, the 99 clocking bytes, the 8 bytes of cipher state, filler, checksum.
+    public static byte[] Unlock(byte[] seed, int keyBit)
+    {
+        ushort W(int i) => (ushort)(seed[i] | (seed[i + 1] << 8));
+        ushort a = W(0), b = W(2), c = W(4), d = W(6), s = 0, k = keyBit == 0 ? (ushort)0x9105 : (ushort)0xE0A4;
+        for (int r = 0; r < 99; r++)
+        {
+            a += (ushort)(c ^ s ^ k); a += (ushort)(d ^ s ^ k);
+            b += (ushort)(c ^ s ^ k); b += (ushort)(d ^ s ^ k);
+            s += 0x9E37;
+            c += (ushort)(a ^ s ^ k); c += (ushort)(b ^ s ^ k);
+            d += (ushort)(a ^ s ^ k); d += (ushort)(b ^ s ^ k);
+        }
+        var msg = new byte[0x84];
+        msg[0] = 0x83; msg[2] = (byte)keyBit;
+        byte[] st = [(byte)a, (byte)(a >> 8), (byte)b, (byte)(b >> 8), (byte)c, (byte)(c >> 8), (byte)d, (byte)(d >> 8)];
+        st.CopyTo(msg, 0x66);
+        msg[0x83] = (byte)-msg.Take(0x83).Sum(x => x);
+        return msg;
+    }
+
+    byte[]? Frame90(IByteLink link)
+    {
+        link.Discard();
+        Send(link, 0x90);
+        // 90h, 3Bh and the rest, summing to 00h (an unlocked ECU also sends these on its own: any will do)
+        var buf = new List<byte>();
+        var chunk = new byte[128];
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < Math.Max(TimeoutMs, 120))
+        {
+            int n = link.Read(chunk, 0, chunk.Length, 20);
+            if (n > 0) buf.AddRange(chunk.Take(n));
+            for (int j = 0; j + Data + 2 <= buf.Count; j++)
+                if (buf[j] == 0x90 && buf[j + 1] == 0x3B && (buf.Skip(j).Take(Data + 2).Sum(b => b) & 0xFF) == 0)
+                {
+                    var f = buf.Skip(j + 1).Take(Data).ToArray();
+                    OnPacket?.Invoke(new Packet(DateTime.Now, PacketDir.Rx, [.. buf.Skip(j).Take(Data + 2)], "Custom 2 90h frame"));
+                    return f;
+                }
+            if (buf.Count > 400) break;
+        }
+        return null;
+    }
+
+    public override LogFrame? Poll(IByteLink link, double t, out string note)
+    {
+        var d = Frame90(link);
+        if (d == null) { note = "timeout"; return null; }
+        int period = d[4] | (d[5] << 8), mbar = d[6] | (d[7] << 8);
+        var f = new LogFrame
+        {
+            T = t, Raw = d, Protocol = Name,
+            Rpm = d[2] | (d[3] << 8),
+            SpeedKmh = period == 0 || period == 0xFFFF ? 0 : Math.Round(220200.0 / period),
+            MapKpa = Math.Round(mbar / 10.0, 1),
+            TpsPct = Math.Round(HondaDatalog.TpsPct(d[8]), 1), O2V = Math.Round(HondaDatalog.Volts(d[15]), 3),
+            BaroKpa = Math.Round(HondaDatalog.MapKpa(d[31]), 1),
+            EctC = HondaDatalog.ThermistorC(d[32]), IatC = HondaDatalog.ThermistorC(d[33]),
+            BattV = Math.Round(26.0 * d[35] / 270.0, 2),
+        };
+        f.Extra["gear"] = d[26];
+        f.RawChannels = RawNames.Of("custom2", () => new(Enumerable.Range(0, Data).Select(i => ($"h{i:D2}", i))));
+        note = "ok";
+        return f;
+    }
+}
+
+/// The stock Honda ECU's own link (P28 / P30 / P08 and the rest of the OBD1 family, no chip needed): the tester protocol on the single-wire K-line. A request is 20h, 05h, first slot, slot count, checksum; the answer is 00h, its length, one byte per slot, checksum (every frame sums to 00h). The slots are a table in the ROM of RAM addresses, laid out the same way on every ROM checked (P30 and P08 traced in the simulator one input at a time): 03-04 the crank period (high, low), 05 road speed, 13h coolant, 14h intake air, 15h MAP, 16h baro, 17h throttle, 18h O2, 1Ah battery. The ECU sends each byte of its answer as it hears the echo of the one before, and the PC hears its own request back first.
+public sealed class HondaStockTester : DatalogProtocol
+{
+    public override string Name => "Honda stock (tester 20h)";
+    public override string Description => "stock ROM, K-line tester link: 20 05 start count chk -> 00 len slots... chk (9600 baud)";
+    public override int Baud => 9600;
+    /// Slots 03h up to and including 1Ah: everything the decode uses.
+    const int First = 0, Count = 0x18;
+
+    public override bool Handshake(IByteLink link, out string note)
+    {
+        link.SetKLine(true);
+        for (int attempt = 0; attempt <= Math.Max(0, Retries); attempt++)
+        {
+            Drain(link, 60);
+            var r = Exchange(link, 0, 4, out note);
+            if (r != null) { note = "tester 20h answered" + (attempt > 0 ? $" (after {attempt} retry/retries)" : ""); return true; }
+        }
+        note = "no framed answer to 20 05 00 04 (check the baud rate: the stock link is 9600)";
+        return false;
+    }
+
+    public override LogFrame? Poll(IByteLink link, double t, out string note)
+    {
+        var d = Exchange(link, First, Count, out note);
+        if (d == null) return null;
+        byte S(int slot) => d[slot - 3];
+        int period = (S(3) << 8) | S(4);
+        var f = new LogFrame
+        {
+            T = t, Raw = d, Protocol = Name,
+            Rpm = period == 0 || period == 0xFFFF ? 0 : Math.Round(1875000.0 / period),
+            SpeedKmh = S(5),
+            EctC = HondaDatalog.ThermistorC(S(0x13)), IatC = HondaDatalog.ThermistorC(S(0x14)),
+            MapKpa = Math.Round(HondaDatalog.MapKpa(S(0x15)), 1), BaroKpa = Math.Round(HondaDatalog.MapKpa(S(0x16)), 1),
+            TpsPct = Math.Round(HondaDatalog.TpsPct(S(0x17)), 1), O2V = Math.Round(HondaDatalog.Volts(S(0x18)), 3),
+            BattV = Math.Round(26.0 * S(0x1A) / 270.0, 2),
+        };
+        int n = d.Length;
+        f.RawChannels = RawNames.Of("stock" + n, () => new(Enumerable.Range(0, n).Select(i => ($"slot_{i + 3:X2}", i))));
+        note = "ok";
+        return f;
+    }
+
+    /// One request and its answer's slot bytes, or null. The PC's own request coming back (a K-line cable echoes it) is skipped: the answer is found by its 00h, its length and its checksum.
+    byte[]? Exchange(IByteLink link, int first, int count, out string note)
+    {
+        byte[] req = [0x20, 0x05, (byte)first, (byte)count, 0];
+        req[4] = (byte)-(req[0] + req[1] + req[2] + req[3]);
+        link.Discard();
+        Send(link, req);
+        int len = count + 3, want = len + req.Length;
+        var buf = new List<byte>();
+        var chunk = new byte[64];
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < Math.Max(TimeoutMs, 150 + (len * 3)))
+        {
+            int n = link.Read(chunk, 0, chunk.Length, 20);
+            if (n > 0) buf.AddRange(chunk.Take(n));
+            for (int j = 0; j + len <= buf.Count; j++)
+                if (buf[j] == 0x00 && buf[j + 1] == len && (buf.Skip(j).Take(len).Sum(b => b) & 0xFF) == 0)
+                {
+                    var frame = buf.Skip(j).Take(len).ToArray();
+                    OnPacket?.Invoke(new Packet(DateTime.Now, PacketDir.Rx, frame, "tester answer"));
+                    note = "ok";
+                    return frame[2..^1];
+                }
+            if (buf.Count > want * 3) break;
+        }
+        OnPacket?.Invoke(new Packet(DateTime.Now, PacketDir.Rx, [.. buf], $"no tester answer ({buf.Count} bytes)"));
+        note = buf.Count == 0 ? "timeout" : "no valid answer";
+        return null;
     }
 }
 
@@ -300,13 +633,33 @@ public sealed class IsrMultiByte : DatalogProtocol
         if (f?.Raw is { } raw)
         {
             // ISR's own extras: switch inputs, ELD, EGR, B6, IACV
-            f.Extra["clutch"] = raw[21] & 1; f.Extra["brake"] = raw[21] >> 1 & 1; f.Extra["ac"] = raw[21] >> 2 & 1;
+            f.Extra["clutch"] = raw[21] & 1; f.Extra["brake"] = (raw[21] >> 1) & 1; f.Extra["ac"] = (raw[21] >> 2) & 1;
             f.Extra["eld_v"] = Math.Round(HondaDatalog.Volts(raw[24]), 2);
             f.Extra["egr_v"] = Math.Round(HondaDatalog.Volts(raw[44]), 2);
             f.Extra["b6_v"] = Math.Round(HondaDatalog.Volts(raw[45]), 2);
-            f.Extra["iacv"] = raw[49] | raw[50] << 8;
+            f.Extra["iacv"] = raw[49] | (raw[50] << 8);
+            if (_hts120 != false) Hts120Extras(link, f);
         }
         return f;
+    }
+
+    /// HTS120 adds a second packet on 40h (hts120_log_table: TC retard, status, gear, TPS converter, then a checksum) and leaves the 51-byte 20h frame alone. Asked once; a ROM that answers anything else (HTS 1.15 and the rest say EEh) is not asked again.
+    bool? _hts120;
+    void Hts120Extras(IByteLink link, LogFrame f)
+    {
+        link.Discard();
+        Send(link, 0x40);
+        var r = Receive(link, 5, "HTS120 40h");
+        if (r.Length == 5 && HondaDatalog.Checksum(r, 4) == r[4])
+        {
+            _hts120 = true;
+            f.Extra["tc_retard_deg"] = r[0] * 0.25;
+            f.Extra["antistart_locked"] = (r[1] >> 7) & 1;
+            f.Extra["gear"] = r[2];
+            f.Extra["tps_raw"] = r[3];
+            return;
+        }
+        if (_hts120 == null) { _hts120 = false; Drain(link); }
     }
 }
 
@@ -334,7 +687,7 @@ public sealed class ByteRequestC0 : DatalogProtocol
         var b = Receive(link, 1, "probe C7");
         // an echo, an idle line (FF) or one answer to everything ('?' 3F) is not this protocol
         if (a.Length == 1 && b.Length == 1 && !(a[0] == 0xC6 && b[0] == 0xC7) && a[0] != b[0])
-        { note = $"C6/C7 answered {a[0]:X2} {b[0]:X2} (rpm {(1875000.0 / Math.Max(1, a[0] | b[0] << 8)):0})"; return true; }
+        { note = $"C6/C7 answered {a[0]:X2} {b[0]:X2} (rpm {1875000.0 / Math.Max(1, a[0] | (b[0] << 8)):0})"; return true; }
         note = a.Length == 0 ? "no answer to C6" : "answers look like an echo or an idle line";
         return false;
     }
@@ -364,7 +717,7 @@ public sealed class RawFrame10 : DatalogProtocol
     public override string Description => "10h → checksummed frames of any length, requested or streamed; bytes shown raw";
     int _length;        // including the checksum byte
     bool _streaming;
-    readonly List<byte> _buf = new();
+    readonly List<byte> _buf = [];
 
     public override bool Handshake(IByteLink link, out string note)
     {
@@ -389,11 +742,11 @@ public sealed class RawFrame10 : DatalogProtocol
         }
         // a stream: a length and offset at which three chunks in a row are valid frames
         for (int len = 5; len <= 80; len++)
-            for (int off = 0; off < len && off + 3 * len <= data.Length; off++)
+            for (int off = 0; off < len && off + (3 * len) <= data.Length; off++)
             {
                 bool ok = true;
                 for (int k = 0; k < 3 && ok; k++)
-                    ok = HondaDatalog.Checksum(data[(off + k * len)..], len - 1) == data[off + k * len + len - 1];
+                    ok = HondaDatalog.Checksum(data[(off + (k * len))..], len - 1) == data[off + (k * len) + len - 1];
                 if (!ok) continue;
                 _length = len; _streaming = true;
                 _buf.RemoveRange(0, off);
@@ -413,7 +766,7 @@ public sealed class RawFrame10 : DatalogProtocol
         while (sw.ElapsedMilliseconds < TimeoutMs)
         {
             // stay in step: drop bytes until a valid frame starts the buffer
-            while (_buf.Count >= _length && HondaDatalog.Checksum(_buf.ToArray(), _length - 1) != _buf[_length - 1]) _buf.RemoveAt(0);
+            while (_buf.Count >= _length && HondaDatalog.Checksum([.. _buf], _length - 1) != _buf[_length - 1]) _buf.RemoveAt(0);
             if (_buf.Count >= _length)
             {
                 var raw = _buf.GetRange(0, _length - 1).ToArray();
@@ -434,10 +787,117 @@ public sealed class RawFrame10 : DatalogProtocol
 
     static LogFrame Decode(byte[] raw, double t)
     {
-        var fr = new LogFrame { T = t, Raw = raw.ToArray() };
-        for (int i = 0; i < raw.Length; i++) fr.Extra[$"b{i}"] = raw[i];
+        var fr = new LogFrame { T = t, Raw = [.. raw], RawChannels = RawNames.Bytes(raw.Length) };
         return fr;
     }
+}
+
+/// The P13 / P14 (MSM66911) datalogging ROMs: the same 10h -> CDh handshake as the 66207 multi-byte ROMs, then a command byte that streams a checksummed frame built from a descriptor table in the ROM. 46h is the table the established tuning software reads; 20h is the shorter one. The frame LENGTH is worked out from the data rather than assumed, because the descriptor table is part of the ROM and every build of a datalogging P13 has a slightly different one (the public tables are 38 and 26 entries, some of them placeholders). What each byte MEANS is likewise a property of that table, not of the protocol, so the bytes are logged raw as b0, b1, ... - and the Datalog page's "Detect layout" is the thing that names them: it probes the ROM in a simulator, changes one engine input at a time and watches which byte of the frame follows it.
+public sealed class P13Protocol : DatalogProtocol
+{
+    readonly byte _request;
+    int _length;          // including the checksum byte
+
+    public P13Protocol(byte request) { _request = request; }
+
+    public override string Name => $"P13 {_request:X2}h";
+    public override string Description =>
+        $"MSM66911 / P13: handshake 10\u2192CD, then {_request:X2}h returns a checksummed frame (its length is found from the data; bytes shown raw)";
+
+    public override bool Handshake(IByteLink link, out string note)
+    {
+        _length = 0;
+        if (!HandshakeByte(link, 0x10, 0xCD, out note)) return false;
+        // ask once and see how long the answer is: the frame ends at the byte that makes the additive sum of everything before it come out right
+        link.Discard();
+        Send(link, _request);
+        var buf = new List<byte>();
+        var chunk = new byte[256];
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < Math.Max(TimeoutMs, 400) && buf.Count < 256)
+        {
+            int n = link.Read(chunk, 0, chunk.Length, 60);
+            if (n <= 0 && buf.Count > 0) break;
+            for (int i = 0; i < n; i++) buf.Add(chunk[i]);
+        }
+        var data = buf.ToArray();
+        OnPacket?.Invoke(new Packet(DateTime.Now, PacketDir.Rx, data, "frame length probe"));
+        if (data.Length < 5) { note = data.Length == 0 ? $"handshake ok, but nothing came back from {_request:X2}h" : $"only {data.Length} bytes answered {_request:X2}h"; return false; }
+        // prefer the longest length that fits, so a frame is not cut short by a byte that happens to add up
+        for (int len = data.Length; len >= 5; len--)
+            if (HondaDatalog.Checksum(data, len - 1) == data[len - 1])
+            {
+                _length = len;
+                note = $"handshake ok, {_request:X2}h returns {len - 1} bytes + checksum";
+                return true;
+            }
+        note = $"{data.Length} bytes answered {_request:X2}h, none of them a valid checksum";
+        return false;
+    }
+
+    public override LogFrame? Poll(IByteLink link, double t, out string note)
+    {
+        if (_length == 0) { note = "no handshake"; return null; }
+        return Framed(link, _request, _length - 1, raw => Decode(raw, t, Name), t, out note);
+    }
+
+    static LogFrame Decode(byte[] raw, double t, string name)
+    {
+        var f = new LogFrame { T = t, Raw = [.. raw], Protocol = name, RawChannels = RawNames.Bytes(raw.Length) };
+        // the one field every P13 datalogger puts in the same place: the crank period, as the 16-bit word the ROM keeps at RAM 0x00AE, from which rpm = 1875000 / period. It is not guessed at here - "Detect layout" is what finds it - but the maths is in Honda66911 for whatever does.
+        return f;
+    }
+}
+
+/// The MSM66911 (Honda P13 / P14) sensor conversions, as the stock ROM implies them. The 66207's numbers are close but not the same, and the crank timer is the reason: it ticks every 4.000 us on this part, which is what makes the rpm constant come out at 1,875,000 - the same figure the 66207 uses, reached a different way.
+public static class Honda66911
+{
+    /// The 16-bit crank period the ROM keeps (1.5 teeth = 45 degrees of crank, in 4 us ticks).
+    public const double RpmConstant = 1_875_000;
+
+    public static double Rpm(int period) => period <= 0 ? 0 : RpmConstant / period;
+
+    /// The 8-bit rpm byte the datalog streams, back to rpm. The ROM builds it from the 16-bit period in four bands - byte = 240000/N - 64, 120000/N, 60000/N + 64, 30000/N + 128 - which, with rpm = 1875000/N, come out as four straight lines that meet at 1000, 2000 and 4000 rpm. 0xFE and 0xFF are the ROM's own saturation markers rather than readings.
+    public static double Rpm8(byte raw) => raw switch
+    {
+        0 => 0,                                     // stopped
+        1 => 400,                                   // running, below the bottom of the scale (500 rpm)
+        0xFE => 7_862,                              // "above about 7862"
+        0xFF => 10_053,                             // "above 10053"
+        < 0x40 => 7.8125 * (raw + 64),              //  500 - 1000
+        < 0x80 => 15.625 * raw,                     // 1000 - 2000
+        < 0xC0 => 31.25 * (raw - 64),               // 2000 - 4000
+        _ => 62.5 * (raw - 128),                    // 4000 - 8000
+    };
+
+    /// MAP from the raw A/D high byte: the sensor reads -70 mBar at 0 V and 1790 at 5 V.
+    public static double MapMbar(byte raw) => (raw * (1860.0 / 255)) - 70;
+
+    public static double MapKpa(byte raw) => MapMbar(raw) / 10;
+
+    /// The table/axis domain the ROM compares against: (Map16 - 0x1800) >> 7, which covers 108..1031 mBar. Boost cannot be represented in that byte.
+    public static int MapAxisByte(int map16) => Math.Clamp((map16 - 0x1800) >> 7, 0, 255);
+
+    /// The shared NTC curve for coolant and intake air: the polynomial in volts the ROM's own table follows, in degrees C.
+    public static double ThermistorC(byte raw)
+    {
+        double v = raw / 51.0;
+        double f = (0.1423 * Math.Pow(v, 6)) - (2.4938 * Math.Pow(v, 5)) + (17.837 * Math.Pow(v, 4))
+                   - (68.698 * Math.Pow(v, 3)) + (154.69 * v * v) - (232.75 * v) + 284.24;
+        return Math.Round((f - 32) * 5 / 9, 1);
+    }
+
+    /// A plain 0-5 V input (TPS, O2, ELD).
+    public static double Volts(byte raw) => raw / 51.0;
+
+    /// Battery volts: the divider is not the same as the plain inputs.
+    public static double BatteryVolts(byte raw) => Math.Round(raw * 4.9 / 51.0, 2);
+
+    /// Ignition advance from the raw byte the datalog streams.
+    public static double AdvanceDeg(byte raw) => (raw - 24) / 4.0;
+
+    /// Injector pulse width from the ROM's fuel word (4.00839 us per count).
+    public static double InjectorMs(int ticks) => Math.Round(ticks * 4.00839 / 1000, 3);
 }
 
 // ---------------------------------------------------------------- extra channels
@@ -463,12 +923,12 @@ public sealed class AuxChannel
         switch (parts[0].Trim().ToLowerInvariant())
         {
             case "byte" when raw != null && int.TryParse(parts[1], out var i) && i >= 0 && i < raw.Length: x = raw[i]; break;
-            case "word" when raw != null && int.TryParse(parts[1], out var w) && w >= 0 && w + 1 < raw.Length: x = raw[w] | raw[w + 1] << 8; break;
+            case "word" when raw != null && int.TryParse(parts[1], out var w) && w >= 0 && w + 1 < raw.Length: x = raw[w] | (raw[w + 1] << 8); break;
             case "bit" when raw != null:
                 {
                     var bb = parts[1].Split('.');
                     if (bb.Length == 2 && int.TryParse(bb[0], out var bi) && int.TryParse(bb[1], out var bit) && bi >= 0 && bi < raw.Length)
-                        x = raw[bi] >> (bit & 7) & 1;
+                        x = (raw[bi] >> (bit & 7)) & 1;
                     break;
                 }
             case "channel": x = f.Get(parts[1].Trim()); break;
@@ -490,10 +950,10 @@ public sealed class OverlayResult
 {
     public required ItemDef Item { get; init; }
     public required string Channel { get; init; }
-    public double[] Mean = Array.Empty<double>();
-    public double[] Min = Array.Empty<double>();
-    public double[] Max = Array.Empty<double>();
-    public int[] Count = Array.Empty<int>();
+    public double[] Mean = [];
+    public double[] Min = [];
+    public double[] Max = [];
+    public int[] Count = [];
     public int Frames;
     public string RowSource = "", ColSource = "";
 
@@ -509,7 +969,7 @@ public sealed class OverlayResult
             sb.Append($"{(r < rowAxis.Length ? rowAxis[r] : r),8:0.#}  ");
             for (int c = 0; c < Item.Cols; c++)
             {
-                int i = r * Item.Cols + c;
+                int i = (r * Item.Cols) + c;
                 sb.Append(Count[i] == 0 ? "         ." : $"{Mean[i],6:0.##}({Math.Min(Count[i], 99),2})");
             }
             sb.AppendLine();
@@ -557,7 +1017,7 @@ public static class LogOverlay
         {
             var (a0, i0) = pts[k]; var (a1, i1) = pts[k + 1];
             bool inside = asc ? v >= a0 && v <= a1 : v <= a0 && v >= a1;
-            if (inside && a1 != a0) return i0 + (v - a0) / (a1 - a0) * (i1 - i0);
+            if (inside && a1 != a0) return i0 + ((v - a0) / (a1 - a0) * (i1 - i0));
         }
         return asc ? (v < pts[0].a ? pts[0].i : pts[^1].i) : (v > pts[0].a ? pts[0].i : pts[^1].i);
     }
@@ -566,14 +1026,14 @@ public static class LogOverlay
                                         Func<LogFrame, bool>? filter = null)
     {
         int rows = Math.Max(1, item.Rows), cols = Math.Max(1, item.Cols), n = rows * cols;
-        var rowAxis = item.RowAxis == null ? Enumerable.Range(0, rows).Select(i => (double)i).ToArray() : RomData.AxisValues(defs, rom, item.RowAxis, rows);
-        var colAxis = item.ColAxis == null ? Enumerable.Range(0, cols).Select(i => (double)i).ToArray() : RomData.AxisValues(defs, rom, item.ColAxis, cols);
+        var rowAxis = item.RowAxis == null ? [.. Enumerable.Range(0, rows).Select(i => (double)i)] : RomData.AxisValues(defs, rom, item.RowAxis, rows);
+        var colAxis = item.ColAxis == null ? [.. Enumerable.Range(0, cols).Select(i => (double)i)] : RomData.AxisValues(defs, rom, item.ColAxis, cols);
         var (rn, rget) = AxisInput(defs, item.RowAxis, true);
         var (cn, cget) = AxisInput(defs, item.ColAxis, false);
         var res = new OverlayResult
         {
-            Item = item, Channel = channel, Mean = new double[n], Min = Enumerable.Repeat(double.MaxValue, n).ToArray(),
-            Max = Enumerable.Repeat(double.MinValue, n).ToArray(), Count = new int[n], RowSource = rn, ColSource = cn,
+            Item = item, Channel = channel, Mean = new double[n], Min = [.. Enumerable.Repeat(double.MaxValue, n)],
+            Max = [.. Enumerable.Repeat(double.MinValue, n)], Count = new int[n], RowSource = rn, ColSource = cn,
         };
         var sum = new double[n];
         filter ??= MapSide.Filter(item);      // don't smear the high-cam map into the low-cam one
@@ -583,7 +1043,7 @@ public static class LogOverlay
             if (f.Get(channel) is not double v || rget(f) is not double rv || (cols > 1 && cget(f) is not double)) continue;
             int r = item.RowAxis == null && rows == 1 ? 0 : Nearest(rowAxis, rv);
             int c = cols == 1 ? 0 : Nearest(colAxis, cget(f)!.Value);
-            int i = r * cols + c;
+            int i = (r * cols) + c;
             sum[i] += v; res.Count[i]++;
             res.Min[i] = Math.Min(res.Min[i], v); res.Max[i] = Math.Max(res.Max[i], v);
             res.Frames++;
@@ -608,8 +1068,7 @@ public static class LogFile
         var data = File.ReadAllBytes(path);
         if (IsLoggerFile(data)) return LoadLogger(data);
         // .log files are written encoded; decode and look again
-        if (data.Length > 160 && DecodeLogger(data) is { } dec && IsLoggerFile(dec)) return LoadLogger(dec);
-        return LoadCsv(path);
+        return data.Length > 160 && DecodeLogger(data) is { } dec && IsLoggerFile(dec) ? LoadLogger(dec) : LoadCsv(path);
     }
 
     static bool IsLoggerFile(byte[] data) =>
@@ -679,8 +1138,7 @@ public static class LogFile
             try
             {
                 var f = new byte[HondaDatalog.FrameLength];
-                // record order in the file: bytes0-5, rpm word, bytes6-14, inj word, ign x2,
-                // inputs, outputs, ..., then the elapsed-ms counters
+                // record order in the file: bytes0-5, rpm word, bytes6-14, inj word, ign x2, inputs, outputs, ..., then the elapsed-ms counters
                 for (int i = 0; i < 6; i++) f[i] = r.ReadByte();
                 f[6] = r.ReadByte(); f[7] = r.ReadByte();
                 for (int i = 8; i <= 16; i++) f[i] = r.ReadByte();
@@ -802,7 +1260,7 @@ public static class LogFile
     public static void SaveCsv(string path, IEnumerable<LogFrame> frames)
     {
         var all = frames.ToList();
-        var extras = all.SelectMany(f => f.Extra.Keys).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(k => k).ToList();
+        var extras = LogFrame.AllChannels(all).Where(c => !LogFrame.Fields.Contains(c)).ToList();
         var sb = new StringBuilder();
         sb.AppendLine("time_s," + string.Join(",", LogFrame.Fields.Concat(extras)) + ",protocol,raw");
         foreach (var f in all)

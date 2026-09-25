@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
@@ -13,11 +14,11 @@ public sealed class ProjectData
     public string? Current { get; set; }
     public int CaretLine { get; set; }
     public int FirstVisibleLine { get; set; }
-    public List<ProjectSource> Sources { get; set; } = new();
+    public List<ProjectSource> Sources { get; set; } = [];
     public string MemoryAddress { get; set; } = "";
     public string DisassemblyAddress { get; set; } = "";
     public string LookupQuery { get; set; } = "";
-    public List<string> LookupLines { get; set; } = new();
+    public List<string> LookupLines { get; set; } = [];
     public string SelectedTab { get; set; } = "";
     public int SpeedIndex { get; set; }
     public string Package { get; set; } = "";
@@ -25,10 +26,10 @@ public sealed class ProjectData
 
     // not in project.json; carried in their own zip entries
     [System.Text.Json.Serialization.JsonIgnore] public SimHost.MachineState? Machine { get; set; }
-    [System.Text.Json.Serialization.JsonIgnore] public byte[] Ram { get; set; } = Array.Empty<byte>();
-    [System.Text.Json.Serialization.JsonIgnore] public byte[] Rom { get; set; } = Array.Empty<byte>();
+    [System.Text.Json.Serialization.JsonIgnore] public byte[] Ram { get; set; } = [];
+    [System.Text.Json.Serialization.JsonIgnore] public byte[] Rom { get; set; } = [];
     [System.Text.Json.Serialization.JsonIgnore] public DefinitionSet? Definitions { get; set; }
-    [System.Text.Json.Serialization.JsonIgnore] public Dictionary<string, string> Views { get; set; } = new();
+    [System.Text.Json.Serialization.JsonIgnore] public Dictionary<string, string> Views { get; set; } = [];
     /// processor.json: the chip and board (ProcessorProfile), editable by hand.
     [System.Text.Json.Serialization.JsonIgnore] public string? ProcessorJson { get; set; }
     /// settings.json: the settings in use while the ROM was open (no window layout, no secrets).
@@ -90,7 +91,7 @@ public static class ProjectFile
         byte[] Bytes(string name)
         {
             var e = zip.GetEntry(name);
-            if (e == null) return Array.Empty<byte>();
+            if (e == null) return [];
             using var s = e.Open();
             using var ms = new MemoryStream();
             s.CopyTo(ms);

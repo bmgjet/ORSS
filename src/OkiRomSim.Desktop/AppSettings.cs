@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -16,7 +17,8 @@ public sealed class AppSettings
     public string LeftColumn { get; set; } = "3*";
     public string CentreColumn { get; set; } = "4*";
     public string RightColumn { get; set; } = "3*";
-    public string BottomPanel { get; set; } = "360";
+    /// Height of the tabbed panel under the source: a share of the window unless you have dragged it (then pixels).
+    public string BottomPanel { get; set; } = "1.5*";
     public string SelectedTab { get; set; } = "Problems";
     public int SpeedIndex { get; set; } = 2;
     public string Package { get; set; } = "Sdip64";
@@ -25,6 +27,10 @@ public sealed class AppSettings
 
     // appearance
     public double UiScale { get; set; } = 1.0;
+    /// Pick the UI scale and the panel layout for the screen the app starts on (ScreenFit).
+    public bool FitToScreen { get; set; } = true;
+    /// The screen they were last picked for ("1366x728@1"): a different screen picks them again.
+    public string FittedFor { get; set; } = "";
     /// Let the window manager draw the title bar instead of the dark one drawn here. Only needed on a Linux desktop whose window manager ignores the "border only" hint.
     public bool SystemTitleBar { get; set; }
     /// Minutes between automatic restore points (0 = off).
@@ -40,7 +46,7 @@ public sealed class AppSettings
     public string HitDataColour { get; set; } = "#468CFF";
 
     /// Zoom of each panel (Ctrl + mouse wheel over it): "Source", "Pinout", "Inputs", "Right", "Calibration", "Datalog", "Trace", ... -> scale.
-    public Dictionary<string, double> PanelZoom { get; set; } = new();
+    public Dictionary<string, double> PanelZoom { get; set; } = [];
     /// Tuner mode: the calibration editor as the main page with datalogging beside it.
     public bool TunerMode { get; set; }
 
@@ -60,7 +66,7 @@ public sealed class AppSettings
     public int DatalogIntervalMs { get; set; } = 0;
     public bool DatalogDrivesSimulator { get; set; } = true;
     /// Readings from somewhere other than the ECU: an HTTP endpoint or a JSON file, polled in the background and offered to the gauges as `name.key` channels.
-    public List<ExternalFeedSettings> ExternalFeeds { get; set; } = new();
+    public List<ExternalFeedSettings> ExternalFeeds { get; set; } = [];
 
     // ---- tuning targets (Settings > Targets)
     /// AFR you want the engine to run, across rpm and load, for each cam. Text in the same shape a spreadsheet pastes: load across the top, rpm down the left.
@@ -77,14 +83,30 @@ public sealed class AppSettings
     public string WidebandPort { get; set; } = "";
     public int WidebandBaud { get; set; } = 9600;
     public double StoichAfr { get; set; } = 14.7;
-    public List<AuxChannelSetting> AuxChannels { get; set; } = new();
+    public List<AuxChannelSetting> AuxChannels { get; set; } = [];
     public string OverlayChannel { get; set; } = "afr";
     /// A datalog layout worked out from the ROM (Datalog page > Detect layout), as JSON.
     public string? DetectedLayout { get; set; }
 
-    // hit trace and the ROM emulator (Moates Ostrich 2.0 / Demon)
+    // ---- how the serial link is driven (the numbers the established tuning software exposes)
+    /// Milliseconds to wait for the bytes of one frame before giving up on it.
+    public int SerialTimeoutMs { get; set; } = 120;
+    /// Milliseconds to wait for a write to go out.
+    public int SerialWriteTimeoutMs { get; set; } = 300;
+    /// A pause after writing a command before the answer is read. Some USB-serial cables need it; 10 ms is what the tuning software uses.
+    public int PostWritePauseMs { get; set; } = 10;
+    /// How many times a handshake or a frame is retried before the link is called dead.
+    public int SerialRetries { get; set; } = 3;
+    /// Raise DTR and RTS when the port is opened. Most OBD1 cables do not care; a few take their power from these lines.
+    public bool SerialDtrRts { get; set; }
+
+    // hit trace and the ROM emulator
+    /// Which emulator is in the ROM socket: "Ostrich", "Demon", "ROMulator", "PGMFI RTP", "CobraRTP", "ECU-Tamer", "Moates1" or "auto".
+    public string EmulatorType { get; set; } = "auto";
+    /// Emulator baud rate. The Ostrich / Demon family speak 115200 or 921600; a PGMFI RTP speaks 38400.
+    public int EmulatorBaud { get; set; } = 921600;
     public string MoatesPort { get; set; } = "";
-    public string MoatesBase { get; set; } = "78000";
+    public string MoatesBase { get; set; } = "8000";
     public bool HitSkipRepeats { get; set; } = true;
     public bool HitColourSource { get; set; } = true;
     public bool EmulatorAutoUpload { get; set; }
@@ -141,7 +163,7 @@ public sealed class AppSettings
             McpPasswordStored = "dpapi:" + Convert.ToBase64String(enc);
         }
     }
-    public List<string> McpRoots { get; set; } = new();
+    public List<string> McpRoots { get; set; } = [];
     public bool McpReadOnly { get; set; }
 
     // ------------------------------------------------------------------ load / save
@@ -180,6 +202,7 @@ public sealed class AppSettings
 
     public void Save()
     {
+        if (UiCheck.Active) return;   // the layout check resizes everything: it must not become your layout
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
@@ -196,7 +219,7 @@ public sealed class AppSettings
     public AppSettings RomScoped()
     {
         var c = Clone();
-        c.McpPasswordStored = ""; c.McpRoots = new(); c.McpEnabled = false;
+        c.McpPasswordStored = ""; c.McpRoots = []; c.McpEnabled = false;
         c.WindowX = c.WindowY = null; c.LastFile = null;
         return c;
     }

@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Text.RegularExpressions;
 using Avalonia;
 using Avalonia.Controls;
@@ -17,17 +18,17 @@ public sealed class HitTraceView : UserControl
     readonly ComboBox _source = new() { Width = 190, ItemsSource = new[] { "Simulator", "Ostrich 2.0 / Demon (serial)" }, SelectedIndex = 0 };
     readonly Button _connect, _upload, _start;
     // set in Settings > Hit trace & emulator
-    string _port = "", _base = "78000";
-    bool _nonRedundant = true, _colour = true;
+    string _port = "", _base = "8000";
+    bool _nonRedundant = true;
     readonly TextBlock _status = new() { FontSize = 11, Opacity = 0.85, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
     readonly TextBlock _summary = new() { FontSize = 11, Opacity = 0.85, Margin = new Thickness(4, 2) };
     readonly ListBox _flow = UiStyles.Compact(new ListBox { FontFamily = MainWindow.MonoFont, FontSize = 11.5 });
-    List<int> _flowAddrs = new();
+    List<int> _flowAddrs = [];
     DateTime _lastHeavy;
     long _lastFlowKey = -1;
 
     public event Action<int>? GoToAddress;
-    public bool ColourSource => _colour;
+    public bool ColourSource { get; private set; } = true;
     public bool Hardware => _source.SelectedIndex == 1;
 
     public HitTraceView(SimHost host, Func<string, string?> sourceText)
@@ -161,7 +162,7 @@ public sealed class HitTraceView : UserControl
         if (!Hardware)
         {
             var (now, exec, data, count) = _host.SimHits();
-            double Heat(ulong at) => at == 0 ? 0 : Math.Clamp(1 - (now - Math.Min(now, at)) / Bus.CpuHz / 2.0, 0, 1);
+            double Heat(ulong at) => at == 0 ? 0 : Math.Clamp(1 - ((now - Math.Min(now, at)) / Bus.CpuHz / 2.0), 0, 1);
             foreach (var e in entries)
             {
                 if (e.Address >= Bus.RomSize) continue;
@@ -184,7 +185,7 @@ public sealed class HitTraceView : UserControl
                     if (hits.Count[e.Address + i] > 0) last = Math.Max(last, hits.Last[e.Address + i]);
                 if (last == 0) continue;
                 bool data = text != null && e.Line - 1 < text.Length && DataLine.IsMatch(text[e.Line - 1]);
-                result[e.Line] = (!data, Math.Clamp(1 - HitStore.Seconds(now - last) / 2.0, 0, 1));
+                result[e.Line] = (!data, Math.Clamp(1 - (HitStore.Seconds(now - last) / 2.0), 0, 1));
             }
         }
         return result;
@@ -254,7 +255,7 @@ public sealed class HitTraceView : UserControl
     /// Settings > Hit trace & emulator.
     public void SetOptions(string port, string windowBase, bool skipRepeats, bool colourSource)
     {
-        _port = port; _base = windowBase.Length > 0 ? windowBase : "78000";
-        _nonRedundant = skipRepeats; _colour = colourSource;
+        _port = port; _base = windowBase.Length > 0 ? windowBase : "8000";
+        _nonRedundant = skipRepeats; ColourSource = colourSource;
     }
 }

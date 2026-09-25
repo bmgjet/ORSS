@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -5,13 +6,7 @@ using System.Xml;
 
 namespace OkiRomSim.Calibration;
 
-/// Writes a definition set as a TunerPro XDF: tables as XDFTABLE (axis breakpoints as labels, read from the ROM at export time), single values as XDFCONSTANT, switches as XDFFLAG.
-/// The layout follows XDFs TunerPro itself wrote (reference/tunerpro): a plain
-/// `<baseoffset>` element, 8-bit label axes with a -32 major stride, and a z axis that carries
-/// only the address, element size, row and column counts - a row stride only when the rows are
-/// not packed. Anything more (extra attributes, a base-offset element in the newer attribute
-/// form) has been seen to make TunerPro read from the wrong place.
-/// XDF math is plain arithmetic in X. Formulas that are more than that (the log-scaled rpm axis byte, comparisons) are exported raw with the real formula in the description. Fuel maps multiply each column by a multiplier row, which XDF cannot express per column: the map is exported as stored and the multiplier row as its own table, and the description says so.
+/// Writes a definition set as a TunerPro XDF: tables as XDFTABLE (axis breakpoints as labels, read from the ROM at export time), single values as XDFCONSTANT, switches as XDFFLAG. The layout follows XDFs TunerPro itself wrote (reference/tunerpro): a plain `<baseoffset>` element, 8-bit label axes with a -32 major stride, and a z axis that carries only the address, element size, row and column counts - a row stride only when the rows are not packed. Anything more (extra attributes, a base-offset element in the newer attribute form) has been seen to make TunerPro read from the wrong place. XDF math is plain arithmetic in X. Formulas that are more than that (the log-scaled rpm axis byte, comparisons) are exported raw with the real formula in the description. Fuel maps multiply each column by a multiplier row, which XDF cannot express per column: the map is exported as stored and the multiplier row as its own table, and the description says so.
 public static class XdfExport
 {
     static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
@@ -27,6 +22,15 @@ public static class XdfExport
         PaddingOnly,
     }
 
+    /// How much of the file to write.
+    public enum Layout
+    {
+        /// Exactly the shape of the XDFs written for these ECUs that are known to work - and nothing else. Header: flags, description, baseoffset, DEFAULTS. Tables: a title, the two label axes, the data axis. No definition title, no region, no categories, no per-item descriptions, no side tables. Everything TunerPro needs to read the maps and not one element more, because every extra element is a chance to be read differently by a version of TunerPro nobody here has.
+        Reference,
+        /// The same, plus a definition title, the binary region, categories, and a description on every item saying where it came from and how the ROM really scales it - and, for a fuel map, its per-column multiplier row as a table of its own. More useful to read; more to go wrong if a TunerPro build disagrees about any of it.
+        Annotated,
+    }
+
     /// What the numbers in TunerPro mean.
     public enum Values
     {
@@ -38,11 +42,15 @@ public static class XdfExport
 
     [ThreadStatic] static Stride _stride;
     [ThreadStatic] static Values _values;
+    [ThreadStatic] static Layout _layout;
 
-    public static string Write(DefinitionSet defs, byte[] rom, string title, Stride stride = Stride.PaddingAsColumns, Values values = Values.Raw)
+    public static string Write(DefinitionSet defs, byte[] rom, string title, Stride stride = Stride.PaddingAsColumns,
+                               Values values = Values.Raw, Layout layout = Layout.Reference)
     {
         _stride = stride;
         _values = values;
+        _layout = layout;
+        bool full = layout == Layout.Annotated;
         var sb = new StringBuilder();
         var settings = new XmlWriterSettings { Indent = true, IndentChars = "  ", OmitXmlDeclaration = true, Encoding = new UTF8Encoding(false) };
         using (var w = XmlWriter.Create(sb, settings))
@@ -54,8 +62,9 @@ public static class XdfExport
             var categories = defs.Items.Select(i => string.IsNullOrWhiteSpace(i.Category) ? "General" : i.Category).Distinct().OrderBy(c => c).ToList();
             w.WriteStartElement("XDFHEADER");
             w.WriteElementString("flags", "0x1");
-            w.WriteElementString("deftitle", title);
-            w.WriteElementString("description", $"{defs.Items.Count} definitions for {defs.Name}. 66K ECU, little-endian words.");
+            if (full) w.WriteElementString("deftitle", title);
+            // the reference files carry the element empty rather than leaving it out
+            w.WriteElementString("description", full ? $"{defs.Items.Count} definitions for {defs.Name}. 66K ECU, little-endian words." : "");
             w.WriteElementString("baseoffset", "0");
             w.WriteStartElement("DEFAULTS");
             w.WriteAttributeString("datasizeinbits", "8"); w.WriteAttributeString("sigdigits", "2"); w.WriteAttributeString("outputtype", "1");
@@ -64,17 +73,20 @@ public static class XdfExport
             w.WriteAttributeString("lsbfirst", anyLittleEndianWords ? "1" : "0");
             w.WriteAttributeString("float", "0");
             w.WriteEndElement();
-            w.WriteStartElement("REGION");
-            w.WriteAttributeString("type", "0xFFFFFFFF"); w.WriteAttributeString("startaddress", "0x0");
-            w.WriteAttributeString("size", "0x" + Math.Max(rom.Length, defs.RomSize).ToString("X")); w.WriteAttributeString("regionflags", "0x0");
-            w.WriteAttributeString("name", "Binary File"); w.WriteAttributeString("desc", "This region describes the bin file edited by this XDF");
-            w.WriteEndElement();
-            for (int i = 0; i < categories.Count; i++)
+            if (full)
             {
-                w.WriteStartElement("CATEGORY");
-                w.WriteAttributeString("index", "0x" + i.ToString("X"));
-                w.WriteAttributeString("name", categories[i]);
+                w.WriteStartElement("REGION");
+                w.WriteAttributeString("type", "0xFFFFFFFF"); w.WriteAttributeString("startaddress", "0x0");
+                w.WriteAttributeString("size", "0x" + Math.Max(rom.Length, defs.RomSize).ToString("X")); w.WriteAttributeString("regionflags", "0x0");
+                w.WriteAttributeString("name", "Binary File"); w.WriteAttributeString("desc", "This region describes the bin file edited by this XDF");
                 w.WriteEndElement();
+                for (int i = 0; i < categories.Count; i++)
+                {
+                    w.WriteStartElement("CATEGORY");
+                    w.WriteAttributeString("index", "0x" + i.ToString("X"));
+                    w.WriteAttributeString("name", categories[i]);
+                    w.WriteEndElement();
+                }
             }
             w.WriteEndElement(); // XDFHEADER
 
@@ -103,8 +115,7 @@ public static class XdfExport
     {
         var e = Regex.Replace(f.Expr, @"max\(\s*x\s*,\s*1\s*\)", "X", RegexOptions.IgnoreCase);
         e = Regex.Replace(e, @"\bx\b", "X");
-        if (!Regex.IsMatch(e, @"^[0-9X+\-*/(). ]+$")) return null;
-        return e.Replace(" ", "");
+        return !Regex.IsMatch(e, @"^[0-9X+\-*/(). ]+$") ? null : e.Replace(" ", "");
     }
 
     static int Bits(ItemDef item) => item.ElementSize * 8;
@@ -120,6 +131,7 @@ public static class XdfExport
 
     static void Category(XmlWriter w, int cat)
     {
+        if (_layout == Layout.Reference) return;
         w.WriteStartElement("CATEGORYMEM");
         w.WriteAttributeString("index", "0");
         w.WriteAttributeString("category", cat.ToString(Inv));
@@ -128,6 +140,7 @@ public static class XdfExport
 
     static string Describe(ItemDef item, FormulaDef f, string? eq)
     {
+        if (_layout == Layout.Reference) return "";
         var d = item.Description;
         if (eq == null && f.Name != "raw") d += (d.Length > 0 ? " " : "") + $"[shown raw: the formula {f.Name} = {f.Expr} cannot be written as XDF math]";
         if (item.Origin != null) d += (d.Length > 0 ? " " : "") + $"({item.Origin})";
@@ -207,12 +220,15 @@ public static class XdfExport
         w.WriteAttributeString("flags", "0x0");
         w.WriteElementString("title", item.Name);
         var desc = Describe(item, f, eq);
-        if (_stride == Stride.PaddingAsColumns && item.RowStride != cols * item.ElementSize)
-            desc += $" The ROM keeps {item.RowStride} bytes per row and uses the first {cols}; the rest are shown as columns marked 'pad' so every cell lands where it really is - leave them alone.";
-        if (eq == null && Equation(f) is { } real && real != "X")
-            desc += $" Values are the bytes as stored; this ROM reads them as {real.Replace("X", "the stored byte")}{(f.Unit.Length > 0 ? " " + f.Unit : "")}.";
-        if (item.ColumnScaleAddress is int ms)
-            desc += $" Cells are as stored; the ECU multiplies each column by the byte in {item.Name}_multiplier (at {ms:X4}) before scaling, which XDF cannot do per column.";
+        if (_layout == Layout.Annotated)
+        {
+            if (_stride == Stride.PaddingAsColumns && item.RowStride != cols * item.ElementSize)
+                desc += $" The ROM keeps {item.RowStride} bytes per row and uses the first {cols}; the rest are shown as columns marked 'pad' so every cell lands where it really is - leave them alone.";
+            if (eq == null && Equation(f) is { } real && real != "X")
+                desc += $" Values are the bytes as stored; this ROM reads them as {real.Replace("X", "the stored byte")}{(f.Unit.Length > 0 ? " " + f.Unit : "")}.";
+            if (item.ColumnScaleAddress is int ms)
+                desc += $" Cells are as stored; the ECU multiplies each column by the byte in {item.Name}_multiplier (at {ms:X4}) before scaling, which XDF cannot do per column.";
+        }
         if (desc.Length > 0) w.WriteElementString("description", desc);
         Category(w, cat);
         // when the padding goes out as extra columns, the x axis has to be that wide too
@@ -220,9 +236,9 @@ public static class XdfExport
             ? item.RowStride / item.ElementSize : cols;
         var colLabels = AxisLabels(defs, rom, item.ColAxis, cols);
         if (shownCols > cols)
-            colLabels = colLabels.Concat(Enumerable.Range(cols, shownCols - cols).Select(_ => "pad")).ToArray();
-        WriteAxis(w, "x", shownCols, colLabels);
-        WriteAxis(w, "y", rows, AxisLabels(defs, rom, item.RowAxis, rows));
+            colLabels = [.. colLabels, .. Enumerable.Range(cols, shownCols - cols).Select(_ => "pad")];
+        WriteAxis(w, "x", shownCols, colLabels, AxisUnits(item.ColAxis, "x"));
+        WriteAxis(w, "y", rows, AxisLabels(defs, rom, item.RowAxis, rows), AxisUnits(item.RowAxis, "y"));
         w.WriteStartElement("XDFAXIS");
         w.WriteAttributeString("id", "z");
         EmbeddedData(w, item, rows, cols);
@@ -238,7 +254,8 @@ public static class XdfExport
         w.WriteEndElement(); // XDFTABLE
         id++;
 
-        if (item.ColumnScaleAddress is int mult)
+        // the reference files leave the multiplier rows out altogether; they are only useful alongside a description explaining what they are for
+        if (_layout == Layout.Annotated && item.ColumnScaleAddress is int mult)
         {
             var m = new ItemDef
             {
@@ -253,14 +270,23 @@ public static class XdfExport
     static string[] AxisLabels(DefinitionSet defs, byte[] rom, AxisDef? axis, int count)
     {
         double[] values;
-        try { values = axis == null ? Enumerable.Range(0, count).Select(i => (double)i).ToArray() : RomData.AxisValues(defs, rom, axis, count); }
-        catch { values = Enumerable.Range(0, count).Select(i => (double)i).ToArray(); }
-        return Enumerable.Range(0, count)
-            .Select(i => i < values.Length && !double.IsNaN(values[i]) ? values[i].ToString("0.00", Inv) : i.ToString(Inv)).ToArray();
+        try { values = axis == null ? [.. Enumerable.Range(0, count).Select(i => (double)i)] : RomData.AxisValues(defs, rom, axis, count); }
+        catch { values = [.. Enumerable.Range(0, count).Select(i => (double)i)]; }
+        return [.. Enumerable.Range(0, count).Select(i => i < values.Length && !double.IsNaN(values[i]) ? values[i].ToString("0.00", Inv) : i.ToString(Inv))];
+    }
+
+    /// The (datatype, unittype) pair the working files carry on a table's label axes. They are TunerPro's own unit codes, and the reference XDF uses 23/20 on the load axis and 6/26 on the rpm axis; anything else gets 0/0, which means "no unit" and is what TunerPro writes when it does not know either.
+    static (string Data, string Unit) AxisUnits(AxisDef? axis, string which)
+    {
+        string unit = (axis?.Unit ?? "").ToLowerInvariant();
+        if (unit.Contains("rpm")) return ("6", "26");
+        if (unit.Contains("bar") || unit.Contains("kpa") || unit.Contains("psi")) return ("23", "20");
+        // nothing said: the reference files still label the axes by position, columns being load
+        return which == "x" ? ("23", "20") : ("6", "26");
     }
 
     /// A label axis: the breakpoints as text, exactly as TunerPro writes them (8-bit elements and a -32 major stride mark an axis that is not read from the file).
-    static void WriteAxis(XmlWriter w, string which, int count, string[] labels)
+    static void WriteAxis(XmlWriter w, string which, int count, string[] labels, (string Data, string Unit) units)
     {
         w.WriteStartElement("XDFAXIS");
         w.WriteAttributeString("id", which);
@@ -270,8 +296,8 @@ public static class XdfExport
         w.WriteAttributeString("mmedmajorstridebits", "-32");
         w.WriteEndElement();
         w.WriteElementString("indexcount", count.ToString(Inv));
-        w.WriteElementString("datatype", "0");
-        w.WriteElementString("unittype", "0");
+        w.WriteElementString("datatype", units.Data);
+        w.WriteElementString("unittype", units.Unit);
         w.WriteStartElement("DALINK"); w.WriteAttributeString("index", "0"); w.WriteEndElement();
         for (int i = 0; i < count; i++)
         {

@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -62,8 +63,7 @@ public sealed class McpServer
                 if (item is JsonObject o && HandleOne(o) is { } r) responses.Add(r);
             return responses.Count == 0 ? null : responses.ToJsonString();
         }
-        if (node is not JsonObject msg) return Error(null, -32600, "invalid request").ToJsonString();
-        return HandleOne(msg)?.ToJsonString();
+        return node is not JsonObject msg ? Error(null, -32600, "invalid request").ToJsonString() : (HandleOne(msg)?.ToJsonString());
     }
 
     JsonObject? HandleOne(JsonObject msg)
@@ -77,7 +77,7 @@ public sealed class McpServer
             JsonNode? result = method switch
             {
                 "initialize" => Initialize(msg["params"] as JsonObject),
-                "ping" => new JsonObject(),
+                "ping" => [],
                 "tools/list" => ListTools(),
                 "tools/call" => CallTool(msg["params"] as JsonObject),
                 "resources/list" => new JsonObject { ["resources"] = new JsonArray() },
@@ -85,8 +85,7 @@ public sealed class McpServer
                 _ when method.StartsWith("notifications/") => null,
                 _ => throw new RpcException(-32601, $"method not found: {method}"),
             };
-            if (notification) return null;
-            return new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id, ["result"] = result ?? new JsonObject() };
+            return notification ? null : new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id, ["result"] = result ?? new JsonObject() };
         }
         catch (RpcException ex) { return notification ? null : Error(id, ex.Code, ex.Message); }
         catch (Exception ex) { return notification ? null : Error(id, -32603, ex.Message); }
@@ -131,7 +130,7 @@ public sealed class McpServer
     {
         var name = p?["name"]?.GetValue<string>() ?? throw new RpcException(-32602, "missing tool name");
         if (!_tools.TryGetValue(name, out var tool)) throw new RpcException(-32602, $"unknown tool '{name}' (call help for the list)");
-        var args = p?["arguments"] as JsonObject ?? new JsonObject();
+        var args = p?["arguments"] as JsonObject ?? [];
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var (text, isError) = RunGuarded(tool, args);
         string argText = args.ToJsonString();
@@ -147,9 +146,7 @@ public sealed class McpServer
         };
     }
 
-    // One tool at a time: tools share caches (loaded programs, the app's ROM). Each runs on its
-    // own thread with a large stack, so deep recursion in a hostile or corrupt input is an
-    // error for that call rather than the end of the process hosting the server.
+    // One tool at a time: tools share caches (loaded programs, the app's ROM). Each runs on its own thread with a large stack, so deep recursion in a hostile or corrupt input is an error for that call rather than the end of the process hosting the server.
     readonly SemaphoreSlim _gate = new(1, 1);
 
     (string Text, bool IsError) RunGuarded(McpTool tool, JsonObject args)
@@ -175,7 +172,7 @@ public sealed class McpServer
 
     /// Call a tool directly (tests, the desktop app). Throws ToolException on tool errors.
     public string Call(string tool, JsonObject? args = null) =>
-        _tools.TryGetValue(tool, out var t) ? t.Run(args ?? new JsonObject()) : throw new ToolException($"unknown tool '{tool}'");
+        _tools.TryGetValue(tool, out var t) ? t.Run(args ?? []) : throw new ToolException($"unknown tool '{tool}'");
 }
 
 /// The directories tools may read and write. Every path an agent passes is resolved against the first root (when relative) and must end up inside one of the roots.
@@ -184,12 +181,17 @@ public sealed class Workspace
     readonly List<string> _roots;
     public IReadOnlyList<string> Roots => _roots;
     public bool ReadOnly { get; init; }
+    /// A folder inside the workspace that an agent on another machine can always write to, for sending a file across and asking for it to be opened. The host sets it (the desktop app keeps one beside its settings and puts it in the workspace); left unset, the first root is used, which is what a head-less server started with --root already means.
+    public string? TransferDir { get; set; }
+
+    /// Where an upload lands when no folder was named.
+    public string Transfer => TransferDir is { Length: > 0 } t ? t : Roots[0];
     /// Asked before a folder outside the workspace is taken in: the desktop app puts the question to the user. Null (a head-less server) means the answer is no.
     public Func<string, string, bool>? AskToAddRoot { get; set; }
 
     public Workspace(IEnumerable<string> roots)
     {
-        _roots = roots.Select(r => Path.TrimEndingDirectorySeparator(Path.GetFullPath(r))).Distinct().ToList();
+        _roots = [.. roots.Select(r => Path.TrimEndingDirectorySeparator(Path.GetFullPath(r))).Distinct()];
         if (_roots.Count == 0) throw new ArgumentException("at least one workspace root is needed");
     }
 
@@ -228,8 +230,7 @@ public sealed class Workspace
             var target = info.ResolveLinkTarget(true)?.FullName ?? "";
             if (!Roots.Any(r => target.StartsWith(r + Path.DirectorySeparatorChar, Cmp))) throw new ToolException($"'{path}' links outside the workspace");
         }
-        if (mustExist && !File.Exists(full) && !Directory.Exists(full)) throw new ToolException($"'{path}' does not exist");
-        return full;
+        return mustExist && !File.Exists(full) && !Directory.Exists(full) ? throw new ToolException($"'{path}' does not exist") : full;
     }
 
     /// True when a full path is inside the workspace (the assembler's include sandbox).

@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 // Honda OBD1 D16Z6 / P28 Engine Simulator.
 namespace OkiRomSim.Core;
 
@@ -11,6 +12,8 @@ public sealed class EngineState
     public double O2Volts = 0.45;          // Stoichiometric lambda
     public double VbattVolts = 14.2;       // Alternator running voltage
     public double SpeedKmh = 0.0;
+    /// A/C switch (P28 pin B5), on the 4700h switch buffer bit 2.
+    public bool AcRequest;
 
     public ulong CkpPulseCount;
     public ulong TdcPulseCount;
@@ -27,7 +30,7 @@ public sealed class EngineState
     /// Barometric pressure. Sea level ~101 kPa.
     public double BaroKpa = 101.0;
 
-    /// Electrical load detector. Its P28 mux channel has not been traced, so it is kept for scenarios but not published on any ADC input.
+    /// Electrical load detector, on the ADCR1 multiplexer position 0 (datalog byte 24).
     public double EldVolts = 1.5;
 
     /// Knock sensor intensity, 0..1. Not published: the knock input path is not traced.
@@ -36,10 +39,17 @@ public sealed class EngineState
     /// EGR valve lift feedback, P5.3/AI3.
     public double EgrLiftPct;
 
-    /// Vehicle speed pulses on INT0. 4 pulses per metre is the usual Honda VSS scaling; the ROM's own speed calibration decides what that reads as.
-    public double VssPulsesPerKm = 4000.0;
+    /// Vehicle speed pulses on INT0. Honda's VSS gives 2548 pulses per km: that is what the stock speed constant (VSS period -> 0CCh km/h, 25FB4h / period in the P28/P30 family) reads correctly, measured 1.57x high at 4000.
+    public double VssPulsesPerKm = 2548.0;
     public ulong VssPulseCount;
     public ulong LastVssCycle;
+
+    /// Forget the pulse-train timing: the CPU's cycle count restarts at 0 on a reset.
+    public void ResetTiming()
+    {
+        CkpPulseCount = TdcPulseCount = LastInt0Cycle = VssPulseCount = LastVssCycle = 0;
+        _nextCkpCycle = 0;
+    }
 
     /// 10-bit ADC counts for a voltage on the 5 V reference.
     public static ushort Counts(double volts) => (ushort)Clamp(Math.Round(volts / 5.0 * 1023.0), 0, 1023);
@@ -47,15 +57,15 @@ public sealed class EngineState
     /// Honda-style NTC thermistor (ECT/IAT) on a 2.2 kOhm pull-up: ~2.8 V at 20 C, ~0.7 V at 80 C, rising towards 5 V when cold.
     public static double ThermistorVolts(double celsius)
     {
-        double r = 2250.0 * Math.Exp(3400.0 * (1.0 / (celsius + 273.15) - 1.0 / 298.15));
+        double r = 2250.0 * Math.Exp(3400.0 * ((1.0 / (celsius + 273.15)) - (1.0 / 298.15)));
         return 5.0 * r / (r + 2200.0);
     }
 
     /// MAP/baro sensor voltage, from the tuning software's MAP byte scaling (kPa = (byte * 7.221 - 59) / 10, byte = volts * 255 / 5).
-    public static double PressureVolts(double kpa) => (kpa * 10.0 + 59.0) / 7.221 * 5.0 / 255.0;
+    public static double PressureVolts(double kpa) => ((kpa * 10.0) + 59.0) / 7.221 * 5.0 / 255.0;
 
-    /// Battery voltage through the ECU's input divider (20 V full scale).
-    public static double BatteryPinVolts(double vbatt) => vbatt / 4.0;
+    /// Battery voltage through the ECU's input divider: the scaling the datalog tools read it back with (volts = 26 x byte / 270), i.e. about 24.5 V full scale.
+    public static double BatteryPinVolts(double vbatt) => vbatt * 270.0 / 26.0 * 5.0 / 255.0;
 
     /// Update the P28 board's analog inputs from physical sensor parameters. Channel assignments are the ones the ROMs read (see Bus.P28*).
     public void SyncSensorsToBus(Bus bus)
@@ -65,15 +75,34 @@ public sealed class EngineState
 
         bus.AdcInputs[Bus.P28AdcMap] = Counts(PressureVolts(MapKpa));
         // TPS: 0.5 V closed .. 4.5 V wide open.
-        bus.AdcInputs[Bus.P28AdcTps] = Counts(0.5 + Clamp(TpsPct, 0, 100) / 100.0 * 4.0);
-        bus.AdcInputs[Bus.P28AdcEgr] = Counts(0.5 + Clamp(EgrLiftPct, 0, 100) / 100.0 * 4.0);
-        bus.AdcInputs[Bus.P28AdcBattery] = Counts(BatteryPinVolts(Cranking ? CrankingVbattVolts : VbattVolts));
+        bus.AdcInputs[Bus.P28AdcTps] = Counts(0.5 + (Clamp(TpsPct, 0, 100) / 100.0 * 4.0));
+        bus.AdcInputs[Bus.P28AdcEgr] = Counts(0.5 + (Clamp(EgrLiftPct, 0, 100) / 100.0 * 4.0));
         bus.AdcInputs[Bus.P28AdcAux] = 0;
+        // 4700h buffer: bit 0 start signal (on while cranking), bit 2 A/C request
+        bus.SwitchLatch = (byte)((bus.SwitchLatch & ~0x05) | (Cranking ? 0x01 : 0) | (AcRequest ? 0x04 : 0));
 
-        u6[Bus.P28U6EctSelect] = Counts(ThermistorVolts(EctCelsius));
-        u6[Bus.P28U6IatSelect] = Counts(ThermistorVolts(IatCelsius));
-        u6[Bus.P28U6BaroSelect] = Counts(PressureVolts(BaroKpa));
-        u5[Bus.P28U5HegoSelect] = Counts(O2Volts);
+        if (Bus.Is66911)
+        {
+            // P13: where the ROM files each mux position (0x3D0+n for ADCR0, 0x3D8+n for ADCR1) and the code that consumes those slots: 0x3D0 O2, 0x3D2 IAT, 0x3D3 baro, 0x3DA coolant
+            u6[0] = Counts(O2Volts);
+            u6[2] = Counts(ThermistorVolts(IatCelsius));
+            u6[3] = Counts(PressureVolts(BaroKpa));
+            u5[2] = Counts(ThermistorVolts(EctCelsius));
+            // Board coding: mux position 1 of each bank is a fixed divider, not a sensor. The boot (0x0F7C) turns each into a band 0-3, looks band_A * 5 + band_B up at 0x6D56 and resets with BRK 0x56 ("wrong ECU for this ROM") on 0xFF. Only 3,2 (-> 0x12) and 3,3 (-> 0x13) are valid in the stock image; 3.75 V / 2.5 V gives the first.
+            u6[1] = Counts(3.75);
+            // P5.4 (pin 57, IACVI) is the IACV coil current. The ROM closes a loop on it (0x39E0): PWM0's compare (0xA0..0x800) is wound until ADCR4 meets the idle target in 0x26E, and code 14 is logged when the loop runs out of range. Current follows duty.
+            bus.AdcInputs[4] = Counts(4.0 * Clamp((bus.Ram[0x2E] | (bus.Ram[0x2F] << 8)) / 2048.0, 0, 1));
+            u5[1] = Counts(3.75);
+        }
+        else
+        {
+            u6[Bus.P28U6HegoSelect] = Counts(O2Volts);
+            u6[Bus.P28U6IatSelect] = Counts(ThermistorVolts(IatCelsius));
+            u6[Bus.P28U6BaroSelect] = Counts(PressureVolts(BaroKpa));
+            u6[Bus.P28U6BatterySelect] = Counts(BatteryPinVolts(Cranking ? CrankingVbattVolts : VbattVolts));
+            u5[Bus.P28U5EldSelect] = Counts(EldVolts);
+            u5[Bus.P28U5EctSelect] = Counts(ThermistorVolts(EctCelsius));
+        }
 
         // Hand-set pin voltages win over the sensor models.
         foreach (var (key, volts) in AnalogOverrides)
@@ -85,42 +114,35 @@ public sealed class EngineState
     }
 
     /// Voltages set by hand for analog inputs: key 0-7 is the direct pin AIn, 100+n is channel n of the ADCR0 mux (AI0), 200+n channel n of the ADCR1 mux (AI1).
-    public readonly Dictionary<int, double> AnalogOverrides = new();
+    public readonly Dictionary<int, double> AnalogOverrides = [];
 
     private static double Clamp(double v, double lo, double hi) => v < lo ? lo : (v > hi ? hi : v);
 
     /// Advance the vehicle-speed pulse train. Each pulse is an edge on INT0: the ROM's INT0 handler timestamps it against TM2 (counting TM2 overflows for slow pulses) and the VSS routine turns that period into road speed.
-    private ushort AdvanceVss(ulong totalCycles, ulong cpuFreqHz)
+    private ushort AdvanceVss(Bus bus, ulong totalCycles, ulong cpuFreqHz)
     {
         if (SpeedKmh <= 0.0) { LastVssCycle = totalCycles; return 0; }
         double pulsesPerSecond = SpeedKmh * VssPulsesPerKm / 3600.0;
         if (pulsesPerSecond <= 0.0) return 0;
         double cyclesPerPulse = cpuFreqHz / pulsesPerSecond;
         if (totalCycles - LastVssCycle < cyclesPerPulse) return 0;
-        // One edge per call is enough; if the model fell far behind (speed
-        // just raised from zero) resynchronise rather than burst.
+        // One edge per call is enough; if the model fell far behind (speed just raised from zero) resynchronise rather than burst.
         LastVssCycle = totalCycles - LastVssCycle > 2 * cyclesPerPulse ? totalCycles : LastVssCycle + (ulong)cyclesPerPulse;
         VssPulseCount++;
-        return 1 << Bus.IrqInt0;
+        // the 66207 reports road speed on INT0; the 66911 captures the free-running counter into 0x5E and calls it Int3
+        return Bus.Is66911 ? bus.CaptureVss() : (ushort)(1 << Bus.IrqInt0);
     }
 
     private double _nextCkpCycle;
 
-    /// Generate the distributor signals for the elapsed CPU cycles:
-    /// * CKP (24 per cam rev): latches TM2 into TMR2 and raises the timer-2
-    /// interrupt. The ROM never writes TMR2 after init, reads it as the
-    /// tooth timestamp, and derives the crank period from it
-    /// (rpm = 1,875,000 / period at the 375 kHz TM2 clock).
-    /// * TDC (4 per cam rev, every 6th CKP): INT1.
-    /// * CYP (1 per cam rev, 3 teeth after the cylinder-1 TDC): TRNS0 status bit.
-    /// * VSS: INT0, see AdvanceVss.
+    /// Generate the distributor signals for the elapsed CPU cycles: * CKP (24 per cam rev): latches TM2 into TMR2 and raises the timer-2 interrupt. The ROM never writes TMR2 after init, reads it as the tooth timestamp, and derives the crank period from it (rpm = 1,875,000 / period at the 375 kHz TM2 clock). * TDC (4 per cam rev, every 6th CKP): INT1. * CYP (1 per cam rev, 3 teeth after the cylinder-1 TDC): TRNS0 status bit. * VSS: INT0, see AdvanceVss.
     public ushort CheckDistributorPulses(Bus bus, ulong totalCycles, ulong cpuFreqHz)
     {
-        ushort irq = AdvanceVss(totalCycles, cpuFreqHz);
+        ushort irq = AdvanceVss(bus, totalCycles, cpuFreqHz);
         if (Rpm <= 0.0) { _nextCkpCycle = 0; return irq; }
 
         double cyclesPerCkp = cpuFreqHz * 60.0 / Rpm / 12.0;
-        if (_nextCkpCycle == 0 || _nextCkpCycle > totalCycles + 2 * cyclesPerCkp)
+        if (_nextCkpCycle == 0 || _nextCkpCycle > totalCycles + (2 * cyclesPerCkp))
             _nextCkpCycle = totalCycles + cyclesPerCkp;   // engine just started, or RPM jumped up
         if (totalCycles < _nextCkpCycle) return irq;
 
@@ -130,16 +152,22 @@ public sealed class EngineState
         CkpPulseCount += 1;
 
         bus.CaptureTm2();
-        irq |= (ushort)(1 << Bus.IrqTm2);
-
-        if (CkpPulseCount % 6 == 0)
+        // The tooth pattern is the same on both parts - twelve teeth a revolution, TDC every sixth, CYP once a cycle - but the registers and interrupts are not. The 66207 captures into TMR2 and calls that interrupt 2; the 66911 captures into 0x58 and calls it Int0, with TDC arriving on the same pin when TCON bit 4 says so.
+        if (Bus.Is66911)
         {
-            TdcPulseCount += 1;
-            irq |= (ushort)(1 << Bus.IrqInt1);
+            irq |= bus.TakeCrankIrq();
+            if (CkpPulseCount % 6 == 0) { TdcPulseCount += 1; bus.SignalTdc(); }
         }
-        // CYP lands three CKP teeth after cylinder 1's TDC: the ROMs' crank
-        // sync check expects it with their within-TDC tooth counter at 3
-        // (p08: "CMPB 0a2h, #003h") and logs a CYP fault otherwise.
+        else
+        {
+            irq |= (ushort)(1 << Bus.IrqTm2);
+            if (CkpPulseCount % 6 == 0)
+            {
+                TdcPulseCount += 1;
+                irq |= (ushort)(1 << Bus.IrqInt1);
+            }
+        }
+        // CYP lands three CKP teeth after cylinder 1's TDC: the ROMs' crank sync check expects it with their within-TDC tooth counter at 3 (p08: "CMPB 0a2h, #003h") and logs a CYP fault otherwise.
         if (CkpPulseCount % 24 == 3) bus.SignalCyp();
         return irq;
     }

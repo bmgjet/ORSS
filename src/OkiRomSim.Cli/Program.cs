@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Diagnostics;
 using System.Globalization;
 using OkiRomSim.Assembler;
@@ -9,11 +10,12 @@ static int Usage()
     Console.WriteLine("""
 okisim - OKI 66207 toolchain and simulator
 
+  Any command: --cpu MSM66207|MSM66911 (default: what the .asm declares with "; processor: NAME").
   okisim asm <file.asm> [-o out.bin] [-D NAME=value] [-I dir] [--compat] [--lst] [--map] [--sym]
       Assemble a .asm into a byte-exact image. --compat enables lenient mode,
       where undefined symbols / out-of-range branches / duplicate labels warn.
   okisim run <file.bin|file.asm> [--steps N] [--until label|addr]
-             [--trace N] [--rpm N] [--watch addr[,addr]] [--stall]
+             [--trace N] [--rpm N] [--tps pct] [--map kPa] [--watch addr[,addr]] [--stall]
       Run headless and print a state summary.
   okisim disasm <file.bin|file.asm> [--from addr] [--count N] [--sym file.sym]
 
@@ -37,6 +39,16 @@ List<string> Opts(string name)
     return l;
 }
 bool Flag(string name) { int i = rest.IndexOf(name); if (i < 0) return false; rest.RemoveAt(i); return true; }
+// --cpu NAME, else whatever the .asm declares ("; processor: MSM66911"), else the MSM66207
+void UseCpu()
+{
+    var name = Opt("--cpu");
+    var src = rest.FirstOrDefault(a => a.EndsWith(".asm", StringComparison.OrdinalIgnoreCase) && File.Exists(a));
+    var p = name != null ? ProcessorProfile.Builtin(name) ?? throw new ArgumentException($"no processor profile called {name}")
+          : src != null ? ProcessorProfile.Declared(File.ReadAllText(src)) : null;
+    (p ?? ProcessorProfile.Msm66207()).Apply();
+    if (p != null) Console.Error.WriteLine($"processor {p.Name}");
+}
 static ushort ParseAddr(string s, IReadOnlyDictionary<string, long>? syms = null)
 {
     var t = s.Trim();
@@ -64,6 +76,7 @@ try
     {
         case "asm":
             {
+                UseCpu();
                 var o = new AssemblerOptions { LenientMode = Flag("--compat") };
                 foreach (var d in Opts("-D"))
                 {
@@ -88,10 +101,13 @@ try
             }
         case "run":
             {
+                UseCpu();
                 long steps = long.Parse(Opt("--steps") ?? "2000000");
                 var until = Opt("--until");
                 int trace = int.Parse(Opt("--trace") ?? "0");
                 var rpm = Opt("--rpm");
+                var tps = Opt("--tps");
+                var mapKpa = Opt("--map");
                 var watch = Opt("--watch");
                 bool stall = Flag("--stall");
                 int syncEvery = int.Parse(Opt("--sync") ?? "1024");
@@ -108,6 +124,8 @@ try
                 }
                 else sim.LoadRom(File.ReadAllBytes(path));
                 if (rpm != null) sim.Engine.Rpm = double.Parse(rpm, CultureInfo.InvariantCulture);
+                if (tps != null) sim.Engine.TpsPct = double.Parse(tps, CultureInfo.InvariantCulture);
+                if (mapKpa != null) sim.Engine.MapKpa = double.Parse(mapKpa, CultureInfo.InvariantCulture);
                 sim.StallInterventionEnabled = stall;
                 ushort? stopAt = until != null ? ParseAddr(until, syms) : null;
                 var watches = (watch ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries).Select(w => ParseAddr(w, syms)).ToList();
@@ -132,8 +150,9 @@ try
                 Console.WriteLine($"ran {ran:N0} instructions in {sw.Elapsed.TotalSeconds:F2}s ({ran / Math.Max(sw.Elapsed.TotalSeconds, 1e-9):N0}/s), simulated {(double)c.Cycles / Bus.CpuHz:F3}s");
                 Console.WriteLine($"state {sim.State}{(sim.FaultMessage != null ? ": " + sim.FaultMessage : "")}");
                 Console.WriteLine($"PC={c.Pc:X4} {Sym(c.Pc)}  A={c.A:X4}  PSW={c.PswU16():X4}  LRB={c.Lrb:X4}  SSP={c.Ssp:X4}  DD={(c.Dd ? 1 : 0)}");
+                Console.WriteLine($"injectors " + string.Join(" ", Enumerable.Range(0, 4).Select(n => $"{sim.Bus.InjectorPulseUs[n] / 1000.0:F2}ms x{sim.Bus.InjectorEvents[n]}")) + $"  sparks {sim.Bus.IgnitionEvents}");
                 Console.WriteLine($"P0={sim.Bus.ReadPort(0):X2} P1={sim.Bus.ReadPort(1):X2} P2={sim.Bus.ReadPort(2):X2} P3={sim.Bus.ReadPort(3):X2} P4={sim.Bus.ReadPort(4):X2}  fuel pump={(sim.Bus.FuelPumpActive ? "on" : "off")}  inj PW={sim.Bus.InjectorPulseWidthUs}us");
-                foreach (var w in watches) Console.WriteLine($"[{w:X4}] = {sim.Bus.Ram[w]:X2} {sim.Bus.Ram[w + 1]:X2}  (word {sim.Bus.Ram[w] | sim.Bus.Ram[w + 1] << 8})");
+                foreach (var w in watches) Console.WriteLine($"[{w:X4}] = {sim.Bus.Ram[w]:X2} {sim.Bus.Ram[w + 1]:X2}  (word {sim.Bus.Ram[w] | (sim.Bus.Ram[w + 1] << 8)})");
                 var hot = sim.GetHottestRecentPc();
                 Console.WriteLine($"hottest recent PC {hot.Address:X4} {Sym(hot.Address)} ({hot.Count}/{hot.WindowFilled}); coverage {sim.Coverage.AddressesExecuted} addresses");
                 foreach (var t in sim.TrapLog) Console.WriteLine($"BRK at {t.Key.Pc:X4} {Sym(t.Key.Pc)} reason {t.Key.Reason:X2} x{t.Value}");
@@ -141,11 +160,12 @@ try
             }
         case "disasm":
             {
+                UseCpu();
                 ushort from = ParseAddr(Opt("--from") ?? "0");
                 int count = int.Parse(Opt("--count") ?? "64");
                 var symFile = Opt("--sym");
                 if (rest.Count != 1) return Usage();
-                byte[] img; Dictionary<int, string> labels = new();
+                byte[] img; Dictionary<int, string> labels = [];
                 if (rest[0].EndsWith(".asm", StringComparison.OrdinalIgnoreCase))
                 {
                     var r = new OkiAssembler().AssembleFile(rest[0]);
@@ -182,6 +202,7 @@ try
         case "xref":
         case "formulas":
         case "defs-export":
+        case "features":
             return CalCommands.Run(cmd, rest);
 
         default:

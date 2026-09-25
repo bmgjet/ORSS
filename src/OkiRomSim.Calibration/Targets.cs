@@ -1,14 +1,13 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Globalization;
 using System.Text;
 
 namespace OkiRomSim.Calibration;
 
-/// A curve given as points, read straight through between them: a wideband's correction, an analog input scaled into the units you actually want, a sensor whose output is not a straight line. Written as "in = out" pairs, one per line or separated by commas:
-/// 0 = 10 2.5 = 14.7 5 = 20
-/// Below the first point and above the last, the first and last values hold.
+/// A curve given as points, read straight through between them: a wideband's correction, an analog input scaled into the units you actually want, a sensor whose output is not a straight line. Written as "in = out" pairs, one per line or separated by commas: 0 = 10 2.5 = 14.7 5 = 20 Below the first point and above the last, the first and last values hold.
 public sealed class LookupCurve
 {
-    public List<(double In, double Out)> Points { get; set; } = new();
+    public List<(double In, double Out)> Points { get; set; } = [];
 
     public bool Any => Points.Count > 0;
 
@@ -22,7 +21,7 @@ public sealed class LookupCurve
         {
             var (x0, y0) = p[i];
             var (x1, y1) = p[i + 1];
-            if (x >= x0 && x <= x1) return x1 == x0 ? y0 : y0 + (y1 - y0) * (x - x0) / (x1 - x0);
+            if (x >= x0 && x <= x1) return x1 == x0 ? y0 : y0 + ((y1 - y0) * (x - x0) / (x1 - x0));
         }
         return p[^1].Out;
     }
@@ -46,15 +45,13 @@ public sealed class LookupCurve
     public string ToText() => string.Join("\n", Points.Select(p => $"{p.In.ToString("0.###", CultureInfo.InvariantCulture)} = {p.Out.ToString("0.###", CultureInfo.InvariantCulture)}"));
 }
 
-/// What you want the engine to run, cell by cell: an AFR target across rpm and load, kept for each cam (the low-cam and high-cam maps are tuned to different targets). Written as a small table, which is easy to paste in or out of a spreadsheet:
-/// 0 40 80 100 <- load across the top (kPa) 800 14.7 14.7 13.2 12.8 3000 14.7 14.2 12.8 12.4 6000 13.5 13.0 12.4 12.2
-/// A reading between breakpoints is read straight through from the four around it; outside the table, the nearest edge holds.
+/// What you want the engine to run, cell by cell: an AFR target across rpm and load, kept for each cam (the low-cam and high-cam maps are tuned to different targets). Written as a small table, which is easy to paste in or out of a spreadsheet: 0 40 80 100 <- load across the top (kPa) 800 14.7 14.7 13.2 12.8 3000 14.7 14.2 12.8 12.4 6000 13.5 13.0 12.4 12.2 A reading between breakpoints is read straight through from the four around it; outside the table, the nearest edge holds.
 public sealed class TargetMap
 {
-    public List<double> Rpm { get; set; } = new();
-    public List<double> Load { get; set; } = new();
+    public List<double> Rpm { get; set; } = [];
+    public List<double> Load { get; set; } = [];
     /// Row per rpm, column per load.
-    public List<List<double>> Values { get; set; } = new();
+    public List<List<double>> Values { get; set; } = [];
 
     public bool Any => Rpm.Count > 0 && Load.Count > 0 && Values.Count == Rpm.Count;
 
@@ -64,9 +61,9 @@ public sealed class TargetMap
         if (!Any) return fallback;
         var (r0, r1, rf) = Span(Rpm, rpm);
         var (c0, c1, cf) = Span(Load, load);
-        double a = Cell(r0, c0) + (Cell(r0, c1) - Cell(r0, c0)) * cf;
-        double b = Cell(r1, c0) + (Cell(r1, c1) - Cell(r1, c0)) * cf;
-        return a + (b - a) * rf;
+        double a = Cell(r0, c0) + ((Cell(r0, c1) - Cell(r0, c0)) * cf);
+        double b = Cell(r1, c0) + ((Cell(r1, c1) - Cell(r1, c0)) * cf);
+        return a + ((b - a) * rf);
     }
 
     double Cell(int r, int c) => r < Values.Count && c < Values[r].Count ? Values[r][c] : double.NaN;
@@ -95,7 +92,7 @@ public sealed class TargetMap
                 double load = colAxis != null && c < colAxis.Length ? colAxis[c] : c;
                 // a load axis in mbar reads in the same numbers as kPa once divided by ten
                 if (colAxis != null && colAxis.Length > 0 && colAxis.Max() > 400) load /= 10;
-                result[r * cols + c] = Target(rpm, load, fallback);
+                result[(r * cols) + c] = Target(rpm, load, fallback);
             }
         return result;
     }
@@ -142,7 +139,7 @@ public sealed class TargetMap
     }
 
     static List<string> Split(string line) =>
-        line.Split(new[] { '\t', ',', ' ' }, StringSplitOptions.RemoveEmptyEntries).ToList();
+        [.. line.Split(new[] { '\t', ',', ' ' }, StringSplitOptions.RemoveEmptyEntries)];
 
     /// A sensible starting point: petrol, richer with load and rpm.
     public static TargetMap Default() => Parse(

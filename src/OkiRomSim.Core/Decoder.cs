@@ -1,18 +1,12 @@
+// Copyright (c) bmgjet. All rights reserved.
 //
 // OKI MSM66207 table-driven instruction decoder.
 //
-// The 66207 encodes the *addressing mode* in the first byte and the
-// *operation* in a later byte (e.g. `C5 EB 98 46` is `MOVB 0ebh, #046h`,
-// where C5 selects the direct-byte operand and 98 selects MOV-immediate). A
-// flat switch on the opcode byte therefore cannot decode this ISA -- patterns
-// have to be matched whole.
+// The 66207 encodes the *addressing mode* in the first byte and the *operation* in a later byte (e.g. `C5 EB 98 46` is `MOVB 0ebh, #046h`, where C5 selects the direct-byte operand and 98 selects MOV-immediate). A flat switch on the opcode byte therefore cannot decode this ISA -- patterns have to be matched whole.
 //
 // Patterns come from FullOpcodes.Table, derived from the 66207.op opcode spec.
 //
-// The DD flag (word/byte mode) is part of the decode context: some encodings
-// are shared between a word form and a byte form and are told apart only by
-// DD -- 0x18 is `ADC A, er0` when DD=1 but `ADCB A, r0` when DD=0.
-// Instructions marked 'S'/'R' in the table set/reset DD for what follows.
+// The DD flag (word/byte mode) is part of the decode context: some encodings are shared between a word form and a byte form and are told apart only by DD -- 0x18 is `ADC A, er0` when DD=1 but `ADCB A, r0` when DD=0. Instructions marked 'S'/'R' in the table set/reset DD for what follows.
 
 namespace OkiRomSim.Core;
 
@@ -56,8 +50,7 @@ public sealed class Decoded
 
 public static class Decoder
 {
-    /// INT (internal-memory) machine-cycle count for one instruction, from the MSM66201/66207 instruction manual's "Instruction List" cycle tables (chapter 3 sec.3, the Int*1/Int*2 column).
-    /// Across every operation class the all-internal-operand cost is 2 cycles per instruction byte plus a small per-operation adjustment.
+    /// INT (internal-memory) machine-cycle count for one instruction, from the MSM66201/66207 instruction manual's "Instruction List" cycle tables (chapter 3 sec.3, the Int*1/Int*2 column). Across every operation class the all-internal-operand cost is 2 cycles per instruction byte plus a small per-operation adjustment.
     public static ushort IntCycles(string mnemonic, int len)
     {
         ushort baseCycles = (ushort)(2 * len);
@@ -94,12 +87,10 @@ public static class Decoder
 
     private static byte? HexByte(string tok)
     {
-        if (tok.Length == 2 &&
-            Uri.IsHexDigit(tok[0]) && Uri.IsHexDigit(tok[1]))
-        {
-            return Convert.ToByte(tok, 16);
-        }
-        return null;
+        return tok.Length == 2 &&
+            Uri.IsHexDigit(tok[0]) && Uri.IsHexDigit(tok[1])
+            ? Convert.ToByte(tok, 16)
+            : null;
     }
 
     /// Number of fixed (non-wildcard) bytes in a pattern -- how specific it is.
@@ -116,7 +107,7 @@ public static class Decoder
     private static Index BuildIndex()
     {
         var idx = new Index();
-        for (int i = 0; i < 256; i++) idx.ByFirst[i] = new List<int>();
+        for (int i = 0; i < 256; i++) idx.ByFirst[i] = [];
 
         var table = FullOpcodes.Table;
         for (int i = 0; i < table.Length; i++)
@@ -128,8 +119,7 @@ public static class Decoder
                 if (first != null) idx.ByFirst[first.Value].Add(i);
             }
         }
-        // Match the most constrained pattern first so a shorter, less specific
-        // encoding can never shadow a longer one that also fits.
+        // Match the most constrained pattern first so a shorter, less specific encoding can never shadow a longer one that also fits.
         foreach (var bucket in idx.ByFirst)
         {
             bucket.Sort((a, b) =>
@@ -137,8 +127,7 @@ public static class Decoder
                 var pa = table[a];
                 var pb = table[b];
                 int c = Specificity(pb.BytesPat).CompareTo(Specificity(pa.BytesPat));
-                if (c != 0) return c;
-                return pb.BytesPat.Length.CompareTo(pa.BytesPat.Length);
+                return c != 0 ? c : pb.BytesPat.Length.CompareTo(pa.BytesPat.Length);
             });
         }
         return idx;
@@ -186,8 +175,7 @@ public static class Decoder
                     case "N'L": f.N16Alt = (ushort)((f.N16Alt & 0xFF00) | b); break;
                     case "N'H": f.N16Alt = (ushort)((f.N16Alt & 0x00FF) | (b << 8)); break;
                     default:
-                        // Unknown placeholder: treat as a wildcard rather than
-                        // silently mis-decoding.
+                        // Unknown placeholder: treat as a wildcard rather than silently mis-decoding.
                         break;
                 }
             }

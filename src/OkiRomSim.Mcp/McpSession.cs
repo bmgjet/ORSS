@@ -1,13 +1,11 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Text.Json.Nodes;
 using OkiRomSim.Assembler;
 using OkiRomSim.Calibration;
 
 namespace OkiRomSim.Mcp;
 
-/// The ROM open in the desktop app, as the in-app MCP server sees it. Tools called without a
-/// `path` work on it; every change goes through the app, which shows it (the Calibration page
-/// selects the table being edited, the Debug page logs the call). The app implements this;
-/// the stand-alone okirom-mcp server has no session and works on files only.
+/// The ROM open in the desktop app, as the in-app MCP server sees it. Tools called without a `path` work on it; every change goes through the app, which shows it (the Calibration page selects the table being edited, the Debug page logs the call). The app implements this; the stand-alone okirom-mcp server has no session and works on files only.
 public interface IMcpSession
 {
     /// One line: what is open, whether it has unsaved changes.
@@ -34,6 +32,8 @@ public interface IMcpSession
     string SaveRom(string path);
     /// Open a ROM image in the app (an agent working from another machine sends one).
     string LoadRom(byte[] rom, string name);
+    /// Open a file that is already on the app's machine, exactly as if it had been opened from the File menu: a .asm (assembled and loaded), a .bin / .rom (disassembled and loaded) or a saved project .zip. This is the other half of file_upload for an agent on a different computer - send the file, then ask for it to be opened here.
+    string OpenFile(string path);
     /// Emulator (Moates Ostrich / Demon): status, connect, upload, disconnect, auto_upload on|off.
     string Emulator(string action, string? port);
     /// Datalog: status, start, stop, latest, frames, clear, load (a file), and the recorded frames.

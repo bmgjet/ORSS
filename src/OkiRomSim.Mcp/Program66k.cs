@@ -1,3 +1,4 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Text.RegularExpressions;
 using OkiRomSim.Assembler;
 using OkiRomSim.Core;
@@ -64,7 +65,7 @@ public sealed class Program66k
     /// An assembly built elsewhere (the desktop app's), with the source text as it is on screen.
     public static Program66k FromAssembly(string path, byte[] image, AssemblyResult asm, IEnumerable<(string Path, string Text)> sources)
     {
-        var p = new Program66k { Path = path, Image = image.ToArray(), Asm = asm };
+        var p = new Program66k { Path = path, Image = [.. image], Asm = asm };
         foreach (var (f, text) in sources)
             try { p.Sources[System.IO.Path.GetFullPath(f)] = text.Replace("\r", "").Split('\n'); } catch { }
         foreach (var f in asm.SourceMap.Select(e => e.File).Distinct())
@@ -82,15 +83,14 @@ public sealed class Program66k
 
     // ------------------------------------------------------------------ names and lines
 
-    Dictionary<int, string>? _labels;
-    public Dictionary<int, string> Labels => _labels ??= Asm?.Symbols.Values.Where(s => s.Kind == SymbolKind.Label)
-        .GroupBy(s => (int)s.Value).ToDictionary(g => g.Key, g => g.OrderBy(s => s.Name.Length).First().Name) ?? new();
+    public Dictionary<int, string> Labels => field ??= Asm?.Symbols.Values.Where(s => s.Kind == SymbolKind.Label)
+        .GroupBy(s => (int)s.Value).ToDictionary(g => g.Key, g => g.OrderBy(s => s.Name.Length).First().Name) ?? [];
     int[]? _labelAddrs;
 
     public string Name(int addr)
     {
         if (Labels.TryGetValue(addr, out var n)) return n;
-        _labelAddrs ??= Labels.Keys.OrderBy(a => a).ToArray();
+        _labelAddrs ??= [.. Labels.Keys.OrderBy(a => a)];
         int i = Array.BinarySearch(_labelAddrs, addr);
         if (i < 0) i = ~i - 1;
         if (i < 0) return $"{addr:X4}h";
@@ -117,8 +117,9 @@ public sealed class Program66k
     public (string File, int Line, string Text)? SourceAt(int addr)
     {
         var e = Asm?.Lookup(addr);
-        if (e == null || !Sources.TryGetValue(e.File, out var lines) || e.Line < 1 || e.Line > lines.Length) return null;
-        return (e.File, e.Line, lines[e.Line - 1]);
+        return e == null || !Sources.TryGetValue(e.File, out var lines) || e.Line < 1 || e.Line > lines.Length
+            ? null
+            : (e.File, e.Line, lines[e.Line - 1]);
     }
 
     /// Code, as opposed to DB/DW data, according to the source.

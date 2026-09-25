@@ -1,10 +1,10 @@
+// Copyright (c) bmgjet. All rights reserved.
 using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace OkiRomSim.Calibration;
 
-/// Finds calibration data by reading the code that uses it, so it works on any source for these ECUs (hand-written, commented or freshly disassembled) without fixed addresses.
-/// 2D maps: Honda code sets up the interpolating lookup the same way everywhere: MOVB r0, #stride ; bytes per row MOVB r1, #rows MOVB r2, <column index RAM> MOVB r3, <row index RAM> MOV X1, #map ; possibly several alternatives under flag tests SB/RB PSWL.5 ; set = the map has a per-column multiplier row after it (fuel) CAL lookup The row/column index RAM bytes are written by an axis search a little earlier: MOV X1, #axis ... CAL search ... LB A, r6 / STB A, <index RAM> so following that store back gives each map its RPM and load axes.
+/// Finds calibration data by reading the code that uses it, so it works on any source for these ECUs (hand-written, commented or freshly disassembled) without fixed addresses. 2D maps: Honda code sets up the interpolating lookup the same way everywhere: MOVB r0, #stride ; bytes per row MOVB r1, #rows MOVB r2, <column index RAM> MOVB r3, <row index RAM> MOV X1, #map ; possibly several alternatives under flag tests SB/RB PSWL.5 ; set = the map has a per-column multiplier row after it (fuel) CAL lookup The row/column index RAM bytes are written by an axis search a little earlier: MOV X1, #axis ... CAL search ... LB A, r6 / STB A, <index RAM> so following that store back gives each map its RPM and load axes.
 public static class TableDetector
 {
     public sealed record Found(ItemDef Item, string Why);
@@ -47,9 +47,9 @@ public static class TableDetector
         v = 0;
         if (s.EndsWith("h", StringComparison.OrdinalIgnoreCase))
             return int.TryParse(s[..^1], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out v);
-        if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-            return int.TryParse(s[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out v);
-        return int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out v);
+        return s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            ? int.TryParse(s[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out v)
+            : int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out v);
     }
 
     /// The RAM byte an operand names, the same whichever way the source writes it. Hand-written sources give absolute addresses - off(001dfh), (001dfh-00180h)[USP]; a fresh disassembly gives the short encodings - off(0DFh), 95[USP] - which are resolved with the bases the Honda main loop runs with (off page 0100h, USP 0180h).
@@ -63,8 +63,7 @@ public static class TableDetector
         if (m.Success && TryNumber(m.Groups[1].Value, out a)) return a;
         m = Regex.Match(operand, @"^(-?)([0-9]+|[0-9][0-9A-Fa-f]*h)\s*\[USP\]$", RegexOptions.IgnoreCase);
         if (m.Success && TryNumber(m.Groups[2].Value, out a)) return UspBase + (m.Groups[1].Value == "-" ? -a : a);
-        if (Regex.IsMatch(operand, @"^[0-9][0-9A-Fa-f]*h$", RegexOptions.IgnoreCase) && TryNumber(operand, out a)) return a;
-        return null;
+        return Regex.IsMatch(operand, @"^[0-9][0-9A-Fa-f]*h$", RegexOptions.IgnoreCase) && TryNumber(operand, out a) ? a : null;
     }
 
     static (string Dst, string Src) Two(string args)
@@ -88,8 +87,9 @@ public static class TableDetector
         {
             if (symbols.TryGetValue(name, out var a)) return a;
             var ci = symbols.FirstOrDefault(kv => string.Equals(kv.Key, name, StringComparison.OrdinalIgnoreCase));
-            if (ci.Key != null) return ci.Value;
-            return Regex.IsMatch(name, @"^[0-9][0-9A-Fa-f]*h$|^0x[0-9A-Fa-f]+$", RegexOptions.IgnoreCase) && TryNumber(name, out var n) ? n : -1;
+            return ci.Key != null
+                ? ci.Value
+                : Regex.IsMatch(name, @"^[0-9][0-9A-Fa-f]*h$|^0x[0-9A-Fa-f]+$", RegexOptions.IgnoreCase) && TryNumber(name, out var n) ? n : -1;
         }
 
         // ---- 1. which axis table feeds each index RAM byte
@@ -120,7 +120,7 @@ public static class TableDetector
                 {
                     var (_, dst) = Two(l.Args);
                     if (Ram(dst) is int ram && !axisOf.ContainsKey(ram))
-                        axisOf[ram] = candidates.Select(c => c.label).ToList();
+                        axisOf[ram] = [.. candidates.Select(c => c.label)];
                     candidates.Clear();
                 }
             }
@@ -171,7 +171,7 @@ public static class TableDetector
                         foreach (var (t, tRows, tRowRam, tColRam) in tables.Distinct())
                         {
                             int addr = Sym(t);
-                            if (addr < 0x38 || isCode(addr) || tRows is < 2 or > 64 || addr + tRows * stride > rom.Length || tRowRam < 0) continue;
+                            if (addr < 0x38 || isCode(addr) || tRows is < 2 or > 64 || addr + (tRows * stride) > rom.Length || tRowRam < 0) continue;
                             if (maps.ContainsKey(addr)) continue;
                             int index = tables.Where(x => x.rowRam == tRowRam).Select(x => x.label).Distinct().ToList().IndexOf(t);
                             string tname = Regex.IsMatch(t, @"^[0-9]") ? $"map_{addr:X4}" : t;
@@ -183,8 +183,7 @@ public static class TableDetector
                 }
             }
         }
-        // maps that share a column axis have the same width: padding at the end of a row shows
-        // up in all of them, a column that merely repeats its neighbour in one map does not
+        // maps that share a column axis have the same width: padding at the end of a row shows up in all of them, a column that merely repeats its neighbour in one map does not
         foreach (var g in maps.Values.Where(m => m.Item.ColAxis?.Address != null).GroupBy(m => m.Item.ColAxis!.Address!.Value))
         {
             int widest = g.Max(m => m.Item.Cols);
@@ -192,7 +191,7 @@ public static class TableDetector
             {
                 int room = m.Item.Stride > 0 ? m.Item.Stride : widest;
                 m.Item.Cols = Math.Min(widest, room);
-                if (m.Item.ColAxis != null) m.Item.ColAxis.Count = m.Item.Cols;
+                m.Item.ColAxis?.Count = m.Item.Cols;
             }
         }
         Structural(maps, rowRamOf);
@@ -227,8 +226,7 @@ public static class TableDetector
 
     static string? PickAxis(Dictionary<int, List<string>> axisOf, int ram, int index)
     {
-        if (ram < 0 || !axisOf.TryGetValue(ram, out var list) || list.Count == 0) return null;
-        return list[Math.Clamp(index, 0, list.Count - 1)];
+        return ram < 0 || !axisOf.TryGetValue(ram, out var list) || list.Count == 0 ? null : list[Math.Clamp(index, 0, list.Count - 1)];
     }
 
     static Found MakeMap(string label, int addr, int stride, int rows, bool scaleRow, string context,
@@ -249,15 +247,12 @@ public static class TableDetector
             }
             if (n >= 4) cols = n;
         }
-        // Rows are `stride` bytes wide but only the first columns are map data: the tail of
-        // every row is padding that repeats one value (other tools keep the real count in a byte of
-        // its own; here it comes from the data, so it works on any ROM). Walk in while the
-        // last column is identical to the one before it in every row.
+        // Rows are `stride` bytes wide but only the first columns are map data: the tail of every row is padding that repeats one value (other tools keep the real count in a byte of its own; here it comes from the data, so it works on any ROM). Walk in while the last column is identical to the one before it in every row.
         bool SameColumn(int c)          // column c identical to column c-1 down every row
         {
             for (int r = 0; r < rows; r++)
             {
-                int b = addr + r * stride + c;
+                int b = addr + (r * stride) + c;
                 if (b >= rom.Length || b - 1 < 0 || rom[b] != rom[b - 1]) return false;
             }
             return true;
@@ -273,7 +268,7 @@ public static class TableDetector
             Name = label, Address = addr, Type = CellType.U8, Rows = rows, Cols = cols, Stride = stride,
             Formula = scaleRow ? "honda_fuel" : ign ? "ign_advance" : kind == "VE" ? "ve_percent" : "raw",
             Category = kind,
-            ColumnScaleAddress = scaleRow ? addr + rows * stride : null,
+            ColumnScaleAddress = scaleRow ? addr + (rows * stride) : null,
             Origin = "detected: 2D lookup",
             Description = $"{rows} x {cols} map ({stride} bytes per row){(scaleRow ? ", column multipliers after the last row" : "")}; " +
                           $"rows: {(hi ? "high" : "low")}-cam rpm{(rowAxis != null ? " (" + rowAxis + ")" : "")}, columns: load{(colAxis != null ? " (" + colAxis + ")" : "")}",
