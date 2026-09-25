@@ -353,7 +353,6 @@ int_crank_sync: L       A, #000a0h             ; 03DC 1 ??? ??? 67A000
                 ST      A, off(00116h)         ; 03F7 1 108 280 D416
                 MOVB    off(001a9h), #02dh     ; 03F9 1 108 280 C4A9982D
                 JBR     off(00120h).3, crank_sync_flags_clear_path ; 03FD 1 108 280 DB204A
-                SJ       int_crank_sync_clear_irqh_bit7               ; 0400 1 108 280 031877
 int_crank_sync_clear_irqh_bit7:     RB      IRQH.7                 ; 0403 1 108 280 C5190F
                 JNE     crank_sync_lost_path             ; 0406 1 108 280 CE05
                 RB      09eh.7                 ; 0408 1 108 280 C59E0F
@@ -391,7 +390,7 @@ crank_sync_lost_path_set_ram120_bit5:     SB      off(00120h).5          ; 045E 
                 SJ      crank_tooth_counter_reset             ; 0461 1 108 280 CB03
 crank_sync_flag_high:     SB      09dh.1                 ; 0463 1 108 280 C59D19
 crank_tooth_counter_reset:     CLR     0d2h                   ; 0466 1 108 280 B5D215
-crank_tooth_counter_reset_goto_786c:     SJ       crank_tooth_counter_reset_clear_ram09f_bit2             ; 0469 1 108 280 036C78
+crank_tooth_counter_reset_goto_786c:
 crank_tooth_counter_reset_clear_ram09f_bit2:     RB      09fh.2                 ; 046C 1 108 280 C59F0A
                 JNE     crank_tooth_counter_reset_clear_ram120_bit7             ; 046F 1 108 280 CE2E
 crank_tooth_seq_check:     CMPB    off(0012ah), #017h     ; 0471 1 108 280 C42AC017
@@ -508,7 +507,6 @@ crank_cycle_dispatch2:     LB      A, off(00134h)         ; 0569 0 108 280 F434
                 ST      A, 003bch[X2]          ; 057C 1 108 280 D1BC03
                 CLRB    A                      ; 057F 0 108 280 FA
                 STB     A, off(001cbh)         ; 0580 0 108 280 D4CB
-                SJ       injtimer_bit_clear            ; 0582 0 108 280 03BA05
 injtimer_bit_clear:     RB      off(001c9h).0          ; 05BA 1 108 280 C4C908
 injbase_calc_start:     CLR     A                      ; 05BD 1 108 280 F9
                 JBS     off(0011ch).4, injbase_store ; 05BE 1 108 280 EC1C0F
@@ -794,7 +792,7 @@ dtc03_map_latch:
                 SJ      map_sign_gate4             ; 083B 0 200 180 CB09
 map_neg_helper_call:     CAL     subtract24_clamp_byte             ; 083D 0 200 180 32214F
 map_sign_flag_clear:
-map_sign_gate2:     SJ       map_sign_gate4 ; (skeleton: fault flags are always clear)
+map_sign_gate2:
 map_sign_gate4:     STB     A, r0                  ; 084F 0 200 180 88
                 LB      A, off(00235h)         ; 0850 0 200 180 F435
                 SUBB    A, r0                  ; 0852 0 200 180 28
@@ -1078,7 +1076,6 @@ mode_flags_pack4:
 flag_dispatch_21d_212_load_r3:     MOVB    r3, (001d8h-00180h)[USP] ; 0B4F 1 200 180 C3584B
                 MOV     er3, (001dah-00180h)[USP] ; 0B52 1 200 180 B35A4B
                 MOV     X1, #flag_dispatch_21d_212_tbl          ; 0B55 1 200 180 604E72
-                SJ       ignmap_2d_lookup                        ; (skeleton: fault flags are always clear)
 flag_dispatch_21d_212_if_ram213_bit3_set:
 ignmap_2d_lookup:     RB      PSWL.5                 ; 0B76 0 200 180 A30D
                 CAL     table2d_lookup_interp             ; 0B78 0 200 180 321050
@@ -1586,7 +1583,6 @@ vtec_rawperiod_threshold_check:     CMP     0ach, A                ; 1049 1 100 
 ; (skeleton: no VTEC oil-pressure monitoring - the pressure switch (P4.6) and pressure input (ADC 5) are not read;
 ;  the state is always "normal", so there is no pressure fault, no transition retard and no limp mode)
 vtec_state_clear:     CLRB    r1                     ; 1077 0 100 280 2115
-                SJ       vtec_state_finalize            ; 1079 0 100 280 035811
 vtec_state_finalize:
                 CLRB    A                      ; 115B 0 100 280 FA
                 STB     A, off(001c8h)         ; 115C 0 100 280 D4C8
@@ -1679,11 +1675,9 @@ fuelmap_base_lookup:     MOVB    r0, #00ah              ; 1234 0 100 280 980A
                 MOV     er3, off(001dch)       ; 1241 0 100 280 B4DC4B
                 MOV     X1, #fuelmap_base_lookup_tbl_2          ; 1244 0 100 280 600471
                 JBS     off(0011fh).1, fuel_base_lookup_done ; 1247 0 100 280 E91F24
-                SJ       fuelmap_base_lookup_load_r3 ; (skeleton: fault flags are always clear)
 fuelmap_base_lookup_load_r3:     MOVB    r3, off(001d8h)        ; 1250 0 100 280 C4D84B
                 MOV     er3, off(001dah)       ; 1253 0 100 280 B4DA4B
                 MOV     X1, #fuelmap_base_lookup_tbl          ; 1256 0 100 280 603270
-                SJ       fuel_base_lookup_done ; 1259 (skeleton: no EGR maps)
 fuel_base_lookup_done:     SB      PSWL.5                 ; 126E 0 100 280 A31D
                 CAL     table2d_lookup_interp             ; 1270 0 100 280 321050
                 CAL     map_result_postscale             ; 1273 0 100 280 328850
@@ -2365,7 +2359,7 @@ fuelcut_output_flags_store_carry_ram11c_bit3:     MB      off(0011ch).3, C      
 tps_hysteresis_reentry_load_r2:     MOVB    r2, #00ah              ; 18D0 0 100 280 9A0A
                 JBR     off(00119h).7, tps_hysteresis_reentry_if_ram11d_bit4_clr ; 18D2 0 100 280 DF1903
                 SJ       ignmap2_result_check_clear_acc            ; 18D5 0 100 280 034C19
-tps_hysteresis_reentry_if_ram11d_bit4_clr:     SJ       tps_hysteresis_reentry_if_ram124_bit3_set ; (skeleton: 11Dh.4, the VTEC pressure limp flag, is always 0)
+tps_hysteresis_reentry_if_ram11d_bit4_clr:
 tps_hysteresis_reentry_if_ram124_bit3_set:     JBS     off(00124h).3, ignmap2_result_check_clear_acc ; 18E3 0 100 280 EB2466
                 JBS     off(0011dh).5, ignmap2_result_check_clear_acc ; 18E6 0 100 280 ED1D63
                 JBR     off(0011ah).3, postig_result_default ; 18E9 0 100 280 DB1A3A
@@ -2445,13 +2439,11 @@ rpm_gate_final_check:     CMPB    A, off(0012dh)         ; 198F 0 100 280 C72D
                 JBR     off(00118h).0, o2_closedloop_read_and_select ; 1994 0 100 280 D81804
                 MOVB    off(0018eh), #019h     ; 1997 0 100 280 C48E9819
 o2_closedloop_read_and_select:     MOVB    r0, #032h      ; 199B (skeleton: no closed-loop O2 - always the open-loop path, O2 correction 1.0)
-                SJ       o2_trim_tps_mode_check_clear_ram16c
 o2_trim_tps_mode_check_clear_ram16c:     CLRB    off(0016ch)            ; 1AA9 1 100 280 C46C15
                 MOVB    off(0019fh), r0        ; 1AAC 1 100 280 207C9F
 o2_trim_default_target:     L       A, #08000h             ; 1AAF 1 100 280 670080
 o2_trim_clear_gate1:     RB      off(0011dh).1          ; 1AB2 1 100 280 C41D09
 o2_trim_clear_gate0_and_return:     RB      off(0011dh).0          ; 1AB5 1 100 280 C41D08
-                SJ       injtimer_finalize_start            ; 1AB8 1 100 280 03681C
 injtimer_finalize_start:     ST      A, off(00148h)         ; 1C68 1 100 280 D448
                 J       to_injtimer_sub_common             ; 1C6A 1 100 280 03A25B
 to_injtimer_sub_common_load_imm:     LB      A, #040h               ; 1C6F 0 100 280 7740
@@ -2984,7 +2976,6 @@ crank_edge_flag_store_cmp_acc_2:     CMPB    A, off(0012dh)         ; 2101 0 100
 crank_edge_flag_store_if_ram11c_bit7_set:     JBS     off(0011ch).7, crank_edge_flag_store_clear_acc ; 2116 0 100 280 EF1C2F
                 JBS     off(00117h).5, crank_edge_flag_store_clear_acc ; 2119 0 100 280 ED172C
                 CLR     A                      ; 211C (skeleton: fault flags are always clear)
-                SJ       crank_edge_flag_store_if_ram11c_bit2_set ; (skeleton: fault flags are always clear)
 crank_edge_flag_store_if_ram11c_bit2_set:     JBS     off(0011ch).2, crank_edge_flag_store_clear_acc ; 2133 0 100 280 EA1C12
                 JBS     off(0011dh).5, crank_edge_flag_store_clear_acc ; 2136 0 100 280 ED1D0F
                 JBR     off(00118h).2, crank_edge_flag_store_clear_acc ; 2139 0 100 280 DA180C
@@ -4404,7 +4395,6 @@ idle_target_clamp2:     CMP     A, #08000h             ; 3116 1 208 180 C60080
 idle_target_clamp_max:     L       A, #07fffh             ; 311B 1 208 180 67FF7F
 idle_target_final_store:     ST      A, off(00280h)         ; 311E 1 208 180 D480
                 JBS     off(00217h).5, idle_output_gate2 ; 3120 1 208 180 ED172C
-                SJ       idle_target_final_store_load_er3 ; 3123 (skeleton: fault flags are always clear)
 idle_target_final_store_load_er3:     MOV     er3, #00600h           ; 3135 1 208 180 47980006
                 CAL     stub_or_short_helper             ; 3139 1 208 180 326B51
                 VCAL    6                      ; 313C 1 208 180 16
@@ -5712,18 +5702,13 @@ state_21a_7_dispatch2_and_ie:     AND     IE, #002a0h            ; 45A9 0 208 18
                 CMPB    0c0h, #028h            ; 45BD 1 208 180 C5C0C028
                 MB      off(00233h).2, C       ; 45C1 1 208 180 C4333A
                 VCAL    4                      ; 45C4 1 208 180 14
-                SJ       state_21a_7_dispatch2_vcal_4 ; (skeleton: automatic transmission control removed - manual only)
 state_21a_7_dispatch2_vcal_4:     VCAL    4                      ; 47EB 0 208 180 14
-                SJ       skel_block20_end ; (skeleton: diagnostics block removed)
 skel_block20_end: VCAL    4                      ; 498D 0 208 180 14
-                SJ       dtc_debounce_init ; (skeleton: diagnostics block removed)
 dtc_debounce_init:     VCAL    4                      ; 49D9 0 208 180 14
-                SJ       freezeframe_decode_start ; (skeleton: DTC debounce and stored-code storage removed)
 freezeframe_decode_start:     VCAL    4                      ; 4AE2 1 208 180 14
                 J       freezeframe_decode_start_load_ram212             ; 4AE3 1 208 180 03DB5F
 freezeframe_decode_start_add_acc:     ADD     A, #0ffffh             ; 4AE6 1 208 180 86FFFF
                 MB      off(00218h).6, C       ; 4AE9 1 208 180 C4183E
-                SJ       prep_lowpower_seq ; 4AEC (skeleton: fault flags are always clear)
 prep_lowpower_seq:     SB      off(00230h).3          ; 4AFD 1 208 180 C4301B
                 JNE     lowpower_trap_call             ; 4B00 1 208 180 CE2D
                 CAL     ResetWatchDog             ; 4B02 1 208 180 321E52
@@ -6285,7 +6270,6 @@ injtimer_bank_calc1:     MOV     er2, 00000h[X1]        ; 4F51 1 208 180 B000004
 injtimer_bank_calc1_mul:     MUL                            ; 4F5A 1 208 180 9035
                 ST      A, er0                 ; 4F5C 1 208 180 88
                 L       A, 00002h[X1]          ; 4F5D 1 208 180 E00200
-                SJ      injtimer_bank_calc1_sign             ; 4F60 1 208 180 CB10
 injtimer_bank_calc1_sign:     JGE     injtimer_bank_calc1_add             ; 4F72 1 208 180 CD05
                 SUB     A, er0                 ; 4F74 1 208 180 28
                 ST      A, er0                 ; 4F75 1 208 180 88
@@ -6515,7 +6499,6 @@ mul_zero_if_r3_zero_load_r2:     LB      A, r2                  ; 50C0 0 100 280
 tipin_table_diff_calc:     RT                             ; 50CC 1 100 280 01
 idle_stall_helper:     MOV     X2, #00010h            ; 50CD 1 208 180 611000
                 MOV     DP, #01000h            ; 50D0 1 208 180 620010
-                SJ      clamp_range_check             ; 50D3 1 208 180 CB06
 clamp_range_check:     CMP     A, X2                  ; 50DB 1 208 180 91C2
                 JLE     clamp_range_lowside             ; 50DD 1 208 180 CF06
                 CMP     A, DP                  ; 50DF 1 208 180 92C2
@@ -6557,7 +6540,6 @@ table_index_add_clamp_er3_return:     RT                             ; 5140 1 20
 ; [CG] limits (gated by off(20Ch).0) rather than fixed presets.
 idle_helper2:     MUL                            ; 5141 1 208 180 9035
                 L       A, er1                 ; 5143 1 208 180 35
-                SJ      mul_then_clamp_x1x2_2_if_ram20c_bit0_clr             ; 5144 1 208 180 CB0A
 mul_then_clamp_x1x2_2_if_ram20c_bit0_clr:     JBR     off(0020ch).0, mul_then_clamp_x1x2_2_xchg_acc ; 5150 1 208 180 D80C0F
                 ADD     A, er3                 ; 5153 1 208 180 0B
                 JLT     idle_helper2_sc_path             ; 5154 1 208 180 CA08
@@ -8396,4 +8378,4 @@ skel_reserved:  DB  0FFh, 0FFh, 0FFh, 0FFh, 0FFh, 0FFh ; 7FF9
 ; This byte, at a fixed address, is what the build (and the feature editor) adjusts.
 ; ------------------------------------------------------------------------------------------------
                 org 07FFFh
-checksum_fix:   DB  0FAh ; CHECKSUM correction
+checksum_fix:   DB  020h ; CHECKSUM correction
