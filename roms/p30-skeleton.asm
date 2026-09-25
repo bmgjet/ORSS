@@ -8491,70 +8491,10 @@ skel_ign_service_store2:
 skel_ign_service_hook:
                 J       hook_ign               ; module slot (tail call)
 
-; ================================================================================================
-; Module interface: fixed addresses the feature editor relies on. See roms/p30-skeleton.md.
-;
-; Hook slots: 3 bytes each, RT until a module is installed; installing one writes J <module> over
-; the slot. The module ends with RT (to the hook site) or with J to the next module on the same hook.
-;   hook_init  5F00  once at power-up, before the main loop starts             (main-loop context)
-;   hook_main  5F03  once per main-loop pass                                     (main-loop context)
-;   hook_fuel  5F06  every fuel calculation, the final pulse width is word 146h  (crank interrupt)
-;   hook_ign   5F09  every spark calculation, the final advance is 246h/247h     (main-loop context)
-;   5F0C-5F17  four spare slots
-; Rules for module code: return with RT; leave LRB, USP, SSP and the caller's register bank as found;
-; A and the flags are free; save DP, X1, X2 if you use them. Use your own register bank:
-;   PUSHS LRB / MOV LRB, #nnh ... POPS LRB   (banks in module RAM: 7Bh=3D8h 7Ch=3E0h 7Dh=3E8h 7Eh=3F0h 3Fh=1F8h)
-;
-; RAM for modules (unused by the skeleton):
-;   0FEh-0FFh  tick: word, +1 every 2.048 ms (timer 1), read it, do not write it
-;   1F0h       fuel-cut request: while any bit is set, fuel is cut like the rev limiter (one bit per module)
-;   2FDh       ignition retard request: subtracted from the final advance (floor 0)
-;   0FBh-0FDh, 1F1h-1FFh, 2F7h-2F9h, 2FEh-2FFh, 3D6h-3F9h  free for modules
-; Outputs freed by the skeleton: P1.4 (dash check-engine lamp, 1 = on) and P1.5 (ECU LED).
-; ================================================================================================
-skel_free_start:                               ; everything from here to 5EFFh is free for modules
-; @keep-begin (the hook slots are patched by modules: keep every byte)
-                org 05F00h
-hook_init:      RT
-                NOP
-                NOP
-hook_main:      RT
-                NOP
-                NOP
-hook_fuel:      RT
-                NOP
-                NOP
-hook_ign:       RT
-                NOP
-                NOP
-hook_spare1:    RT
-                NOP
-                NOP
-hook_spare2:    RT
-                NOP
-                NOP
-hook_spare3:    RT
-                NOP
-                NOP
-hook_spare4:    RT
-                NOP
-                NOP
-                org 05FE0h
-skel_info:      DB  050h,033h,030h,02Dh,053h,04Bh,045h,04Ch,045h,054h,04Fh,04Eh ; 5FE0 'P30-SKELETON' identifies the base for the feature editor
-skel_version:   DB  001h, 000h             ; 5FEC layout version 1.0
-skel_free_lo:   DW  skel_free_start        ; 5FEE first free byte below the calibration
-skel_free_hi:   DW  05EFFh                 ; 5FF0 last free byte below the calibration
-skel_free2_lo:  DW  0764Ah                 ; 5FF2 free block above the calibration
-skel_free2_hi:  DW  07FFEh                 ; 5FF4 (7FFFh is the checksum byte)
-skel_hooks:     DW  hook_init              ; 5FF6 hook table
-skel_hookcount: DB  8                      ; 5FF8 slots
-skel_reserved:  DB  0FFh, 0FFh, 0FFh, 0FFh, 0FFh, 0FFh ; 5FF9
-; @keep-end
 ; ------------------------------------------------------------------------------------------------
-; Calibration: kept at its stock P30 addresses (6000h-7640h), so P30 definitions and XDFs still line up.
-; The gap between the end of the code above and here is free space.
+; Calibration: stock P30 values. Tables only the removed functions used are gone and the rest is packed
+; straight after the code, so use the definitions/XDF made for this ROM, not a stock P30 one.
 ; ------------------------------------------------------------------------------------------------
-                org 06000h
 tbl_idle_pi_clamp:       DB  000h ; 6000
 boot_completion_helper_tbl:       DB  0FFh ; 6001
 boot_completion_helper_tbl_2:       DB  0FFh ; 6002
@@ -8606,21 +8546,8 @@ PostFuelDecay3:       DB  0D7h,0A3h,000h,00Ch,000h,002h,040h,000h ; 609F
 PostFuel:       DB  0FFh,000h,090h,0E6h,000h,070h,0CFh,000h ; 60A7
                 DB  058h,0A1h,099h,049h,07Ah,09Ah,039h,040h ; 60AF
                 DB  000h,028h,000h,000h,028h ; 60B7
-o2trim_ect_offset_lookup_tbl:       DB  001h,000h,000h,001h,001h,000h,000h,002h ; 60BC
-                DB  001h,000h,000h,004h ; 60C4
 tbl_revlimit_cold1:       DB  0AEh,028h,0A1h,034h ; 60C8
 tbl_revlimit_cold3:       DB  0B5h,02Eh,0A9h,062h ; 60CC
-o2_trim_step_threshold_tbl:                 DW  00404h           ; 60D0
-CloseLoopRate:       DB  043h,000h,043h,000h,043h,000h,043h,000h ; 60D2
-                DB  030h,000h,043h,000h,043h,000h,043h,000h ; 60DA
-                DB  043h,000h,043h,000h,030h,000h,043h,000h ; 60E2
-CloseLoopGoose:       DB  07Ch,003h,035h,004h,0EAh,003h,09Ch,002h ; 60EA
-                DB  080h,000h,09Ch,002h,07Ch,003h,05Ah,004h ; 60F2
-                DB  05Ah,004h,05Ah,004h,080h,000h,05Ah,004h ; 60FA
-                DB  000h,000h,000h,000h,000h,000h,000h,000h ; 6102
-                DB  000h,000h,000h,000h,000h,000h,000h,000h ; 610A
-                DB  000h,000h,000h,000h,000h,000h,000h,000h ; 6112
-                DB  000h,000h,000h,000h,000h,000h,000h,000h ; 611A
 tbl_closeloop_tps:       DB  0FFh,050h,0E0h,050h,0D0h,0A0h,0C8h,0D0h ; 6122
                 DB  0C0h,0D8h,04Dh,0EAh,040h,0AEh,000h,0AEh ; 612A
 tbl_revlimit_warm1:       DB  0EEh,000h,0A0h,030h ; 6132
@@ -8732,8 +8659,6 @@ GearCustom:       DB  046h,000h,067h,000h,08Eh,000h,0B8h,000h ; 6403
 crank_edge_flag_store_tbl:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh ; 640B
                 DB  0FFh,0FFh,000h,0FFh ; 6413
 crank_edge_flag_store_tbl_2:       DB  0FFh,0FFh,0FFh,0FFh,080h ; 6417
-newval_table3_call_tbl:       DB  0FFh,0FFh,000h,0FFh ; 641C
-newval_table3_call_tbl_2:       DB  0FFh,0FFh,000h,0FFh ; 6420
 vss_band_224_0_check_tbl:       DB  090h,0A0h,00Ch,00Fh,02Dh,02Fh,02Dh,02Fh ; 6424
                 DB  088h,080h,088h,080h,029h,026h ; 642C
 vtec_state_store2_tbl:       DB  0CAh,0CDh,0D5h,0D8h ; 6432
@@ -8774,11 +8699,6 @@ ignition_timing_calc_task_tbl_12:       DB  0FFh,03Fh,078h,03Fh,050h,03Ah,03Ch,0
                 DB  028h,025h,014h,01Fh,000h,01Bh ; 6534
 revlimit_table_select_tbl_18:       DB  0FFh,057h,0CFh,057h,0A1h,051h,06Eh,04Ch ; 653A
                 DB  044h,046h,028h,040h,000h,040h ; 6542
-tps_hysteresis_reentry_tbl:       DB  0FFh,0D2h,0E0h,0D2h,0C0h,0D2h,080h,0D2h ; 6548
-                DB  060h,0DAh,05Ch,0FFh,000h,0FFh,000h,000h ; 6550
-                DB  000h,000h,000h,000h,000h,000h,000h,000h ; 6558
-                DB  000h,000h,000h,000h,000h,000h,000h,000h ; 6560
-                DB  000h,000h,000h,000h,000h,000h ; 6568
 overrev_hardcap_compare_tbl_2:       DB  0FFh,017h,0F8h,017h,0F0h,028h,0E8h,026h ; 656E
                 DB  0E0h,024h,0D8h,024h,0D0h,02Dh,0C8h,031h ; 6576
                 DB  0C0h,02Dh,0B0h,02Dh,0A0h,029h,098h,02Ah ; 657E
@@ -8790,7 +8710,6 @@ overrev_hardcap_compare_tbl_2:       DB  0FFh,017h,0F8h,017h,0F0h,028h,0E8h,026h
                 DB  0A0h,000h,098h,000h,090h,000h,088h,000h ; 65AE
                 DB  080h,000h,070h,000h,060h,000h,050h,000h ; 65B6
                 DB  040h,000h,000h,000h,000h,000h,000h,000h ; 65BE
-tbl_vtec_transition_retard:       DB  000h,000h,011h,055h,077h,0FFh ; 65C6
 state_21a_7_dispatch2_tbl:       DB  0FFh,04Dh,008h,0CFh,04Dh,008h,0BAh,0B7h ; 65CC
                 DB  007h,087h,059h,006h,02Eh,0EEh,002h,028h ; 65D4
                 DB  0EEh,002h,000h,0EEh,002h ; 65DC
@@ -8936,13 +8855,6 @@ tbl_idle_dc:       DB  0FFh,0FFh,000h,080h,000h,00Ah,000h,080h ; 6988
                 DB  000h,008h,01Eh,085h,080h,006h,01Eh,085h ; 6990
                 DB  000h,003h,085h,07Bh,000h,002h,033h,073h ; 6998
                 DB  000h,001h,028h,05Ch,000h,000h,028h,05Ch ; 69A0
-state_21a_7_dispatch2_tbl_2:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh ; 69A8
-                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh ; 69B0
-                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh ; 69B8
-state_21a_7_dispatch2_tbl_3:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh ; 69BE
-                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh ; 69C8
-                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh ; 69D2
-                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh ; 69DC
 tbl_iat_correct2:       DB  0FFh,0B8h,0ABh,09Ah,055h,05Ch,047h,055h ; 69E6
                 DB  039h,04Dh,02Bh,03Ch,00Bh,010h,000h,010h ; 69EE
 DwellBattery:       DB  0FFh,01Ch,0BCh,02Eh,0A7h,034h,092h,040h ; 69F6
@@ -8990,14 +8902,9 @@ flags_pack_sj_tbl_2:       DB  0FFh,000h,09Ah,00Ch,04Dh,040h,033h,02Ah ; 6B07
                 DB  026h,015h,000h,000h ; 6B0F
 TipinGear:       DB  040h,080h,066h,047h,047h,0BAh,07Ah,028h ; 6B13
 tbl_map_sign:       DB  060h,0F0h,020h,070h ; 6B1B
-ect_simulate_ramp_tbl:       DB  0DFh,0CFh,0A1h,057h,028h ; 6B1F
 tbl_dcode14_lo:       DB  0C2h,000h,0FAh,03Eh,000h,047h ; 6B24
 tbl_dcode14_hi:       DB  0E5h,000h,051h,03Eh,000h,019h ; 6B2A
 vss_threshold_226_3_tbl:       DB  06Bh,0A9h,02Bh,062h ; 6B30
-tbl_knock244_a:       DB  030h,030h,030h,025h,01Bh,01Bh,01Bh,015h,00Ch,00Ch ; 6B34
-                DB  00Ch,00Ch,00Ch,00Ch,00Ch,008h,008h,008h,008h,008h ; 6B3E
-tbl_knock244_b:       DB  030h,030h,030h,030h,030h,02Ch,025h,01Bh ; 6B48
-                DB  01Bh,01Bh,01Bh,01Bh,01Bh,015h ; 6B50
 int_serial_rx_tbl:       DB  00Ch,00Ch,00Ch,00Ch,008h,008h,08Fh,003h ; 6B56
                 DB  08Eh,003h,0D6h,003h,000h,004h,000h,004h ; 6B5E
                 DB  000h,004h,000h,004h,000h,004h,09Ch,003h ; 6B66
@@ -9040,14 +8947,6 @@ dtc_scan_new_code_tbl:       DB  00Bh,00Fh,00Fh,00Fh,02Dh,02Dh,04Bh,00Fh ; 6C68
                 DB  0FFh,02Dh,02Dh,007h,006h,0FFh,0FFh,0FFh ; 6C88
                 DB  078h,019h,019h,019h,0FFh,0FFh,0FFh,0FFh ; 6C90
                 DB  0B3h ; 6C98
-cfgvariant_index_lookup_tbl:       DB  00Bh,003h,006h,007h,005h,001h,008h,00Ah ; 6C99
-                DB  00Bh,00Ch,00Ch,00Dh,00Eh,011h,000h,013h ; 6CA1
-                DB  014h,015h,016h,017h,018h,000h,000h,000h ; 6CA9
-                DB  000h,019h,01Ah,01Bh,000h,000h,000h,000h ; 6CB1
-                DB  000h,004h,008h,009h,00Fh,000h,000h,010h ; 6CB9
-                DB  013h,004h,008h,009h,000h,000h,000h,000h ; 6CC1
-                DB  01Dh ; 6CC9
-tbl_diag_snapshot_data1:       DB  000h,092h,007h ; 6CCA
 tbl_diag_snapshot_data2:       DB  0FFh,078h,019h,019h,019h ; 6CCD
 tbl_crank_sync_pattern:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FEh,0FFh,0FFh ; 6CD2
                 DB  0FFh,0FFh,0FFh,0FDh,0FFh,0FFh,0FFh,0FFh ; 6CDA
@@ -9184,18 +9083,6 @@ fueltbl_range_check_tbl:       DB  081h,08Dh,09Ch,01Bh,04Fh,071h,06Eh,07Ch ; 713
                 DB  0C4h,0EBh,0D9h,0ECh,0F6h,0E5h,0F4h,0EAh ; 71C3
                 DB  0F2h,001h,003h,004h,006h,007h,008h,00Ah ; 71CB
                 DB  00Ah,00Bh,00Bh ; 71D3
-fuelmap_base_lookup_tbl_3:       DB  029h,07Ah,096h,0A3h,0AAh,0B2h,0B8h,0C9h,0C3h,0D2h ; 71D6
-                DB  029h,07Ah,096h,0A3h,0AAh,0B2h,0B8h,0C9h,0C3h,0D3h ; 71E0
-                DB  030h,07Fh,099h,0A6h,0ACh,0B2h,0B9h,0C7h,0C6h,0D4h ; 71EA
-                DB  030h,080h,099h,0A7h,0ACh,0B3h,0B9h,0CAh,0C7h,0D6h ; 71F4
-                DB  030h,089h,0A1h,0ABh,0B1h,0B7h,0BDh,0CEh,0C5h,0D2h ; 71FE
-                DB  042h,090h,0A9h,0B4h,0BBh,0BEh,0C3h,0D2h,0CCh,0D7h ; 7208
-                DB  045h,096h,0A9h,0B6h,0BCh,0C0h,0C5h,0D4h,0CFh,0DDh ; 7212
-                DB  042h,093h,0A8h,0B5h,0BCh,0C3h,0C8h,0D8h,0CEh,0DDh ; 721C
-                DB  042h,096h,0ABh,0B8h,0BFh,0C6h,0CCh,0DBh,0D4h,0DFh ; 7226
-                DB  042h,096h,0ABh,0B9h,0C0h,0C4h,0CAh,0DAh,0D0h,0DFh ; 7230
-                DB  03Dh,092h,0A7h,0B5h,0BEh,0C3h,0C9h,0DAh,0D2h,0E1h ; 723A
-                DB  001h,003h,004h,005h,006h,007h,008h,008h,009h,009h ; 7244
 flag_dispatch_21d_212_tbl:       DB  05Ah,05Ah,05Ah,05Ah,047h,03Bh,02Ch,01Dh ; 724E
                 DB  015h,011h,05Ah,05Ah,05Ah,05Ah,049h,03Fh ; 7256
                 DB  034h,024h,01Ch,018h,05Ah,05Ah,05Ah,05Ah ; 725E
@@ -9242,17 +9129,6 @@ mode_flags_pack4_tbl:       DB  05Ah,05Ah,05Ah,05Ah,031h,01Ah,00Ch,000h,000h,000
                 DB  0C4h,0C4h,0C4h,0BAh,0ABh,0A0h,095h,089h,07Eh,07Ah ; 73C0
                 DB  0C4h,0C4h,0C4h,0BAh,0ABh,0A0h,094h,088h,07Dh,079h ; 73CA
                 DB  0C4h,0C4h,0C4h,0BAh,0ABh,0A1h,098h,08Ch,081h,07Dh ; 73D4
-flag_dispatch_21d_212_tbl_2:       DB  05Ah,05Ah,05Ah,05Ah,047h,03Bh,02Ch,01Dh,015h,011h ; 73DE
-                DB  05Ah,05Ah,05Ah,05Ah,049h,03Fh,034h,024h,01Ch,018h ; 73E8
-                DB  05Ah,05Ah,05Ah,05Ah,04Bh,043h,03Bh,02Ch,023h,01Fh ; 73F2
-                DB  05Ah,05Ah,05Ah,05Ah,04Fh,047h,041h,033h,02Ah,026h ; 73FC
-                DB  06Fh,06Fh,06Fh,06Fh,061h,056h,04Dh,041h,039h,035h ; 7406
-                DB  08Ch,08Ch,08Ch,07Bh,069h,060h,059h,04Dh,046h,042h ; 7410
-                DB  097h,097h,097h,081h,06Fh,068h,062h,057h,050h,04Ch ; 741A
-                DB  0A1h,0A1h,0A1h,087h,073h,06Eh,067h,05Eh,055h,051h ; 7424
-                DB  0A9h,0A9h,0A9h,08Ch,077h,071h,06Bh,064h,05Ah,056h ; 742E
-                DB  0ABh,0ABh,0ABh,08Eh,07Ah,074h,06Eh,068h,05Eh,05Ah ; 7438
-                DB  0ACh,0ACh,0ACh,091h,07Eh,078h,072h,06Ch,062h,05Eh ; 7442
 ve_table_result_store_tbl:       DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 744C
                 DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 7456
                 DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 7460
@@ -9273,26 +9149,6 @@ ve_table_result_store_tbl:       DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097
                 DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 74F6
                 DB  08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,09Bh,09Bh,09Bh ; 7500
                 DB  08Eh,08Eh,08Eh,08Eh,097h,097h,097h,09Bh,09Bh,09Bh ; 750A
-ve_result_flag_store_tbl:       DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 7514
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 751E
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 7528
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,093h,093h,093h ; 7532
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,093h,093h,093h ; 753C
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,093h,093h,093h ; 7546
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,093h,093h,093h ; 7550
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,093h,093h,093h ; 755A
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,093h,093h,093h ; 7564
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,093h,093h,093h ; 756E
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 7578
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 7582
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 758C
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 7596
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 75A0
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 75AA
-                DB  08Eh,08Eh,08Eh,097h,097h,097h,097h,09Bh,09Bh,09Bh ; 75B4
-                DB  08Eh,08Eh,08Eh,097h,097h,09Bh,09Bh,09Bh,09Bh,09Eh ; 75BE
-                DB  08Eh,08Eh,08Eh,097h,09Bh,09Bh,09Bh,09Bh,09Eh,09Eh ; 75C8
-                DB  08Eh,08Eh,097h,09Bh,09Bh,09Bh,09Bh,09Bh,09Eh,09Eh ; 75D2
 crank_edge_flag_store_tbl_3:       DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h ; 75DC
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h ; 75E6
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h ; 75F0
@@ -9304,9 +9160,69 @@ crank_edge_flag_store_tbl_3:       DB  000h,000h,000h,000h,000h,000h,000h,000h,0
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h ; 762C
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h ; 7636
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h ; 7640
+skel_free_start:                               ; everything from here to 7EFFh is free for modules
+
+; ================================================================================================
+; Module interface: fixed addresses the feature editor relies on. See roms/p30-skeleton.md.
+;
+; Hook slots (7F00h): 3 bytes each, RT until a module is installed; installing one writes J <module> over
+; the slot. The module ends with RT (to the hook site) or with J to the next module on the same hook.
+;   hook_init  7F00  once at power-up, before the main loop starts             (main-loop context)
+;   hook_main  7F03  once per main-loop pass                                     (main-loop context)
+;   hook_fuel  7F06  every fuel calculation, the final pulse width is word 146h  (crank interrupt)
+;   hook_ign   7F09  every spark calculation, the final advance is 246h/247h     (main-loop context)
+;   7F0C-7F17  four spare slots
+; Rules for module code: return with RT; leave LRB, USP, SSP and the caller's register bank as found;
+; A and the flags are free; save DP, X1, X2 if you use them. Use your own register bank:
+;   PUSHS LRB / MOV LRB, #nnh ... POPS LRB   (banks in module RAM: 7Bh=3D8h 7Ch=3E0h 7Dh=3E8h 7Eh=3F0h 3Fh=1F8h)
+;
+; RAM for modules (unused by the skeleton):
+;   0FEh-0FFh  tick: word, +1 every 2.048 ms (timer 1), read it, do not write it
+;   1F0h       fuel-cut request: while any bit is set, fuel is cut like the rev limiter (one bit per module)
+;   2FDh       ignition retard request: subtracted from the final advance (floor 0)
+;   0FBh-0FDh, 1F1h-1FFh, 2F7h-2F9h, 2FEh-2FFh, 3D6h-3F9h  free for modules
+; Outputs freed by the skeleton: P1.4 (dash check-engine lamp, 1 = on) and P1.5 (ECU LED).
+; ================================================================================================
+; @keep-begin (the hook slots are patched by modules: keep every byte)
+                org 07F00h
+hook_init:      RT
+                NOP
+                NOP
+hook_main:      RT
+                NOP
+                NOP
+hook_fuel:      RT
+                NOP
+                NOP
+hook_ign:       RT
+                NOP
+                NOP
+hook_spare1:    RT
+                NOP
+                NOP
+hook_spare2:    RT
+                NOP
+                NOP
+hook_spare3:    RT
+                NOP
+                NOP
+hook_spare4:    RT
+                NOP
+                NOP
+                org 07FE0h
+skel_info:      DB  050h,033h,030h,02Dh,053h,04Bh,045h,04Ch,045h,054h,04Fh,04Eh ; 7FE0 'P30-SKELETON' identifies the base for the feature editor
+skel_version:   DB  002h, 000h             ; 7FEC layout version 2.0
+skel_free_lo:   DW  skel_free_start        ; 7FEE first free byte (after the calibration)
+skel_free_hi:   DW  07EFFh                 ; 7FF0 last free byte
+skel_free2_lo:  DW  00000h                 ; 7FF2 no second free block in layout 2
+skel_free2_hi:  DW  00000h                 ; 7FF4
+skel_hooks:     DW  hook_init              ; 7FF6 hook table
+skel_hookcount: DB  8                      ; 7FF8 slots
+skel_reserved:  DB  0FFh, 0FFh, 0FFh, 0FFh, 0FFh, 0FFh ; 7FF9
+; @keep-end
 ; ------------------------------------------------------------------------------------------------
 ; Checksum: the 8-bit sum of the whole image must be 0 (the ROM checks it while running, BRK 48h).
 ; This byte, at a fixed address, is what the build (and the feature editor) adjusts.
 ; ------------------------------------------------------------------------------------------------
                 org 07FFFh
-checksum_fix:   DB  0E7h ; CHECKSUM correction
+checksum_fix:   DB  0ECh ; CHECKSUM correction
