@@ -7929,35 +7929,7 @@ vtec_state_store2_tbl_3:       DB  0FFh,03Fh,0F8h,03Fh,0F0h,03Fh,0E8h,03Fh ; 643
 vtec_state_store2_tbl_4:       DB  0FFh,03Fh,0F8h,03Fh,0F0h,03Fh,0E8h,03Fh ; 6448
                 DB  0DBh,03Fh,0D6h,0AEh,000h,0AEh ; 6450
 revlimit_table_select_tbl_17:       DB  0FFh,000h,000h,000h ; 6456
-ignition_timing_calc_task_tbl:       DB  046h,04Bh,02Bh,036h,082h,087h,05Fh,064h ; 645A
-                DB  09Ch,0A1h,00Fh,011h,010h,012h,044h,049h ; 6462
-                DB  022h,025h,039h,041h,014h,016h,028h,02Dh ; 646A
-                DB  05Fh,064h,07Dh,082h,014h,019h,021h,026h ; 6472
-                DB  04Ah,04Ch,036h,050h,0B3h,0C0h ; 647A
-ignition_timing_calc_task_tbl_2:       DB  0FFh,001h,09Fh,001h,09Bh,013h,06Eh,013h ; 6480
-                DB  05Ah,013h,041h,005h,000h,005h ; 6488
-ignition_timing_calc_task_tbl_3:       DB  0FFh,0FAh,0B0h,0FAh,09Bh,0FAh,082h,0FAh ; 648E
-                DB  080h,09Ch,078h,092h,064h,076h,05Ah,069h ; 6496
-                DB  046h,054h,041h,04Eh,01Eh,040h,000h,040h ; 649E
-ignition_timing_calc_task_tbl_4:       DB  0FFh,0FAh,0B0h,0FAh,08Eh,0FAh,087h,0FAh ; 64A6
-                DB  085h,085h,078h,073h,064h,05Bh,05Ah,04Dh ; 64AE
-                DB  046h,03Dh,041h,038h,01Eh,038h,000h,038h ; 64B6
-ignition_timing_calc_task_tbl_5:       DB  0FFh,0FAh,09Ch,0FAh,09Ah,0B6h,096h,0B6h ; 64BE
-                DB  085h,0A2h,078h,092h,064h,076h,05Ah,069h ; 64C6
-                DB  046h,054h,041h,04Eh,01Eh,040h,000h,040h ; 64CE
-ignition_timing_calc_task_tbl_6:       DB  0FFh,0FAh,0A1h,0FAh,09Fh,0A3h,09Bh,0A3h ; 64D6
-                DB  085h,085h,078h,073h,064h,05Bh,05Ah,04Dh ; 64DE
-                DB  046h,03Dh,041h,038h,01Eh,038h,000h,038h ; 64E6
-ignition_timing_calc_task_tbl_7:       DB  0FFh,014h,0B4h,014h,04Eh,014h,04Ch,003h,000h,003h ; 64EE
-ignition_timing_calc_task_tbl_8:       DB  0FFh,01Bh,0B4h,01Bh,04Eh,01Bh,04Ch,006h,000h,006h ; 64F8
-ignition_timing_calc_task_tbl_9:       DB  0FFh,02Ch,050h,02Ch,03Ch,01Eh,028h,01Eh ; 6502
-                DB  019h,01Eh,014h,01Bh,000h,01Bh ; 650A
-ignition_timing_calc_task_tbl_10:       DB  0FFh,038h,050h,038h,03Ch,030h,028h,030h ; 6510
-                DB  019h,02Bh,014h,02Ah,000h,020h ; 6518
-ignition_timing_calc_task_tbl_11:       DB  0FFh,033h,078h,033h,050h,02Eh,03Ch,01Dh ; 651E
-                DB  028h,01Dh,014h,01Bh,000h,01Bh ; 6526
-ignition_timing_calc_task_tbl_12:       DB  0FFh,03Fh,078h,03Fh,050h,03Ah,03Ch,027h ; 652C
-                DB  028h,025h,014h,01Fh,000h,01Bh ; 6534
+                DB  046h,04Bh              ; (skeleton: the A/T tables are gone; 2 bytes kept, the table above is read a word at a time)
 revlimit_table_select_tbl_18:       DB  0FFh,057h,0CFh,057h,0A1h,051h,06Eh,04Ch ; 653A
                 DB  044h,046h,028h,040h,000h,040h ; 6542
 overrev_hardcap_compare_tbl_2:       DB  0FFh,017h,0F8h,017h,0F0h,028h,0E8h,026h ; 656E
@@ -8163,8 +8135,6 @@ flags_pack_sj_tbl_2:       DB  0FFh,000h,09Ah,00Ch,04Dh,040h,033h,02Ah ; 6B07
                 DB  026h,015h,000h,000h ; 6B0F
 TipinGear:       DB  040h,080h,066h,047h,047h,0BAh,07Ah,028h ; 6B13
 tbl_map_sign:       DB  060h,0F0h,020h,070h ; 6B1B
-tbl_dcode14_lo:       DB  0C2h,000h,0FAh,03Eh,000h,047h ; 6B24
-tbl_dcode14_hi:       DB  0E5h,000h,051h,03Eh,000h,019h ; 6B2A
 vss_threshold_226_3_tbl:       DB  06Bh,0A9h,02Bh,062h ; 6B30
 int_serial_rx_tbl:       DB  00Ch,00Ch,00Ch,00Ch,008h,008h,08Fh,003h ; 6B56
                 DB  08Eh,003h,0D6h,003h,000h,004h,000h,004h ; 6B5E
@@ -8486,4 +8456,4 @@ skel_reserved:  DB  0FFh, 0FFh, 0FFh, 0FFh, 0FFh, 0FFh ; 7FF9
 ; This byte, at a fixed address, is what the build (and the feature editor) adjusts.
 ; ------------------------------------------------------------------------------------------------
                 org 07FFFh
-checksum_fix:   DB  07Dh ; CHECKSUM correction
+checksum_fix:   DB  095h ; CHECKSUM correction
