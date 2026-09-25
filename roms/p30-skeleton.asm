@@ -3293,7 +3293,7 @@ clamp_result_store:     STB     A, 0bch                ; 24BF 0 208 180 D5BC
                 CAL     ect_step_helper             ; 250A 0 208 180 322F52
                 CLRB    A                      ; 250D 0 208 180 FA
                 MOV     DP, #001a9h            ; 250E 0 208 180 62A901
-clamp_result_store_rom_load_tbl_6ab3_dp:     LCB     A, clamp_result_store_tbl[DP]        ; 2511 0 208 180 92ABB36A
+clamp_result_store_rom_load_tbl_6ab3_dp:     LCB     A, (skel_ram1a9_init_tbl-001a9h)[DP]        ; 2511 0 208 180 92ABB36A (skeleton: own table, stock read 6C5C-6C68 through the P30 table layout)
                 STB     A, [DP]                ; 2515 0 208 180 D2
                 INC     DP                     ; 2516 0 208 180 72
                 CMP     DP, #001b6h            ; 2517 0 208 180 92C0B601
@@ -8136,48 +8136,8 @@ flags_pack_sj_tbl_2:       DB  0FFh,000h,09Ah,00Ch,04Dh,040h,033h,02Ah ; 6B07
 TipinGear:       DB  040h,080h,066h,047h,047h,0BAh,07Ah,028h ; 6B13
 tbl_map_sign:       DB  060h,0F0h,020h,070h ; 6B1B
 vss_threshold_226_3_tbl:       DB  06Bh,0A9h,02Bh,062h ; 6B30
-int_serial_rx_tbl:       DB  00Ch,00Ch,00Ch,00Ch,008h,008h,08Fh,003h ; 6B56
-                DB  08Eh,003h,0D6h,003h,000h,004h,000h,004h ; 6B5E
-                DB  000h,004h,000h,004h,000h,004h,09Ch,003h ; 6B66
-                DB  09Dh,003h,09Eh,003h,09Fh,003h,0A0h,003h ; 6B6E
-                DB  0A1h,003h,0A2h,003h,0A3h,003h,0C8h,003h ; 6B76
-                DB  0C0h,003h,0A3h,000h,0C1h,003h,092h,003h ; 6B7E
-                DB  0C2h,000h,000h,004h,0C3h,000h,093h,003h ; 6B86
-                DB  0C6h,003h,0BFh,000h,0F5h,002h,0C6h,003h ; 6B8E
-                DB  000h,004h,000h,004h,000h,004h,049h,001h ; 6B96
-                DB  000h,004h,005h,003h,000h,004h,091h,003h ; 6B9E
-                DB  090h,003h,05Ch,003h,043h,002h,099h,003h ; 6BA6
-                DB  0CDh,000h,09Ah,003h,0F3h,002h,0F2h,002h ; 6BAE
-                DB  000h,004h,000h,004h,000h,004h,000h,004h ; 6BB6
-                DB  000h,004h,000h,004h,000h,004h,000h,004h ; 6BBE
-                DB  0AAh,001h,0ABh,001h,0A9h,001h,0B2h,001h ; 6BC6
-                DB  0B3h,001h,0B1h,001h,09Bh,003h,000h,004h ; 6BCE
-                DB  000h,004h,000h,004h,000h,004h,020h,003h ; 6BD6
-                DB  021h,003h,022h,003h,023h,003h,024h,003h ; 6BDE
-                DB  025h,003h,026h,003h,027h,003h,028h,003h ; 6BE6
-                DB  029h,003h,02Ah,003h,02Bh,003h,02Ch,003h ; 6BEE
-                DB  02Dh,003h,02Eh,003h,02Fh,003h,030h,003h ; 6BF6
-                DB  031h,003h,032h,003h,033h,003h,034h,003h ; 6BFE
-                DB  035h,003h,036h,003h,037h,003h,038h,003h ; 6C06
-                DB  039h,003h,03Ah,003h,03Bh,003h,03Ch,003h ; 6C0E
-                DB  03Dh,003h,03Eh,003h,03Fh,003h,040h,003h ; 6C16
-                DB  041h,003h,042h,003h,043h,003h,044h,003h ; 6C1E
-                DB  045h,003h,046h,003h,047h,003h,048h,003h ; 6C26
-                DB  049h,003h,04Ah,003h,04Bh,003h,04Ch,003h ; 6C2E
-                DB  04Dh,003h,04Eh,003h,04Fh,003h,000h,004h ; 6C36
-                DB  000h,004h,000h,004h,000h,004h,000h,004h ; 6C3E
-                DB  000h,004h,000h,004h,000h,004h,094h,003h ; 6C46
-                DB  095h,003h,096h,003h,097h,003h,098h,003h ; 6C4E
-                DB  000h,004h,000h,004h,000h,004h,02Dh,02Dh ; 6C56
-                DB  007h,006h,0FFh,0FFh,0FFh,078h,019h,019h ; 6C5E
-                DB  019h,0B3h ; 6C66
-dtc_scan_new_code_tbl:       DB  00Bh,00Fh,00Fh,00Fh,02Dh,02Dh,04Bh,00Fh ; 6C68
-                DB  0FFh,0FFh,0FFh,0FFh,02Dh,02Dh,0FFh,02Dh ; 6C70
-                DB  02Dh,006h,02Dh,00Fh,00Fh,0FFh,0FFh,0FFh ; 6C78
-                DB  0FFh,007h,007h,014h,0FFh,0FFh,0FFh,0FFh ; 6C80
-                DB  0FFh,02Dh,02Dh,007h,006h,0FFh,0FFh,0FFh ; 6C88
-                DB  078h,019h,019h,019h,0FFh,0FFh,0FFh,0FFh ; 6C90
-                DB  0B3h ; 6C98
+skel_ram1a9_init_tbl:    DB  02Dh,02Dh,007h,006h,0FFh,0FFh,0FFh,078h ; start-up values for RAM 1A9h-1B5h (stock 6C5C-6C68)
+                DB  019h,019h,019h,0B3h,00Bh
 tbl_diag_snapshot_data2:       DB  0FFh,078h,019h,019h,019h ; 6CCD
 tbl_crank_sync_pattern:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FEh,0FFh,0FFh ; 6CD2
                 DB  0FFh,0FFh,0FFh,0FDh,0FFh,0FFh,0FFh,0FFh ; 6CDA
@@ -8456,4 +8416,4 @@ skel_reserved:  DB  0FFh, 0FFh, 0FFh, 0FFh, 0FFh, 0FFh ; 7FF9
 ; This byte, at a fixed address, is what the build (and the feature editor) adjusts.
 ; ------------------------------------------------------------------------------------------------
                 org 07FFFh
-checksum_fix:   DB  095h ; CHECKSUM correction
+checksum_fix:   DB  0FCh ; CHECKSUM correction
