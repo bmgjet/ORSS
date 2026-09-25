@@ -1127,54 +1127,14 @@ newval_table3_call_store_carry_ram219_bit6:     MB      off(00219h).6, C       ;
                 CMPB    0a7h, #000h            ; 0A9C 0 200 180 C5A7C000
                 JNE     mode_flags_pack_start             ; 0AA0 0 200 180 CE01
                 CLRB    A                      ; 0AA2 0 200 180 FA
-mode_flags_pack_start:     MOV     er0, off(00212h)       ; 0AA3 0 200 180 B41248
-                AND     er0, #0c3bch           ; 0AA6 0 200 180 44D0BCC3
-                JNE     mode_flags_pack_alt             ; 0AAA 0 200 180 CE05
-                MB      C, off(00214h).5       ; 0AAC 0 200 180 C4142D
-                JGE     mode_flags_pack_store             ; 0AAF 0 200 180 CD02
-mode_flags_pack_alt:     LB      A, #00fh               ; 0AB1 0 200 180 770F
-mode_flags_pack_store:     STB     A, r1                  ; 0AB3 0 200 180 89
-                RC                             ; 0AB4 0 200 180 95
-                JBS     off(00214h).5, mode_flags_pack2 ; 0AB5 0 200 180 ED1403
-                MB      C, off(00211h).1       ; 0AB8 0 200 180 C41129
-mode_flags_pack2:     MB      off(00233h).3, C       ; 0ABB 0 200 180 C4333B
-                MB      C, off(0021ch).2       ; 0ABE 0 200 180 C41C2A
-                MB      off(00233h).4, C       ; 0AC1 0 200 180 C4333C
-                SC                             ; 0AC4 0 200 180 85
-                LB      A, (001cah-00180h)[USP] ; 0AC5 0 200 180 F34A
-                JNE     mode_flags_pack3             ; 0AC7 0 200 180 CE07
-                LB      A, off(0023ch)         ; 0AC9 0 200 180 F43C
-                JNE     mode_flags_pack3             ; 0ACB 0 200 180 CE03
-                MB      C, off(00220h).1       ; 0ACD 0 200 180 C42029
-mode_flags_pack3:     MB      off(00233h).5, C       ; 0AD0 0 200 180 C4333D
-                LB      A, off(00233h)         ; 0AD3 0 200 180 F433
-                MOVB    r0, #010h              ; 0AD5 0 200 180 9810
-                MULB                           ; 0AD7 0 200 180 A234
-                ORB     A, r1                  ; 0AD9 0 200 180 69
-                L       A, ACC                 ; 0ADA 1 200 180 E506
-                ST      A, er2                 ; 0ADC 1 200 180 8A
-                MOV     er0, #00101h           ; 0ADD 1 200 180 44980101
-                MOVB    r2, #005h              ; 0AE1 1 200 180 9A05
-scale_div32_loop:     SRL     A                      ; 0AE3 1 200 180 63
-                ADCB    r0, #000h              ; 0AE4 1 200 180 209000
-                SRL     A                      ; 0AE7 1 200 180 63
-                ADCB    r1, #000h              ; 0AE8 1 200 180 219000
-                DECB    r2                     ; 0AEB 1 200 180 BA
-                JNE     scale_div32_loop             ; 0AEC 1 200 180 CEF5
-                SRLB    r0                     ; 0AEE 1 200 180 20E7
-                MB      r5.2, C                ; 0AF0 1 200 180 253A
-                SRLB    r1                     ; 0AF2 1 200 180 21E7
-                MB      r5.3, C                ; 0AF4 1 200 180 253B
-                LB      A, (001abh-00180h)[USP] ; 0AF6 0 200 180 F32B
-                CMPB    A, #007h               ; 0AF8 0 200 180 C607
-                JLT     mode_flags_pack4             ; 0AFA 0 200 180 CA09
-                LB      A, (001b3h-00180h)[USP] ; 0AFC 0 200 180 F333
-                CMPB    A, #019h               ; 0AFE 0 200 180 C619
-                JLT     mode_flags_pack4             ; 0B00 0 200 180 CA03
-                MB      C, off(0021dh).6       ; 0B02 0 200 180 C41D2E
-mode_flags_pack4:     MB      off(00233h).6, C       ; 0B05 0 200 180 C4333E
-                L       A, er2                 ; 0B08 1 200 180 36
-                ST      A, 0eeh                ; 0B09 1 200 180 D5EE
+; (skeleton: knock control unit removed: no condition word for it)
+mode_flags_pack_start:
+mode_flags_pack_alt:
+mode_flags_pack_store:
+mode_flags_pack2:
+mode_flags_pack3:
+scale_div32_loop:
+mode_flags_pack4:
                 MOV     DP, #003beh            ; 0B0B 1 200 180 62BE03
                 LB      A, ADCR0H              ; 0B0E 0 200 180 F561
                 STB     A, [DP]                ; 0B10 0 200 180 D2
@@ -1346,54 +1306,14 @@ overrev_hardcap_compare_if_ne_goto_0c95:     JNE     overrev_hardcap_compare_got
 overrev_hardcap_compare_goto_789a:     J       overrev_hardcap_compare_cmp_stk             ; 0C95 0 200 180 039A78
 overrev_hardcap_compare_load_imm:     LB      A, #01dh               ; 0C9B 0 200 180 771D
 knockretard2_store:     STB     A, off(0023bh)         ; 0C9D 0 200 180 D43B
-                CLRB    A                      ; 0C9F 0 200 180 FA
-                RC                             ; 0CA0 0 200 180 95
-                JBS     off(00233h).6, flags_pack_233_7 ; 0CA1 0 200 180 EE3328
-                JBS     off(00212h).3, flags_pack_233_7 ; 0CA4 0 200 180 EB1225
-                JBS     off(00213h).0, flags_pack_233_7 ; 0CA7 0 200 180 E81322
-                L       A, 0f0h                ; 0CAA 1 200 180 E5F0
-                ST      A, er2                 ; 0CAC 1 200 180 8A
-                CLR     er0                    ; 0CAD 1 200 180 4415
-                MOVB    r2, #005h              ; 0CAF 1 200 180 9A05
-scale_shift_loop:     SLL     A                      ; 0CB1 1 200 180 53
-                ADCB    r1, #000h              ; 0CB2 1 200 180 219000
-                SLL     A                      ; 0CB5 1 200 180 53
-                ADCB    r0, #000h              ; 0CB6 1 200 180 209000
-                DECB    r2                     ; 0CB9 1 200 180 BA
-                JNE     scale_shift_loop             ; 0CBA 1 200 180 CEF5
-                SLL     A                      ; 0CBC 1 200 180 53
-                JGE     scale_direction_toggle             ; 0CBD 1 200 180 CD09
-                SLL     A                      ; 0CBF 1 200 180 53
-                JGE     scale_direction_toggle             ; 0CC0 1 200 180 CD06
-                L       A, er0                 ; 0CC2 1 200 180 34
-                AND     A, #00101h             ; 0CC3 1 200 180 D60101
-                JNE     scale_result_common             ; 0CC6 1 200 180 CE03
-scale_direction_toggle:     XORB    PSWH, #080h            ; 0CC8 1 200 180 A2F080
-scale_result_common:     LB      A, r5                  ; 0CCB 0 200 180 7D
-flags_pack_233_7:     MB      off(00233h).7, C       ; 0CCC 0 200 180 C4333F
-                SRLB    A                      ; 0CCF 0 200 180 63
-                MB      off(00232h).7, C       ; 0CD0 0 200 180 C4323F
-                STB     A, r5                  ; 0CD3 0 200 180 8D
-                CLRB    A                      ; 0CD4 0 200 180 FA
-                JBR     off(00227h).6, knock_244_store ; 0CD5 0 200 180 DE272E
-                CMPB    0adh, #00dh            ; 0CD8 0 200 180 C5ADC00D
-                JGT     knock_244_store             ; 0CDC 0 200 180 C828
-                JBS     off(00212h).3, knock_244_table_select ; 0CDE 0 200 180 EB120F
-                JBS     off(00213h).0, knock_244_table_select ; 0CE1 0 200 180 E8130C
-                JBS     off(00214h).7, knock_244_table_select ; 0CE4 0 200 180 EF1409
-                JBS     off(00233h).6, flags_pack_sj ; 0CE7 0 200 180 EE331E
-                JBS     off(00233h).7, flags_pack_sj ; 0CEA 0 200 180 EF331B
-                LB      A, r5                  ; 0CED 0 200 180 7D
-                SJ      knock_244_store             ; 0CEE 0 200 180 CB16
-knock_244_table_select:     LB      A, (001d9h-00180h)[USP] ; 0CF0 0 200 180 F359
-                MOV     er0, (001dch-00180h)[USP] ; 0CF2 0 200 180 B35C48
-                MOV     DP, #tbl_knock244_a          ; 0CF5 0 200 180 62346B
-                JBS     off(0021fh).1, knock_244_lookup ; 0CF8 0 200 180 E91F08
-                LB      A, (001d8h-00180h)[USP] ; 0CFB 0 200 180 F358
-                MOV     er0, (001dah-00180h)[USP] ; 0CFD 0 200 180 B35A48
-                MOV     DP, #tbl_knock244_b          ; 0D00 0 200 180 62486B
-knock_244_lookup:     CAL     knock_244_helper             ; 0D03 0 200 180 327950
-knock_244_store:     STB     A, off(00243h)         ; 0D06 0 200 180 D443
+; (skeleton: knock control unit removed: no knock flags, no knock retard)
+scale_shift_loop:
+scale_direction_toggle:
+scale_result_common:
+flags_pack_233_7:
+knock_244_table_select:
+knock_244_lookup:
+knock_244_store:
 flags_pack_sj:     LB      A, #03ah               ; 0D08 0 200 180 773A
                 MOVB    r0, #040h              ; 0D0A 0 200 180 9840
                 CMPB    0a4h, #0dbh            ; 0D0C 0 200 180 C5A4C0DB
@@ -1627,9 +1547,7 @@ ign_sum_negate:     CLR     A                      ; 0EF0 1 200 180 F9
 ign_sum_stage4:     LB      A, off(00242h)         ; 0F04 0 200 180 F442
                 EXTND                          ; 0F06 1 200 180 F8
                 ADD     er3, A                 ; 0F07 1 200 180 4781
-                CLR     A                      ; 0F09 1 200 180 F9
-                LB      A, off(00243h)         ; 0F0A 0 200 180 F443
-                SUB     er3, A                 ; 0F0C 0 200 180 47A1
+; (skeleton: no knock retard to subtract)
                 CLR     A                      ; 0F0E 1 200 180 F9
                 LB      A, off(00244h)         ; 0F0F 0 200 180 F444
                 STB     A, r0                  ; 0F11 0 200 180 88
@@ -4008,7 +3926,7 @@ vss_calc_gate2_if_ram227_bit6_clr:     JBR     off(00227h).6, idle_gate1_clear ;
 idle_gate1:     JGE     idle_gate1_timer_check             ; 280D 1 208 180 CD10
                 CMPB    0adh, #00dh            ; 280F 1 208 180 C5ADC00D
                 JGT     idle_gate1_trigger             ; 2813 1 208 180 C803
-                JBS     off(00233h).7, idle_gate1_timer_check ; 2815 1 208 180 EF3307
+                                                ; 2815 (skeleton: no knock flag to test)
 idle_gate1_trigger:     MOVB    off(002e8h), #00ah     ; 2818 1 208 180 C4E8980A
 idle_gate1_clear:     RC                             ; 281C 1 208 180 95
                 SJ      dtc24_code24_latch             ; 281D 1 208 180 CB05
@@ -7418,28 +7336,9 @@ tmr3_reload_clamp_check:     CMP     A, #0001fh             ; 4DF2 1 108 280 C61
                 JGE     tmr3_store_e8             ; 4DF5 1 108 280 CD03
 tmr3_reload_clamp_min:     L       A, #0001fh             ; 4DF7 1 108 280 671F00
 tmr3_store_e8:     ST      A, 0e0h                ; 4DFA 1 108 280 D5E0
-                MOV     DP, #00f00h            ; 4DFC 1 108 280 62000F
-                LB      A, [DP]                ; 4DFF 0 108 280 F2
-                SRLB    A                      ; 4E00 0 108 280 63
-                ROR     off(001d0h)            ; 4E01 0 108 280 B4D0C7
-                SRLB    A                      ; 4E04 0 108 280 63
-                ROR     off(001d0h)            ; 4E05 0 108 280 B4D0C7
-                LB      A, 0d2h                ; 4E08 0 108 280 F5D2
-                JNE     crank_a2_check4             ; 4E0A 0 108 280 CE06
-                CLR     A                      ; 4E0C 1 108 280 F9
-                XCHG    A, off(001d0h)         ; 4E0D 1 108 280 B4D010
-                ST      A, 0f0h                ; 4E10 1 108 280 D5F0
-crank_a2_check4:     LB      A, 0d2h                ; 4E12 0 108 280 F5D2
-                CMPB    A, #001h               ; 4E14 0 108 280 C601
-                JNE     crank_a8_p1_output             ; 4E16 0 108 280 CE04
-                L       A, 0eeh                ; 4E18 1 108 280 E5EE
-                ST      A, off(001ceh)         ; 4E1A 1 108 280 D4CE
-crank_a8_p1_output:     L       A, off(001ceh)         ; 4E1C 1 108 280 E4CE
-                SRL     A                      ; 4E1E 1 108 280 63
-                MB      P1.7, C                ; 4E1F 1 108 280 C5223F
-                SRL     A                      ; 4E22 1 108 280 63
-                MB      P1.3, C                ; 4E23 1 108 280 C5223B
-                ST      A, off(001ceh)         ; 4E26 1 108 280 D4CE
+; (skeleton: knock control unit removed: no knock sample from port A, nothing shifted out on P1.7/P1.3)
+crank_a2_check4:
+crank_a8_p1_output:
                 MOV     DP, #02f00h            ; 4E28 1 108 280 62002F
                 LB      A, P1                  ; 4E2B 0 108 280 F522
                 STB     A, [DP]                ; 4E2D 0 108 280 D2
@@ -9634,6 +9533,7 @@ skel_ign_service_hook:
 ; Outputs freed by the skeleton: P1.4 (dash check-engine lamp, 1 = on) and P1.5 (ECU LED).
 ; ================================================================================================
 skel_free_start:                               ; everything from here to 5EFFh is free for modules
+; @keep-begin (the hook slots are patched by modules: keep every byte)
                 org 05F00h
 hook_init:      RT
                 NOP
@@ -9669,6 +9569,7 @@ skel_free2_hi:  DW  07FFEh                 ; 5FF4 (7FFFh is the checksum byte)
 skel_hooks:     DW  hook_init              ; 5FF6 hook table
 skel_hookcount: DB  8                      ; 5FF8 slots
 skel_reserved:  DB  0FFh, 0FFh, 0FFh, 0FFh, 0FFh, 0FFh ; 5FF9
+; @keep-end
 ; ------------------------------------------------------------------------------------------------
 ; Calibration: kept at its stock P30 addresses (6000h-7640h), so P30 definitions and XDFs still line up.
 ; The gap between the end of the code above and here is free space.
@@ -10428,4 +10329,4 @@ crank_edge_flag_store_tbl_3:       DB  000h,000h,000h,000h,000h,000h,000h,000h,0
 ; This byte, at a fixed address, is what the build (and the feature editor) adjusts.
 ; ------------------------------------------------------------------------------------------------
                 org 07FFFh
-checksum_fix:   DB  0B0h ; CHECKSUM correction
+checksum_fix:   DB  0BEh ; CHECKSUM correction
