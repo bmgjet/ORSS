@@ -1,22 +1,22 @@
 {
   "format": "okirom-features",
   "version": 1,
-  "about": "Feature modules for roms/p30-skeleton.asm (layout 1.0). A module is code in the skeleton's free space plus a jump written over one of the hook slots at 5F00h; see roms/p30-skeleton.md. The app keeps the checksum byte (7FFFh) balanced when it applies or removes one.",
+  "about": "Feature modules for roms/p30-skeleton.asm (layout 2.0). A module is code in the skeleton's free space plus a jump written over one of the hook slots at 7F00h; see roms/p30-skeleton.md. The app keeps the checksum byte (7FFFh) balanced when it applies or removes one.",
   "checksumByte": "7FFF",
   "features": [
     {
       "id": "shift-light",
       "name": "Shift light on the check-engine lamp",
       "category": "Driver aids",
-      "description": "Lights the dash check-engine lamp (P1.4) above 6000 rpm. Hook: hook_main (5F03h). Code: 5E00h-5E0Eh. RAM: none.",
-      "verified": "Simulator, P30 skeleton 1.0: lamp off at 2500 rpm, on at 6500 and 8600 rpm; nothing else changes.",
+      "description": "Lights the dash check-engine lamp (P1.4) above 6000 rpm. Hook: hook_main (7F03h). Code: 7E00h-7E0Eh. RAM: none.",
+      "verified": "Simulator, P30 skeleton 2.0: lamp off at 2500 rpm, on at 6500 and 8600 rpm; nothing else changes.",
       "variants": [
         {
-          "rom": "P30 skeleton 1.0",
+          "rom": "P30 skeleton 2.0",
           "sites": [
-            { "address": "5E00", "original": "FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF", "patched": "E5 AC C6 39 01 CD 04 C5 22 1C 01 C5 22 0C 01",
+            { "address": "7E00", "original": "FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF", "patched": "E5 AC C6 39 01 CD 04 C5 22 1C 01 C5 22 0C 01",
               "note": "L A,0ACh (crank period) / CMP A,#139h (6000 rpm) / JGE off / SB P1.4 / RT / off: RB P1.4 / RT" },
-            { "address": "5F03", "original": "01 00 00", "patched": "03 00 5E", "note": "hook_main: RT -> J 5E00h" }
+            { "address": "7F03", "original": "01 00 00", "patched": "03 00 7E", "note": "hook_main: RT -> J 7E00h" }
           ]
         }
       ]

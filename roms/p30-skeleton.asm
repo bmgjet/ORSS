@@ -6,13 +6,18 @@
 ; stock P30 at 14 operating points (cranking, cold/warm idle, cruise, part load, WOT low and VTEC,
 ; rev limit, decel, hot WOT, key-on prime, stall, tip-in).
 ;
-; Kept: boot and self-tests, ROM checksum, crank/TDC/CYP sync, sensors, fuel (maps, cranking,
-;   warm-up, IAT/baro/battery corrections, tip-in, decel cut), ignition, rev limiter, VTEC (with its
-;   oil-pressure check), idle air control (IACV), fuel pump, and the stock calibration at 6000h-7649h.
+; Kept: boot, ROM checksum, crank/TDC/CYP sync, sensors, fuel (one VE map for both cams, cranking,
+;   warm-up, IAT/baro/battery corrections, tip-in, decel cut), ignition, rev limiter, VTEC (solenoid
+;   only), idle air control (IACV), fuel pump, radiator fan, alternator control.
 ; Removed: serial datalog/diagnostic link, trouble-code detection, storage and flashing, check-engine
-;   lamp, closed-loop O2 (fuel is always open loop), EGR, automatic transmission control and lock-up.
-; Added: module hooks at 5F00h, module requests (fuel cut, ignition retard), a 2.048 ms tick, and a
-;   checksum byte at 7FFFh. Free for modules: skel_free_start-5EFFh and 764Ah-7FFEh.
+;   lamp, fail-safe sensor substitution, all O2 sensor use (fuel is always open loop) and the O2
+;   heater, A/C clutch control (the A/C request is ignored), EGR, knock control
+;   unit interface, VTEC oil-pressure monitoring, speed limiter, automatic transmission control and
+;   lock-up, EVAP purge control, the register/RAM/stack/clock self-tests, and every calibration table
+;   only those used. The calibration is packed straight after the code, so stock P30 definitions do
+;   not line up with it.
+; Added: module hooks at 7F00h, module requests (fuel cut, ignition retard), a 2.048 ms tick, an info
+;   block at 7FE0h and a checksum byte at 7FFFh. Free for modules: skel_free_start-7EFFh.
 ;
 ; Not bench-tested on a car. Treat it like any new ROM: emulator and wideband first.
 ;==================================================================================================
@@ -121,7 +126,7 @@ timer0_bit_shift_right:     LB      A, r6                  ; 00C7 0 1B8 ??? 7E
 timer0_bit_invert:     LB      A, r6                  ; 00CA 0 1B8 ??? 7E
                 RORB    A                      ; 00CB 0 1B8 ??? 43
                 XORB    A, #0ffh               ; 00CC 0 1B8 ??? F6FF
-                J       timer0_bit_output             ; 00CE 0 1B8 ??? 03BF00
+                SJ       timer0_bit_output            ; 00CE 0 1B8 ??? 03BF00
 timer0_return:     RTI                            ; 00D1 0 1B8 ??? 02
 timer0_bit_accumulate:     ADD     TMR0, A                ; 00D2 1 1B8 ??? B53281
                 LB      A, r6                  ; 00D5 0 1B8 ??? 7E
@@ -134,7 +139,7 @@ timer0_bit_accumulate:     ADD     TMR0, A                ; 00D2 1 1B8 ??? B5328
                 MOV     er0, er1               ; 00E1 0 1B8 ??? 4548
                 MOV     er1, er2               ; 00E3 0 1B8 ??? 4649
                 L       A, #00001h             ; 00E5 1 1B8 ??? 670100
-                J       timer0_bitshift_loop             ; 00E8 1 1B8 ??? 03B300
+                SJ       timer0_bitshift_loop            ; 00E8 1 1B8 ??? 03B300
 timer0_final_bit_check:     L       A, er2                 ; 00EB 1 1B8 ??? 36
                 JEQ     timer0_sequence_done             ; 00EC 1 1B8 ??? C91F
                 ADD     TMR0, A                ; 00EE 1 1B8 ??? B53281
@@ -206,7 +211,7 @@ timer2_state1_check:     JEQ     timer2_state2_check             ; 0177 0 0D0 ??
                 JBS     off(000d0h).3, timer2_tcon3_clear ; 017C 0 0D0 ??? EBD0E4
                 CLRB    A                      ; 017F 0 0D0 ??? FA
                 ORB     off(TCON3), #004h      ; 0180 0 0D0 ??? C443E004
-                J       timer2_state_dispatch             ; 0184 0 0D0 ??? 035E01
+                SJ       timer2_state_dispatch            ; 0184 0 0D0 ??? 035E01
 timer2_state2_check:     LB      A, r0                  ; 0187 0 0D0 ??? 78
                 ADDB    A, #001h               ; 0188 0 0D0 ??? 8601
                 CMPB    A, #005h               ; 018A 0 0D0 ??? C605
@@ -217,7 +222,7 @@ timer2_state2_check:     LB      A, r0                  ; 0187 0 0D0 ??? 78
                 JGE     timer2_tmr2_add             ; 0196 1 0D0 ??? CD03
                 L       A, #0001fh             ; 0198 1 0D0 ??? 671F00
 timer2_tmr2_add:     ADD     A, off(TMR2)           ; 019B 1 0D0 ??? 873A
-                J       timer3_reload_store             ; 019D 1 0D0 ??? 03CA01
+                SJ       timer3_reload_store            ; 019D 1 0D0 ??? 03CA01
 timer2_tcon3_check:     JBS     off(TCON3).3, timer3_reload_dec ; 01A0 0 0D0 ??? EB43C4
 timer2_er3_calc:     L       A, off(TMR2)           ; 01A3 1 0D0 ??? E43A
                 ADD     A, er2                 ; 01A5 1 0D0 ??? 0A
@@ -240,7 +245,7 @@ timer3_reload_alt:     L       A, off(TM3)            ; 01C5 1 0D0 ??? E43C
                 ADD     A, #00004h             ; 01C7 1 0D0 ??? 860400
 timer3_reload_store:     ST      A, off(TMR3)           ; 01CA 1 0D0 ??? D43E
                 ORB     off(TCON3), #008h      ; 01CC 1 0D0 ??? C443E008
-                J       timer2_irq_clear             ; 01D0 1 0D0 ??? 036E01
+                SJ       timer2_irq_clear            ; 01D0 1 0D0 ??? 036E01
 int_INT0:       L       A, 0f4h                ; 01D3 1 ??? ??? E5F4
                 ST      A, IE                  ; 01D5 1 ??? ??? D51A
                 L       A, TM2                 ; 01D7 1 ??? ??? E538
@@ -260,12 +265,6 @@ int_int0_edge_check:     XCHG    A, er0                 ; 01EA 1 0D8 ??? 4410
                 ANDB    PSWH, #0feh            ; 01F7 1 0D8 ??? A2D0FE
                 ST      A, off(IE)             ; 01FA 1 0D8 ??? D41A
                 RTI                            ; 01FC 1 0D8 ??? 02
-                DB  0E5h,0F4h,0D5h,01Ah,0B5h,004h,098h,002h ; 02B2
-                DB  001h,067h,000h,001h,0F5h,055h,0C5h,056h ; 02BA
-                DB  00Bh,0CEh,00Ch,0C5h,006h,02Fh,0C5h,007h ; 02C2
-                DB  015h,0CAh,004h,0C5h,007h,098h,002h,052h ; 02CA
-                DB  0F2h,0D5h,051h,0E5h,0F2h,0A2h,008h,0B5h ; 02D2
-                DB  01Ah,08Ah,002h ; 02DA
 int_timer_2_overflow: L       A, 0f4h                ; 02DD 1 ??? ??? E5F4
                 ST      A, IE                  ; 02DF 1 ??? ??? D51A
                 ORB     PSWH, #001h            ; 02E1 1 ??? ??? A2E001
@@ -320,14 +319,11 @@ int_INT1:       L       A, #000a0h             ; 037B 1 ??? ??? 67A000
                 MOV     USP, #00280h           ; 0388 1 108 280 A1988002
                 CAL     refresh_engine_flags_snapshot             ; 038C 1 108 280 326252
                 SB      off(00120h).4          ; 038F 1 108 280 C4201C
-                JBS     off(00112h).7, int1_dispatch_main_cycle ; 0392 1 108 280 EF120F
-                JBS     off(00112h).3, int1_dispatch_alt1 ; 0395 1 108 280 EB1212
                 RB      IRQH.1                 ; 0398 1 108 280 C51909
                 JEQ     dtc04_ckp_latch             ; 039B 1 108 280 C90A
-                RB      09ch.0                 ; 039D 1 108 280 C59C08
                 MOVB    off(001a9h), #02dh     ; 03A0 1 108 280 C4A9982D
 int1_dispatch_main_cycle:     J       crank_cycle_entry             ; 03A4 1 108 280 037A06
-dtc04_ckp_latch:     RB      09ch.0                 ; 03A7 1 108 280 C59C18
+dtc04_ckp_latch:
 int1_dispatch_alt1:     L       A, ADCR6               ; 03AA 1 108 280 E56C
                 ST      A, 0a2h                ; 03AC 1 108 280 D5A2
                 L       A, TM2                 ; 03AE 1 108 280 E538
@@ -354,15 +350,14 @@ int_crank_sync: L       A, #000a0h             ; 03DC 1 ??? ??? 67A000
                 MOV     PSW, #00102h           ; 03E1 1 ??? ??? B504980201
                 MOV     LRB, #00021h           ; 03E6 1 108 ??? 572100
                 MOV     USP, #00280h           ; 03E9 1 108 280 A1988002
-                L       A, (00212h-00280h)[USP] ; 03ED 1 108 280 E392
-                ST      A, off(00112h)         ; 03EF 1 108 280 D412
-                L       A, (00214h-00280h)[USP] ; 03F1 1 108 280 E394
-                ST      A, off(00114h)         ; 03F3 1 108 280 D414
+; (skeleton: no fault-flag snapshot to copy)
+; (skeleton: no fault-flag snapshot to copy)
+; (skeleton: no fault-flag snapshot to copy)
+; (skeleton: no fault-flag snapshot to copy)
                 L       A, (00216h-00280h)[USP] ; 03F5 1 108 280 E396
                 ST      A, off(00116h)         ; 03F7 1 108 280 D416
                 MOVB    off(001a9h), #02dh     ; 03F9 1 108 280 C4A9982D
                 JBR     off(00120h).3, crank_sync_flags_clear_path ; 03FD 1 108 280 DB204A
-                J       int_crank_sync_if_ram112_bit7_set             ; 0400 1 108 280 031877
 int_crank_sync_clear_irqh_bit7:     RB      IRQH.7                 ; 0403 1 108 280 C5190F
                 JNE     crank_sync_lost_path             ; 0406 1 108 280 CE05
                 RB      09eh.7                 ; 0408 1 108 280 C59E0F
@@ -382,13 +377,13 @@ crank_sync_lost_path:     SB      off(00120h).4          ; 040D 1 108 280 C4201C
 crank_sync_retry_check:     CMPB    0d2h, #005h            ; 042D 1 108 280 C5D2C005
                 JGE     crank_sync_confirm_check             ; 0431 1 108 280 CD06
                 INCB    0d2h                   ; 0433 1 108 280 C5D216
-                J       crank_tooth_counter_reset_goto_786c             ; 0436 1 108 280 036904
-crank_sync_confirm_check:     JBS     off(00112h).7, crank_sync_confirmed ; 0439 1 108 280 EF1206
-dtc08_tdc_latch_2: RB      09ch.1                 ; 043C 1 108 280 C59C19
+                SJ       crank_tooth_counter_reset_clear_ram09f_bit2    ; 0436 1 108 280 036904
+crank_sync_confirm_check:
+dtc08_tdc_latch_2:
                 SB      off(00120h).6          ; 043F 1 108 280 C4201E
 crank_sync_confirmed:     INCB    0d3h                   ; 0442 1 108 280 C5D316
                 CLRB    0d2h                   ; 0445 1 108 280 C5D215
-                SJ      crank_tooth_counter_reset_goto_786c             ; 0448 1 108 280 CB1F
+                SJ      crank_tooth_counter_reset_clear_ram09f_bit2     ; 0448 1 108 280 CB1F
 crank_sync_flags_clear_path:     RB      IRQH.7                 ; 044A 1 108 280 C5190F
                 RB      09eh.7                 ; 044D 1 108 280 C59E0F
                 RB      09fh.2                 ; 0450 1 108 280 C59F0A
@@ -400,15 +395,15 @@ crank_sync_lost_path_set_ram120_bit5:     SB      off(00120h).5          ; 045E 
                 SJ      crank_tooth_counter_reset             ; 0461 1 108 280 CB03
 crank_sync_flag_high:     SB      09dh.1                 ; 0463 1 108 280 C59D19
 crank_tooth_counter_reset:     CLR     0d2h                   ; 0466 1 108 280 B5D215
-crank_tooth_counter_reset_goto_786c:     J       crank_tooth_counter_reset_if_ram113_bit0_set             ; 0469 1 108 280 036C78
+crank_tooth_counter_reset_goto_786c:
 crank_tooth_counter_reset_clear_ram09f_bit2:     RB      09fh.2                 ; 046C 1 108 280 C59F0A
                 JNE     crank_tooth_counter_reset_clear_ram120_bit7             ; 046F 1 108 280 CE2E
 crank_tooth_seq_check:     CMPB    off(0012ah), #017h     ; 0471 1 108 280 C42AC017
                 JGE     crank_tooth_seq_gate             ; 0475 1 108 280 CD06
                 INCB    off(0012ah)            ; 0477 1 108 280 C42A16
-                J       crank_tooth_mod_check             ; 047A 1 108 280 03C104
-crank_tooth_seq_gate:     JBS     off(00113h).0, crank_tooth_seq_advance ; 047D 1 108 280 E81306
-dtc09_cyp_latch: RB      09ch.2                 ; 0480 1 108 280 C59C1A
+                SJ       crank_tooth_mod_check            ; 047A 1 108 280 03C104
+crank_tooth_seq_gate:
+dtc09_cyp_latch:
                 SB      off(00120h).7          ; 0483 1 108 280 C4201F
 crank_tooth_seq_advance:     INCB    off(0012bh)            ; 0486 1 108 280 C42B16
                 CLRB    off(0012ah)            ; 0489 1 108 280 C42A15
@@ -432,13 +427,12 @@ crank_tooth_counter_reset_clear_ram120_bit7:     RB      off(00120h).7          
                 JEQ     crank_tooth_reset             ; 04B9 1 108 280 C903
 crank_window_flag_check2_set_ram09d_bit2:     SB      09dh.2                 ; 04BB 1 108 280 C59D1A
 crank_tooth_reset:     CLR     off(0012ah)            ; 04BE 1 108 280 B42A15
-crank_tooth_mod_check:     JBS     off(00112h).7, crank_tooth_mod6_calc ; 04C1 1 108 280 EF120F
+crank_tooth_mod_check:
                 JBS     off(00120h).6, crank_tooth_mod6_calc ; 04C4 1 108 280 EE200C
-crank_tooth_range_check:     JBS     off(00113h).0, crank_tooth_wrap_calc ; 04C7 1 108 280 E81317
+crank_tooth_range_check:
                 JBS     off(00120h).7, crank_tooth_wrap_calc ; 04CA 1 108 280 EF2014
 crank_tooth_carry_clear:     RC                             ; 04CD 1 108 280 95
-                JBR     off(00113h).6, crank_sync_store_flag ; 04CE 1 108 280 DE132F
-                SJ      crank_sync_confirmed_flag             ; 04D1 1 108 280 CB29
+                SJ       crank_sync_store_flag ; (skeleton: fault flags are always clear)
 crank_tooth_mod6_calc:     CLR     A                      ; 04D3 1 108 280 F9
                 MOVB    r0, #006h              ; 04D4 1 108 280 9806
                 LB      A, off(0012ah)         ; 04D6 0 108 280 F42A
@@ -460,7 +454,6 @@ crank_tooth_wrap_store:     STB     A, r2                  ; 04EB 0 108 280 8A
                 MULB                           ; 04F1 0 108 280 A234
                 ADDB    A, r2                  ; 04F3 0 108 280 0A
                 STB     A, off(0012ah)         ; 04F4 0 108 280 D42A
-                JBS     off(00112h).7, crank_sync_confirmed_flag ; 04F6 0 108 280 EF1203
                 JBR     off(00120h).6, crank_tooth_carry_clear ; 04F9 0 108 280 DE20D1
 crank_sync_confirmed_flag:     SC                             ; 04FC 0 108 280 85
                 SB      off(0011ch).2          ; 04FD 0 108 280 C41C1A
@@ -511,7 +504,6 @@ crank_cycle_dispatch2:     LB      A, off(00134h)         ; 0569 0 108 280 F434
                 SLLB    A                      ; 056B 0 108 280 53
                 EXTND                          ; 056C 1 108 280 F8
                 MOV     X1, A                  ; 056D 1 108 280 50
-                JBS     off(0011dh).4, injtimer_countdown_check ; 056E 1 108 280 EC1D23
                 CLR     A                      ; 0571 1 108 280 F9
                 MOV     X2, A                  ; 0572 1 108 280 51
                 ST      A, 003b6h[X2]          ; 0573 1 108 280 D1B603
@@ -520,30 +512,6 @@ crank_cycle_dispatch2:     LB      A, off(00134h)         ; 0569 0 108 280 F434
                 ST      A, 003bch[X2]          ; 057C 1 108 280 D1BC03
                 CLRB    A                      ; 057F 0 108 280 FA
                 STB     A, off(001cbh)         ; 0580 0 108 280 D4CB
-                J       injtimer_bit_clear             ; 0582 0 108 280 03BA05
-injtimer_clear_path1:     SBR     off(001cdh)            ; 0585 0 108 280 C4CD11
-                SB      off(00122h).7          ; 0588 0 108 280 C4221F
-                SB      off(001c9h).0          ; 058B 0 108 280 C4C918
-                SJ      injbase_calc_start             ; 058E 0 108 280 CB2D
-injtimer_clear_path2:     L       A, off(00144h)         ; 0590 1 108 280 E444
-                SJ      injtimer_clamp_store             ; 0592 1 108 280 CB23
-injtimer_countdown_check:     LB      A, off(001cch)         ; 0594 0 108 280 F4CC
-                SUBB    A, #001h               ; 0596 0 108 280 A601
-                JGE     injtimer_countdown_store             ; 0598 0 108 280 CD02
-                LB      A, #007h               ; 059A 0 108 280 7707
-injtimer_countdown_store:     STB     A, off(001cch)         ; 059C 0 108 280 D4CC
-                CMPB    A, #007h               ; 059E 0 108 280 C607
-                JGT     injtimer_bit_clear             ; 05A0 0 108 280 C818
-                MBR     C, off(001cbh)         ; 05A2 0 108 280 C4CB21
-                JLT     injtimer_clear_path1             ; 05A5 0 108 280 CADE
-                ADDB    A, #004h               ; 05A7 0 108 280 8604
-                RBR     off(001cdh)            ; 05A9 0 108 280 C4CD12
-                JNE     injtimer_clear_path2             ; 05AC 0 108 280 CEE2
-                L       A, 003b6h[X1]          ; 05AE 1 108 280 E0B603
-                SUB     A, #00096h             ; 05B1 1 108 280 A69600
-                JGE     injtimer_clamp_store             ; 05B4 1 108 280 CD01
-                CLR     A                      ; 05B6 1 108 280 F9
-injtimer_clamp_store:     ST      A, 003b6h[X1]          ; 05B7 1 108 280 D0B603
 injtimer_bit_clear:     RB      off(001c9h).0          ; 05BA 1 108 280 C4C908
 injbase_calc_start:     CLR     A                      ; 05BD 1 108 280 F9
                 JBS     off(0011ch).4, injbase_store ; 05BE 1 108 280 EC1C0F
@@ -565,7 +533,7 @@ injbase_store:     ST      A, off(001c6h)         ; 05D0 1 108 280 D4C6
                 JLT     injbase_store_set_pswh_bit0_2             ; 05E8 1 108 280 CA29
 injbase_store_set_pswh_bit0:     SB      PSWH.0                 ; 05EA 1 108 280 A218
                 RB      off(00122h).3          ; 05EC 1 108 280 C4220B
-                J       crank_tooth_flag_update             ; 05EF 1 108 280 031B06
+                SJ       crank_tooth_flag_update            ; 05EF 1 108 280 031B06
 injbase_store_if_ram120_bit2_clr:     JBR     off(00120h).2, tm0_sync_common ; 05F2 0 108 280 DA2014
                 L       A, TM0                 ; 05F5 1 108 280 E530
                 SUB     A, TMR0                ; 05F7 1 108 280 B532A2
@@ -592,12 +560,11 @@ crank_tooth_flag_update:     CAL     crank_helper2             ; 061B 1 108 280 
                 ANDB    A, #003h               ; 0628 0 108 280 D603
                 STB     A, off(00134h)         ; 062A 0 108 280 D434
                 JBS     off(00117h).3, crank_decode_exit ; 062C 0 108 280 EB1710
-                JBS     off(00113h).7, crank_decode_exit ; 062F 0 108 280 EF130D
                 RB      off(00122h).0          ; 0632 0 108 280 C42208
                 JEQ     crank_decode_exit             ; 0635 0 108 280 C908
                 RB      TRNSIT.2               ; 0637 0 108 280 C5460A
                 JNE     crank_decode_exit             ; 063A 0 108 280 CE03
-dtc16_injector_latch: RB      09ch.6                 ; 063C 0 108 280 C59C1E
+dtc16_injector_latch:
 crank_decode_exit:     RB      off(00122h).3          ; 063F 1 108 280 C4220B
                 JNE     crank_decode_final_check             ; 0642 1 108 280 CE03
                 CAL     tm0_resync_helper             ; 0644 1 108 280 32E54C
@@ -634,15 +601,14 @@ int1_rti_epilogue:     L       A, 0f2h                ; 0680 1 108 280 E5F2
 crank_cycle_dispatch:     JGE     crank_cycle_dispatch_alt             ; 0685 0 108 280 CD59
                 CMPB    A, #001h               ; 0687 0 108 280 C601
                 JGE     crank_cycle_dispatch_alt2             ; 0689 0 108 280 CD5E
-                JBS     off(00113h).6, crank_cycle_p4_gate ; 068B 0 108 280 EE1314
                 JBS     off(0011dh).6, crank_cycle_p4_gate ; 068E 0 108 280 EE1D11
                 CMP     0ach, #000e2h          ; 0691 0 108 280 B5ACC0E200
                 JLT     crank_cycle_p4_gate             ; 0696 0 108 280 CA0A
                 RB      TRNSIT.1               ; 0698 0 108 280 C54609
                 JNE     crank_cycle_p4_gate             ; 069B 0 108 280 CE05
-dtc15_ign_output_latch: RB      09ch.3                 ; 069D 0 108 280 C59C1B
+dtc15_ign_output_latch:
                 SJ      crank_cycle_p4_gate_if_ram117_bit2_set             ; 06A0 0 108 280 CB07
-crank_cycle_p4_gate:     RB      09ch.3                 ; 06A2 0 108 280 C59C0B
+crank_cycle_p4_gate:
                 MOVB    off(001ach), #006h     ; 06A5 0 108 280 C4AC9806
 crank_cycle_p4_gate_if_ram117_bit2_set:     JBS     off(00117h).2, crank_cycle_dispatch_alt2_if_ram120_bit4_clr ; 06A9 0 108 280 EA173F
                 J       crank_cycle_p4_gate_if_ram121_bit1_clr             ; 06AC 0 108 280 033077
@@ -654,7 +620,6 @@ crank_cycle_counter_check:     CMPB    off(001aah), #028h     ; 06BA 0 108 280 C
                 JLE     crank_cycle_result_b             ; 06BE 0 108 280 CF13
                 JBS     off(00117h).4, crank_cycle_result_a ; 06C0 0 108 280 EC170C
                 JBS     off(00122h).4, crank_cycle_result_common ; 06C3 0 108 280 EC2210
-                JBS     off(00112h).5, crank_cycle_result_a ; 06C6 0 108 280 ED1206
                 CMPB    0c1h, #020h            ; 06C9 0 108 280 C5C1C020
                 JLT     crank_cycle_result_common             ; 06CD 0 108 280 CA07
 crank_cycle_result_a:     LB      A, #003h               ; 06CF 0 108 280 7703
@@ -676,7 +641,7 @@ crank_cycle_dispatch_alt2_if_ram120_bit4_clr:     JBR     off(00120h).4, crank_c
                 LB      A, off(0011ch)         ; 06F4 0 108 280 F41C
                 ANDB    A, #003h               ; 06F6 0 108 280 D603
                 ANDB    off(00136h), A         ; 06F8 0 108 280 C436D1
-                JNE     crank_cycle_bailout             ; 06FB 0 108 280 CEEA
+                JNE     crank_cycle_entry               ; 06FB 0 108 280 CEEA
                 L       A, 0f2h                ; 06FD 1 108 280 E5F2
                 RB      PSWH.0                 ; 06FF 1 108 280 A208
                 SB      off(00122h).2          ; 0701 1 108 280 C4221A
@@ -820,7 +785,6 @@ loadindex_flag_load:     LB      A, r7                  ; 081E 0 200 180 7F
 loadindex_store:     STB     A, 0aah                ; 081F 0 200 180 D5AA
                 MB      C, PSWL.4              ; 0821 0 200 180 A32C
                 MB      0a0h.6, C              ; 0823 0 200 180 C5A03E
-                JBS     off(00212h).2, map_sign_flag_clear ; 0826 0 200 180 EA1217
                 L       A, 0a2h                ; 0829 1 200 180 E5A2
                 SWAP                           ; 082B 1 200 180 83
                 LB      A, ACC                 ; 082C 0 200 180 F506
@@ -828,16 +792,12 @@ loadindex_store:     STB     A, 0aah                ; 081F 0 200 180 D5AA
                 JGT     dtc03_map_latch             ; 0830 0 200 180 C804
                 CMPB    A, #00bh               ; 0832 0 200 180 C60B
                 JGE     map_neg_helper_call             ; 0834 0 200 180 CD07
-dtc03_map_latch:     RB      098h.0                 ; 0836 0 200 180 C59818
+dtc03_map_latch:
                 LB      A, off(00235h)         ; 0839 0 200 180 F435
-                SJ      map_sign_gate2             ; 083B 0 200 180 CB09
+                SJ      map_sign_gate4             ; 083B 0 200 180 CB09
 map_neg_helper_call:     CAL     subtract24_clamp_byte             ; 083D 0 200 180 32214F
-map_sign_flag_clear:     RB      098h.0                 ; 0840 0 200 180 C59808
-                JBS     off(00212h).2, map_sign_gate3 ; 0843 0 200 180 EA1203
-map_sign_gate2:     JBR     off(00212h).4, map_sign_gate4 ; 0846 0 200 180 DC1206
-map_sign_gate3:     LB      A, 0b9h                ; 0849 0 200 180 F5B9
-                MOV     X1, #tbl_map_sign          ; 084B 0 200 180 601B6B
-                VCAL    2                      ; 084E 0 200 180 12
+map_sign_flag_clear:
+map_sign_gate2:
 map_sign_gate4:     STB     A, r0                  ; 084F 0 200 180 88
                 LB      A, off(00235h)         ; 0850 0 200 180 F435
                 SUBB    A, r0                  ; 0852 0 200 180 28
@@ -861,8 +821,6 @@ map_delta2_store:     STB     A, 0a9h                ; 0866 0 200 180 D5A9
                 INC     DP                     ; 0874 0 200 180 72
                 STB     A, [DP]                ; 0875 0 200 180 D2
                 LB      A, #059h               ; 0876 0 200 180 7759
-                JBS     off(00212h).2, tps_custom_clamp_store ; 0878 0 200 180 EA120A
-                JBS     off(00212h).4, tps_custom_clamp_store ; 087B 0 200 180 EC1207
                 LB      A, 0a4h                ; 087E 0 200 180 F5A4
                 SUBB    A, off(00235h)         ; 0880 0 200 180 A735
                 JGE     tps_custom_clamp_store             ; 0882 0 200 180 CD01
@@ -870,13 +828,12 @@ map_delta2_store:     STB     A, 0a9h                ; 0866 0 200 180 D5A9
 tps_custom_clamp_store:     STB     A, 0a6h                ; 0885 0 200 180 D5A6
                 MOV     er0, #04d00h           ; 0887 0 200 180 4498004D
                 RC                             ; 088B 0 200 180 95
-                JBS     off(00212h).6, dtc07_tps_latch ; 088C 0 200 180 EE120B
                 MOV     er0, ADCR7             ; 088F 0 200 180 B56E48
                 LB      A, #0fch               ; 0892 0 200 180 77FC
                 CMPB    A, r1                  ; 0894 0 200 180 49
                 JLT     dtc07_tps_latch             ; 0895 0 200 180 CA03
                 CMPB    r1, #005h              ; 0897 0 200 180 21C005
-dtc07_tps_latch:     RB      098h.2                 ; 089A 0 200 180 C5983A
+dtc07_tps_latch:
                 JLT     tps_delta_alt_path             ; 089D 0 200 180 CA19
                 L       A, er0                 ; 089F 1 200 180 34
                 SLL     A                      ; 08A0 1 200 180 53
@@ -890,7 +847,7 @@ tps_delta_store1:     STB     A, 0bch                ; 08AA 0 200 180 D5BC
                 XCHG    A, 0b8h                ; 08AD 1 200 180 B5B810
                 MOV     er1, 0bah              ; 08B0 1 200 180 B5BA49
                 ST      A, 0bah                ; 08B3 1 200 180 D5BA
-                JBR     off(00212h).6, tps_delta_check1 ; 08B5 1 200 180 DE1204
+                SJ       tps_delta_check1 ; (skeleton: fault flags are always clear)
 tps_delta_alt_path:     L       A, er0                 ; 08B8 1 200 180 34
                 MOV     er1, 0b8h              ; 08B9 1 200 180 B5B849
 tps_delta_check1:     SUB     A, er0                 ; 08BC 1 200 180 28
@@ -967,8 +924,6 @@ tps_window_store2:     MB      off(00218h).0, C       ; 0943 0 200 180 C41838
                 JBS     off(0021ch).0, tps_interp_exact_match ; 094C 0 200 180 E81C2D
                 JBR     off(0021ah).2, tps_interp_exact_match ; 094F 0 200 180 DA1A2A
                 JBS     off(00210h).7, tps_interp_exact_match ; 0952 0 200 180 EF1027
-                JBS     off(00212h).2, tps_interp_exact_match ; 0955 0 200 180 EA1224
-                JBS     off(00212h).4, tps_interp_exact_match ; 0958 0 200 180 EC1221
                 MOVB    r4, #0ffh              ; 095B 0 200 180 9CFF
                 LB      A, 0a5h                ; 095D 0 200 180 F5A5
                 MOV     DP, #tbl_tps_custom_curve2          ; 095F 0 200 180 622660
@@ -1059,8 +1014,6 @@ threshold_bank_217_0_store_carry_pswl_bit4:     MB      PSWL.4, C              ;
                 LB      A, r6                  ; 0A08 0 200 180 7E
                 STB     A, (001d9h-00180h)[USP] ; 0A09 0 200 180 D359
                 LB      A, 0a4h                ; 0A0B 0 200 180 F5A4
-                JBS     off(00212h).2, newval_table3_call ; 0A0D 0 200 180 EA1205
-                JBS     off(00212h).4, newval_table3_call ; 0A10 0 200 180 EC1202
                 LB      A, 0a7h                ; 0A13 0 200 180 F5A7
 newval_table3_call:     STB     A, r2                  ; 0A15 0 200 180 8A
                 MOV     X1, #newval_table3_call_tbl_3          ; 0A16 0 200 180 600070
@@ -1081,44 +1034,7 @@ newval_table3_call:     STB     A, r2                  ; 0A15 0 200 180 8A
                 STB     A, (001d6h-00180h)[USP] ; 0A38 0 200 180 D356
                 LB      A, r6                  ; 0A3A 0 200 180 7E
                 STB     A, (001d3h-00180h)[USP] ; 0A3B 0 200 180 D353
-                JBR     off(00216h).7, newval_table3_call_clear_carry ; 0A3D 0 200 180 DF162B
-                JBR     off(00216h).3, newval_table3_call_clear_carry ; 0A40 0 200 180 DB1628
-                MB      C, off(00226h).5       ; 0A43 0 200 180 C4262D
-                MB      PSWL.4, C              ; 0A46 0 200 180 A33C
-                LB      A, #0ffh               ; 0A48 0 200 180 77FF
-                CMPB    A, off(002f2h)         ; 0A4A 0 200 180 C7F2
-                MB      off(00226h).5, C       ; 0A4C 0 200 180 C4263D
-                JGE     newval_table3_call_load_dp             ; 0A4F 0 200 180 CD03
-                XORB    PSWL, #010h            ; 0A51 0 200 180 A3F010
-newval_table3_call_load_dp:     MOV     DP, #00386h            ; 0A54 0 200 180 628603
-                JBS     off(0021fh).1, newval_table3_call_clear_acc ; 0A57 0 200 180 E91F0F
-                JBR     off(00214h).5, newval_table3_call_load_imm ; 0A5A 0 200 180 DD1403
-                JBS     off(00218h).7, newval_table3_call_clear_carry ; 0A5D 0 200 180 EF180B
-newval_table3_call_load_imm:     LB      A, #0ffh               ; 0A60 0 200 180 77FF
-                JBS     off(0021dh).7, newval_table3_call_store_ram2f0 ; 0A62 0 200 180 EF1D0B
-                LB      A, off(002f0h)         ; 0A65 0 200 180 F4F0
-                JNE     newval_table3_call_subb_acc             ; 0A67 0 200 180 CE05
-newval_table3_call_clear_acc:     CLR     A                      ; 0A69 1 200 180 F9
-                ST      A, [DP]                ; 0A6A 1 200 180 D2
-newval_table3_call_clear_carry:     RC                             ; 0A6B 1 200 180 95
-                SJ      newval_table3_call_store_carry_ram219_bit6             ; 0A6C 1 200 180 CB21
-newval_table3_call_subb_acc:     SUBB    A, #001h               ; 0A6E 0 200 180 A601
-newval_table3_call_store_ram2f0:     STB     A, off(002f0h)         ; 0A70 0 200 180 D4F0
-                MOV     X1, #newval_table3_call_tbl          ; 0A72 0 200 180 601C64
-                JBS     off(00226h).5, newval_table3_call_load_carry_pswl_bit4 ; 0A75 0 200 180 ED2604
-                INC     DP                     ; 0A78 0 200 180 72
-                MOV     X1, #newval_table3_call_tbl_2          ; 0A79 0 200 180 602064
-newval_table3_call_load_carry_pswl_bit4:     MB      C, PSWL.4              ; 0A7C 0 200 180 A32C
-                JGE     newval_table3_call_load_carry_ram226_bit5             ; 0A7E 0 200 180 CD04
-                LB      A, off(00235h)         ; 0A80 0 200 180 F435
-                VCAL    2                      ; 0A82 0 200 180 12
-                STB     A, [DP]                ; 0A83 0 200 180 D2
-newval_table3_call_load_carry_ram226_bit5:     MB      C, off(00226h).5       ; 0A84 0 200 180 C4262D
-                LB      A, [DP]                ; 0A87 0 200 180 F2
-                JEQ     newval_table3_call_store_carry_ram219_bit6             ; 0A88 0 200 180 C905
-                DECB    [DP]                   ; 0A8A 0 200 180 C217
-                XORB    PSWH, #080h            ; 0A8C 0 200 180 A2F080
-newval_table3_call_store_carry_ram219_bit6:     MB      off(00219h).6, C       ; 0A8F 0 200 180 C4193E
+; (skeleton: no EGR, so never the EGR fuel/ignition maps - 219h.6 stays 0)
                 CLR     er2                    ; 0A92 0 200 180 4615
                 SC                             ; 0A94 0 200 180 85
                 JBR     off(00227h).6, mode_flags_pack4 ; 0A95 0 200 180 DE276D
@@ -1127,58 +1043,14 @@ newval_table3_call_store_carry_ram219_bit6:     MB      off(00219h).6, C       ;
                 CMPB    0a7h, #000h            ; 0A9C 0 200 180 C5A7C000
                 JNE     mode_flags_pack_start             ; 0AA0 0 200 180 CE01
                 CLRB    A                      ; 0AA2 0 200 180 FA
-mode_flags_pack_start:     MOV     er0, off(00212h)       ; 0AA3 0 200 180 B41248
-                AND     er0, #0c3bch           ; 0AA6 0 200 180 44D0BCC3
-                JNE     mode_flags_pack_alt             ; 0AAA 0 200 180 CE05
-                MB      C, off(00214h).5       ; 0AAC 0 200 180 C4142D
-                JGE     mode_flags_pack_store             ; 0AAF 0 200 180 CD02
-mode_flags_pack_alt:     LB      A, #00fh               ; 0AB1 0 200 180 770F
-mode_flags_pack_store:     STB     A, r1                  ; 0AB3 0 200 180 89
-                RC                             ; 0AB4 0 200 180 95
-                JBS     off(00214h).5, mode_flags_pack2 ; 0AB5 0 200 180 ED1403
-                MB      C, off(00211h).1       ; 0AB8 0 200 180 C41129
-mode_flags_pack2:     MB      off(00233h).3, C       ; 0ABB 0 200 180 C4333B
-                MB      C, off(0021ch).2       ; 0ABE 0 200 180 C41C2A
-                MB      off(00233h).4, C       ; 0AC1 0 200 180 C4333C
-                SC                             ; 0AC4 0 200 180 85
-                LB      A, (001cah-00180h)[USP] ; 0AC5 0 200 180 F34A
-                JNE     mode_flags_pack3             ; 0AC7 0 200 180 CE07
-                LB      A, off(0023ch)         ; 0AC9 0 200 180 F43C
-                JNE     mode_flags_pack3             ; 0ACB 0 200 180 CE03
-                MB      C, off(00220h).1       ; 0ACD 0 200 180 C42029
-mode_flags_pack3:     MB      off(00233h).5, C       ; 0AD0 0 200 180 C4333D
-                LB      A, off(00233h)         ; 0AD3 0 200 180 F433
-                MOVB    r0, #010h              ; 0AD5 0 200 180 9810
-                MULB                           ; 0AD7 0 200 180 A234
-                ORB     A, r1                  ; 0AD9 0 200 180 69
-                L       A, ACC                 ; 0ADA 1 200 180 E506
-                ST      A, er2                 ; 0ADC 1 200 180 8A
-                MOV     er0, #00101h           ; 0ADD 1 200 180 44980101
-                MOVB    r2, #005h              ; 0AE1 1 200 180 9A05
-scale_div32_loop:     SRL     A                      ; 0AE3 1 200 180 63
-                ADCB    r0, #000h              ; 0AE4 1 200 180 209000
-                SRL     A                      ; 0AE7 1 200 180 63
-                ADCB    r1, #000h              ; 0AE8 1 200 180 219000
-                DECB    r2                     ; 0AEB 1 200 180 BA
-                JNE     scale_div32_loop             ; 0AEC 1 200 180 CEF5
-                SRLB    r0                     ; 0AEE 1 200 180 20E7
-                MB      r5.2, C                ; 0AF0 1 200 180 253A
-                SRLB    r1                     ; 0AF2 1 200 180 21E7
-                MB      r5.3, C                ; 0AF4 1 200 180 253B
-                LB      A, (001abh-00180h)[USP] ; 0AF6 0 200 180 F32B
-                CMPB    A, #007h               ; 0AF8 0 200 180 C607
-                JLT     mode_flags_pack4             ; 0AFA 0 200 180 CA09
-                LB      A, (001b3h-00180h)[USP] ; 0AFC 0 200 180 F333
-                CMPB    A, #019h               ; 0AFE 0 200 180 C619
-                JLT     mode_flags_pack4             ; 0B00 0 200 180 CA03
-                MB      C, off(0021dh).6       ; 0B02 0 200 180 C41D2E
-mode_flags_pack4:     MB      off(00233h).6, C       ; 0B05 0 200 180 C4333E
-                L       A, er2                 ; 0B08 1 200 180 36
-                ST      A, 0eeh                ; 0B09 1 200 180 D5EE
-                MOV     DP, #003beh            ; 0B0B 1 200 180 62BE03
-                LB      A, ADCR0H              ; 0B0E 0 200 180 F561
-                STB     A, [DP]                ; 0B10 0 200 180 D2
-                STB     A, 0c2h                ; 0B11 0 200 180 D5C2
+; (skeleton: knock control unit removed: no condition word for it)
+mode_flags_pack_start:
+mode_flags_pack_alt:
+mode_flags_pack_store:
+mode_flags_pack2:
+mode_flags_pack3:
+scale_div32_loop:
+mode_flags_pack4:
                 MOV     DP, #003c6h            ; 0B13 0 200 180 62C603
                 LB      A, ADCR1H              ; 0B16 0 200 180 F563
                 STB     A, [DP]                ; 0B18 0 200 180 D2
@@ -1205,19 +1077,7 @@ mode_flags_pack4:     MB      off(00233h).6, C       ; 0B05 0 200 180 C4333E
 flag_dispatch_21d_212_load_r3:     MOVB    r3, (001d8h-00180h)[USP] ; 0B4F 1 200 180 C3584B
                 MOV     er3, (001dah-00180h)[USP] ; 0B52 1 200 180 B35A4B
                 MOV     X1, #flag_dispatch_21d_212_tbl          ; 0B55 1 200 180 604E72
-                JBR     off(00214h).5, flag_dispatch_21d_212_if_ram213_bit3_set ; 0B58 1 200 180 DD1403
-                JBS     off(00218h).7, ignmap_2d_lookup ; 0B5B 1 200 180 EF1818
-flag_dispatch_21d_212_if_ram213_bit3_set:     JBS     off(00213h).3, flag_dispatch_21d_212_load_imm ; 0B5E 1 200 180 EB1303
-                JBR     off(00219h).6, ignmap_2d_lookup ; 0B61 1 200 180 DE1912
-flag_dispatch_21d_212_load_imm:     LB      A, #000h               ; 0B64 0 200 180 7700
-                CMPB    A, r3                  ; 0B66 0 200 180 4B
-                JGT     ignmap_2d_lookup             ; 0B67 0 200 180 C80D
-                ADDB    A, #00ah               ; 0B69 0 200 180 860A
-                CMPB    A, r3                  ; 0B6B 0 200 180 4B
-                JLE     ignmap_2d_lookup             ; 0B6C 0 200 180 CF08
-                SUBB    r3, #000h              ; 0B6E 0 200 180 23A000
-                MOVB    r1, #00bh              ; 0B71 0 200 180 990B
-                MOV     X1, #flag_dispatch_21d_212_tbl_2          ; 0B73 0 200 180 60DE73
+flag_dispatch_21d_212_if_ram213_bit3_set:
 ignmap_2d_lookup:     RB      PSWL.5                 ; 0B76 0 200 180 A30D
                 CAL     table2d_lookup_interp             ; 0B78 0 200 180 321050
                 LB      A, r4                  ; 0B7B 0 200 180 7C
@@ -1277,7 +1137,6 @@ rpm_threshold_222_5:     CMPB    A, off(00236h)         ; 0BF1 0 200 180 C736
                 MB      off(00220h).2, C       ; 0BF3 0 200 180 C4203A
                 CLRB    A                      ; 0BF6 0 200 180 FA
                 JBR     off(00227h).7, knockretard2_clamp_store_ram238 ; 0BF7 0 200 180 DF272B
-                JBS     off(00213h).1, knockretard2_clamp_store_ram238 ; 0BFA 0 200 180 E91328
                 JGE     knockretard2_clamp_store_ram238             ; 0BFD 0 200 180 CD26
                 CMPB    0c0h, #0b5h            ; 0BFF 0 200 180 C5C0C0B5
                 JGE     knockretard2_clamp_store_ram238             ; 0C03 0 200 180 CD20
@@ -1346,54 +1205,14 @@ overrev_hardcap_compare_if_ne_goto_0c95:     JNE     overrev_hardcap_compare_got
 overrev_hardcap_compare_goto_789a:     J       overrev_hardcap_compare_cmp_stk             ; 0C95 0 200 180 039A78
 overrev_hardcap_compare_load_imm:     LB      A, #01dh               ; 0C9B 0 200 180 771D
 knockretard2_store:     STB     A, off(0023bh)         ; 0C9D 0 200 180 D43B
-                CLRB    A                      ; 0C9F 0 200 180 FA
-                RC                             ; 0CA0 0 200 180 95
-                JBS     off(00233h).6, flags_pack_233_7 ; 0CA1 0 200 180 EE3328
-                JBS     off(00212h).3, flags_pack_233_7 ; 0CA4 0 200 180 EB1225
-                JBS     off(00213h).0, flags_pack_233_7 ; 0CA7 0 200 180 E81322
-                L       A, 0f0h                ; 0CAA 1 200 180 E5F0
-                ST      A, er2                 ; 0CAC 1 200 180 8A
-                CLR     er0                    ; 0CAD 1 200 180 4415
-                MOVB    r2, #005h              ; 0CAF 1 200 180 9A05
-scale_shift_loop:     SLL     A                      ; 0CB1 1 200 180 53
-                ADCB    r1, #000h              ; 0CB2 1 200 180 219000
-                SLL     A                      ; 0CB5 1 200 180 53
-                ADCB    r0, #000h              ; 0CB6 1 200 180 209000
-                DECB    r2                     ; 0CB9 1 200 180 BA
-                JNE     scale_shift_loop             ; 0CBA 1 200 180 CEF5
-                SLL     A                      ; 0CBC 1 200 180 53
-                JGE     scale_direction_toggle             ; 0CBD 1 200 180 CD09
-                SLL     A                      ; 0CBF 1 200 180 53
-                JGE     scale_direction_toggle             ; 0CC0 1 200 180 CD06
-                L       A, er0                 ; 0CC2 1 200 180 34
-                AND     A, #00101h             ; 0CC3 1 200 180 D60101
-                JNE     scale_result_common             ; 0CC6 1 200 180 CE03
-scale_direction_toggle:     XORB    PSWH, #080h            ; 0CC8 1 200 180 A2F080
-scale_result_common:     LB      A, r5                  ; 0CCB 0 200 180 7D
-flags_pack_233_7:     MB      off(00233h).7, C       ; 0CCC 0 200 180 C4333F
-                SRLB    A                      ; 0CCF 0 200 180 63
-                MB      off(00232h).7, C       ; 0CD0 0 200 180 C4323F
-                STB     A, r5                  ; 0CD3 0 200 180 8D
-                CLRB    A                      ; 0CD4 0 200 180 FA
-                JBR     off(00227h).6, knock_244_store ; 0CD5 0 200 180 DE272E
-                CMPB    0adh, #00dh            ; 0CD8 0 200 180 C5ADC00D
-                JGT     knock_244_store             ; 0CDC 0 200 180 C828
-                JBS     off(00212h).3, knock_244_table_select ; 0CDE 0 200 180 EB120F
-                JBS     off(00213h).0, knock_244_table_select ; 0CE1 0 200 180 E8130C
-                JBS     off(00214h).7, knock_244_table_select ; 0CE4 0 200 180 EF1409
-                JBS     off(00233h).6, flags_pack_sj ; 0CE7 0 200 180 EE331E
-                JBS     off(00233h).7, flags_pack_sj ; 0CEA 0 200 180 EF331B
-                LB      A, r5                  ; 0CED 0 200 180 7D
-                SJ      knock_244_store             ; 0CEE 0 200 180 CB16
-knock_244_table_select:     LB      A, (001d9h-00180h)[USP] ; 0CF0 0 200 180 F359
-                MOV     er0, (001dch-00180h)[USP] ; 0CF2 0 200 180 B35C48
-                MOV     DP, #tbl_knock244_a          ; 0CF5 0 200 180 62346B
-                JBS     off(0021fh).1, knock_244_lookup ; 0CF8 0 200 180 E91F08
-                LB      A, (001d8h-00180h)[USP] ; 0CFB 0 200 180 F358
-                MOV     er0, (001dah-00180h)[USP] ; 0CFD 0 200 180 B35A48
-                MOV     DP, #tbl_knock244_b          ; 0D00 0 200 180 62486B
-knock_244_lookup:     CAL     knock_244_helper             ; 0D03 0 200 180 327950
-knock_244_store:     STB     A, off(00243h)         ; 0D06 0 200 180 D443
+; (skeleton: knock control unit removed: no knock flags, no knock retard)
+scale_shift_loop:
+scale_direction_toggle:
+scale_result_common:
+flags_pack_233_7:
+knock_244_table_select:
+knock_244_lookup:
+knock_244_store:
 flags_pack_sj:     LB      A, #03ah               ; 0D08 0 200 180 773A
                 MOVB    r0, #040h              ; 0D0A 0 200 180 9840
                 CMPB    0a4h, #0dbh            ; 0D0C 0 200 180 C5A4C0DB
@@ -1458,9 +1277,7 @@ callhelper_table_interp_lookup:     CMPB    0a6h, A                ; 0D82 0 200 
                 VCAL    0                      ; 0D99 0 200 180 10
 callhelper_table_interp_lookup_store_ram23d:     STB     A, off(0023dh)         ; 0D9A 0 200 180 D43D
                 J       callhelper_table_interp_lookup_load_x1             ; 0D9C 0 200 180 03C55A
-callhelper_table_interp_lookup_if_ne_goto_tipin_gate_fai:     JNE     tipin_gate_fail             ; 0DA1 1 200 180 CE23
-                JBS     off(00214h).0, tipin_gate_fail ; 0DA3 1 200 180 E81420
-                JBS     off(0021dh).4, tipin_gate_fail ; 0DA6 1 200 180 EC1D1D
+skel_tipin_after_fault_test:                JBS     off(0021dh).4, tipin_gate_fail ; 0DA6 1 200 180 EC1D1D
                 JBS     off(00216h).3, tipin_gate_fail ; 0DA9 1 200 180 EB161A
                 CMPB    0c1h, #034h            ; 0DAC 1 200 180 C5C1C034
                 JGE     tipin_gate_fail             ; 0DB0 1 200 180 CD14
@@ -1476,11 +1293,6 @@ callhelper_table_interp_lookup_if_ne_goto_tipin_gate_fai:     JNE     tipin_gate
                 JLT     callhelper_table_interp_lookup_if_ram220_bit0_set             ; 0DC4 0 200 180 CA02
 tipin_gate_fail:     SJ      tipin_gate_fail_goto_5b0f             ; 0DC6 0 200 180 CB63
 callhelper_table_interp_lookup_if_ram220_bit0_set:     JBS     off(00220h).0, tipin_gate_pass ; 0DC8 0 200 180 E82018
-                NOP                            ; 0DCB 0 200 180 00
-                NOP                            ; 0DCC 0 200 180 00
-                NOP                            ; 0DCD 0 200 180 00
-                NOP                            ; 0DCE 0 200 180 00
-                NOP                            ; 0DCF 0 200 180 00
                 JBR     off(00231h).6, tipin_gate2 ; 0DD0 0 200 180 DE3107
                 LB      A, off(00237h)         ; 0DD3 0 200 180 F437
                 JNE     tipin_decay_check             ; 0DD5 0 200 180 CE35
@@ -1503,10 +1315,6 @@ tipin_gate_pass_load_ram236:     LB      A, off(00236h)         ; 0DF3 0 200 180
                 L       A, #0ffffh             ; 0E00 1 200 180 67FFFF
 tipin_enrich_clamp:     LB      A, ACCH                ; 0E03 0 200 180 F507
                 RB      off(00220h).0          ; 0E05 0 200 180 C42008
-                NOP                            ; 0E08 0 200 180 00
-                NOP                            ; 0E09 0 200 180 00
-                NOP                            ; 0E0A 0 200 180 00
-                NOP                            ; 0E0B 0 200 180 00
 tipin_decay_check:     CMPB    off(0024eh), #000h     ; 0E0C 0 200 180 C44EC000
                 JEQ     tipin_decay_check_goto_5aea             ; 0E10 0 200 180 C907
                 DECB    off(0024eh)            ; 0E12 0 200 180 C44E17
@@ -1526,10 +1334,7 @@ tipin_decay_rc:     RC                             ; 0E2F 0 200 180 95
 tipin_decay_store:     STB     A, off(00237h)         ; 0E30 0 200 180 D437
                 J       tipin_decay_store_store_carry_ram220_bit1             ; 0E32 0 200 180 03935C
 gate_255_common_if_ram216_bit3_set:     JBS     off(00216h).3, vss_threshold_2ee_0 ; 0E35 0 200 180 EB1643
-                L       A, off(00212h)         ; 0E38 1 200 180 E412
-                AND     A, #001b4h             ; 0E3A 1 200 180 D6B401
-                JNE     vss_threshold_2ee_0             ; 0E3D 1 200 180 CE3C
-                JBS     off(00214h).0, vss_threshold_2ee_0 ; 0E3F 1 200 180 E81439
+                CLR     A                      ; 0E38 (skeleton: fault flags are always clear)
                 JBS     off(0021dh).4, vss_threshold_2ee_0 ; 0E42 1 200 180 EC1D36
                 MOVB    r0, #0c0h              ; 0E45 1 200 180 98C0
                 MOVB    r1, #08ah              ; 0E47 1 200 180 998A
@@ -1596,7 +1401,6 @@ dwell_scale_shift_goto_58c1:     J       dwell_scale_shift_if_ram21d_bit4_clr   
 dwell_scale_shift_store_ram249:     STB     A, off(00249h)         ; 0EC8 0 200 180 D449
                 CLR     A                      ; 0ECA 1 200 180 F9
                 ST      A, er3                 ; 0ECB 1 200 180 8B
-                JBS     off(00212h).5, ign_sum_stage4 ; 0ECC 1 200 180 ED1235
                 JBR     off(00220h).1, ign_sum_stage1 ; 0ECF 1 200 180 D92003
                 J       dwell_scale_shift_load_ram0b9             ; 0ED2 1 200 180 03185B
 ign_sum_stage1:     LB      A, off(00238h)         ; 0ED5 0 200 180 F438
@@ -1627,9 +1431,7 @@ ign_sum_negate:     CLR     A                      ; 0EF0 1 200 180 F9
 ign_sum_stage4:     LB      A, off(00242h)         ; 0F04 0 200 180 F442
                 EXTND                          ; 0F06 1 200 180 F8
                 ADD     er3, A                 ; 0F07 1 200 180 4781
-                CLR     A                      ; 0F09 1 200 180 F9
-                LB      A, off(00243h)         ; 0F0A 0 200 180 F443
-                SUB     er3, A                 ; 0F0C 0 200 180 47A1
+; (skeleton: no knock retard to subtract)
                 CLR     A                      ; 0F0E 1 200 180 F9
                 LB      A, off(00244h)         ; 0F0F 0 200 180 F444
                 STB     A, r0                  ; 0F11 0 200 180 88
@@ -1662,7 +1464,6 @@ ign_sum_result_load_acc:     LB      A, ACC                 ; 0F42 0 200 180 F50
 ign_sum_result_store_r5:     STB     A, r5                  ; 0F44 0 200 180 8D
                 LB      A, #040h               ; 0F45 0 200 180 7740
                 SC                             ; 0F47 0 200 180 85
-                JBS     off(00212h).5, ign_p40_flag_store ; 0F48 0 200 180 ED122A
                 CMPB    0c1h, #0d0h            ; 0F4B 0 200 180 C5C1C0D0
                 JLT     ign_p40_flag_store             ; 0F4F 0 200 180 CA24
                 JBS     off(00221h).7, ign_result_clamp249 ; 0F51 0 200 180 EF2124
@@ -1761,12 +1562,8 @@ gearcorrect_store_result_load_r2:     CAL     skel_ign_service ; (skeleton) modu
                 MOV     LRB, #00020h           ; 1013 1 100 180 572000
                 MOV     USP, #00280h           ; 1016 1 100 280 A1988002
                 CAL     refresh_engine_flags_snapshot             ; 101A 1 100 280 326252
-                SC                             ; 101D 1 100 280 85
-                JBR     off(00116h).6, igntiming_enable_pin_drive ; 101E 1 100 280 DE1609
-                JBR     off(00119h).3, igntiming_enable_pin_drive ; 1021 1 100 280 DB1906
-                MB      C, 0a0h.5              ; 1024 1 100 280 C5A02D
-                XORB    PSWH, #080h            ; 1027 1 100 280 A2F080
-igntiming_enable_pin_drive:     MB      P1.2, C                ; 102A 1 100 280 C5223A
+igntiming_enable_pin_drive:
+                                                ; 101D (skeleton: no O2 heater - P1.2 stays at its power-up level, heater off)
                 AND     IE, #002a0h            ; 102D 1 100 280 B51AD0A002
                 RB      PSWH.0                 ; 1032 1 100 280 A208
                 LB      A, P1                  ; 1034 0 100 280 F522
@@ -1780,122 +1577,10 @@ igntiming_enable_pin_drive:     MB      P1.2, C                ; 102A 1 100 280 
                 L       A, #00ea6h             ; 1046 1 100 280 67A60E
 vtec_rawperiod_threshold_check:     CMP     0ach, A                ; 1049 1 100 280 B5ACC1
                 MB      off(00121h).1, C       ; 104C 1 100 280 C42139
-                JBR     off(00116h).5, vtec_state_reset_low_rpm ; 104F 1 100 280 DD1621
-                LB      A, ADCR5H              ; 1052 0 100 280 F56B
-                STB     A, 0bfh                ; 1054 0 100 280 D5BF
-                LB      A, #04ah               ; 1056 0 100 280 774A
-                JBS     off(0011eh).2, vtec_rawperiod_threshold_check_cmp_acc ; 1058 0 100 280 EA1E02
-                LB      A, #055h               ; 105B 0 100 280 7755
-vtec_rawperiod_threshold_check_cmp_acc:     CMPB    A, off(0012ch)         ; 105D 0 100 280 C72C
-                MB      off(0011eh).2, C       ; 105F 0 100 280 C41E3A
-                LB      A, #032h               ; 1062 0 100 280 7732
-                JBS     off(00117h).5, vtec_state_reset_low_rpm ; 1064 0 100 280 ED170C
-                JBR     off(0011ah).6, vtec_state_reset_low_rpm ; 1067 0 100 280 DE1A09
-                JBS     off(0011ah).7, vtec_state_reset_low_rpm ; 106A 0 100 280 EF1A06
-                JBR     off(0011eh).2, vtec_state_reset_low_rpm ; 106D 0 100 280 DA1E03
-                JBS     off(00118h).2, vtec_oilpressure_gate_check ; 1070 0 100 280 EA1809
-vtec_state_reset_low_rpm:     MOVB    off(00195h), #032h     ; 1073 0 100 280 C4959832
+; (skeleton: no VTEC oil-pressure monitoring - the pressure switch (P4.6) and pressure input (ADC 5) are not read;
+;  the state is always "normal", so there is no pressure fault, no transition retard and no limp mode)
 vtec_state_clear:     CLRB    r1                     ; 1077 0 100 280 2115
-                J       vtec_state_finalize             ; 1079 0 100 280 035811
-vtec_oilpressure_gate_check:     JBS     off(00115h).1, vtec_oilpressure_pin_check ; 107C 0 100 280 E9150C
-                CMPB    0bfh, #0fch            ; 107F 0 100 280 C5BFC0FC
-                JGT     vtec_oilpressure_pin_check             ; 1083 0 100 280 C806
-                CMPB    0bfh, #004h            ; 1085 0 100 280 C5BFC004
-                JGE     vtec_oilpressure_gate_check_store_ram195             ; 1089 0 100 280 CD1B
-vtec_oilpressure_pin_check:     MB      C, P4.6                ; 108B 0 100 280 C52C2E
-                JGE     vtec_state_dispatch             ; 108E 0 100 280 CD0A
-                STB     A, off(00195h)         ; 1090 0 100 280 D495
-vtec_state_reset_no_pressure:     MOVB    off(00196h), #01eh     ; 1092 0 100 280 C496981E
-                MOVB    r1, #004h              ; 1096 0 100 280 9904
-                SJ      vtec_rpm_valid_check             ; 1098 0 100 280 CB77
-vtec_state_dispatch:     LB      A, off(00195h)         ; 109A 0 100 280 F495
-                JNE     vtec_state_reset_no_pressure             ; 109C 0 100 280 CEF4
-                LB      A, off(00196h)         ; 109E 0 100 280 F496
-                JEQ     vtec_state_clear             ; 10A0 0 100 280 C9D5
-                MOVB    r1, #002h              ; 10A2 0 100 280 9902
-                SJ      vtec_rpm_valid_check             ; 10A4 0 100 280 CB6B
-vtec_oilpressure_gate_check_store_ram195:     STB     A, off(00195h)         ; 10A6 0 100 280 D495
-                MOVB    r1, off(001cah)        ; 10A8 0 100 280 C4CA49
-                LB      A, off(001c8h)         ; 10AB 0 100 280 F4C8
-                JNE     vtec_debounce_step_calc             ; 10AD 0 100 280 CE4F
-                LB      A, #0a0h               ; 10AF 0 100 280 77A0
-                JBS     off(00128h).6, vtec_oilpressure_gate_check_cmp_acc ; 10B1 0 100 280 EE2802
-                LB      A, #0b0h               ; 10B4 0 100 280 77B0
-vtec_oilpressure_gate_check_cmp_acc:     CMPB    A, off(0012dh)         ; 10B6 0 100 280 C72D
-                MB      off(00128h).6, C       ; 10B8 0 100 280 C4283E
-                CLRB    r0                     ; 10BB 0 100 280 2015
-                JGE     vtec_oilpressure_gate_check_load_imm             ; 10BD 0 100 280 CD02
-                INCB    r0                     ; 10BF 0 100 280 A8
-                INCB    r0                     ; 10C0 0 100 280 A8
-vtec_oilpressure_gate_check_load_imm:     LB      A, #0c1h               ; 10C1 0 100 280 77C1
-                JBS     off(00128h).7, vtec_oilpressure_gate_check_cmp_acc_2 ; 10C3 0 100 280 EF2802
-                LB      A, #0d4h               ; 10C6 0 100 280 77D4
-vtec_oilpressure_gate_check_cmp_acc_2:     CMPB    A, off(0012ch)         ; 10C8 0 100 280 C72C
-                MB      off(00128h).7, C       ; 10CA 0 100 280 C4283F
-                JGE     to_vtec_debounce_store             ; 10CD 0 100 280 CD03
-                INCB    r0                     ; 10CF 0 100 280 A8
-                NOP                            ; 10D0 0 100 280 00
-                NOP                            ; 10D1 0 100 280 00
-to_vtec_debounce_store:     CLRB    r1                     ; 10D2 0 100 280 2115
-                CMPB    0bfh, #030h            ; 10D4 0 100 280 C5BFC030
-                JLE     to_vtec_debounce_store_load_imm             ; 10D8 0 100 280 CF20
-                LB      A, r0                  ; 10DA 0 100 280 78
-                EXTND                          ; 10DB 1 100 280 F8
-                ADD     A, #to_vtec_debounce_store_tbl           ; 10DC 1 100 280 864D58
-                MOV     DP, A                  ; 10DF 1 100 280 52
-                INCB    r1                     ; 10E0 1 100 280 A9
-                LB      A, 0bfh                ; 10E1 0 100 280 F5BF
-                J       to_vtec_debounce_store_clear_ram0a0_bit1             ; 10E3 0 100 280 032858
-to_vtec_debounce_store_incb_r1:     INCB    r1                     ; 10E8 0 100 280 A9
-                JBS     off(00112h).3, to_vtec_debounce_store_load_imm ; 10E9 0 100 280 EB120E
-                JBS     off(00112h).7, to_vtec_debounce_store_load_imm ; 10EC 0 100 280 EF120B
-to_vtec_debounce_store_cmp_acc:     CMPCB   A, [DP]                ; 10EF 0 100 280 92AE
-                J       to_vtec_debounce_store_if_le_goto_583a             ; 10F1 0 100 280 034458
-to_vtec_debounce_store_incb_r1_2:     INCB    r1                     ; 10F4 0 100 280 A9
-                CMPB    r1, #007h              ; 10F5 0 100 280 21C007
-                JLT     to_vtec_debounce_store_cmp_acc             ; 10F8 0 100 280 CAF5
-to_vtec_debounce_store_load_imm:     LB      A, #003h               ; 10FA 0 100 280 7703
-                SJ      vtec_debounce_store             ; 10FC 0 100 280 CB11
-vtec_debounce_step_calc:     SUBB    A, #001h               ; 10FE 0 100 280 A601
-                JBR     off(0011ch).0, vtec_debounce_store ; 1100 0 100 280 D81C0C
-                SUBB    A, #001h               ; 1103 0 100 280 A601
-                JLT     vtec_debounce_zero             ; 1105 0 100 280 CA07
-                JBR     off(0011ch).1, vtec_debounce_store ; 1107 0 100 280 D91C05
-                SUBB    A, #002h               ; 110A 0 100 280 A602
-                JGE     vtec_debounce_store             ; 110C 0 100 280 CD01
-vtec_debounce_zero:     CLRB    A                      ; 110E 0 100 280 FA
-vtec_debounce_store:     STB     A, off(001c8h)         ; 110F 0 100 280 D4C8
-vtec_rpm_valid_check:     CMPB    off(0012dh), #053h     ; 1111 0 100 280 C42DC053
-                JLT     vtec_state_hold_check             ; 1115 0 100 280 CA0B
-                LB      A, r1                  ; 1117 0 100 280 79
-                CMPB    A, #001h               ; 1118 0 100 280 C601
-                JLE     vtec_state_active_check             ; 111A 0 100 280 CF0C
-                MOVB    off(001a6h), #00ah     ; 111C 0 100 280 C4A6980A
-                SJ      vtec_state_store             ; 1120 0 100 280 CB12
-vtec_state_hold_check:     JBS     off(0011dh).4, vtec_state_confirm ; 1122 0 100 280 EC1D06
-                J       vtec_state_clear             ; 1125 0 100 280 037710
-vtec_state_active_check:     JBR     off(0011dh).4, vtec_state_finalize ; 1128 0 100 280 DC1D2D
-vtec_state_confirm:     LB      A, off(001a6h)         ; 112B 0 100 280 F4A6
-                JEQ     vtec_state_finalize             ; 112D 0 100 280 C929
-                MOVB    r1, #002h              ; 112F 0 100 280 9902
-                CLRB    off(001c8h)            ; 1131 0 100 280 C4C815
-vtec_state_store:     LB      A, r1                  ; 1134 0 100 280 79
-                STB     A, off(001cah)         ; 1135 0 100 280 D4CA
-                SB      off(0011dh).4          ; 1137 0 100 280 C41D1C
-                JNE     vtec_retard_timer_check             ; 113A 0 100 280 CE07
-                MOVB    off(001cch), #00ch     ; 113C 0 100 280 C4CC980C
-                CLRB    off(001cbh)            ; 1140 0 100 280 C4CB15
-vtec_retard_timer_check:     CMPB    off(001cch), #008h     ; 1143 0 100 280 C4CCC008
-                JGT     vtec_retard_lookup_done             ; 1147 0 100 280 C80D
-                CLR     A                      ; 1149 1 100 280 F9
-                LB      A, r1                  ; 114A 0 100 280 79
-                SUBB    A, #002h               ; 114B 0 100 280 A602
-                MOV     DP, #tbl_vtec_transition_retard          ; 114D 0 100 280 62C665
-                ADD     DP, A                  ; 1150 0 100 280 9281
-                LCB     A, [DP]                ; 1152 0 100 280 92AA
-                STB     A, off(001cbh)         ; 1154 0 100 280 D4CB
-vtec_retard_lookup_done:     SJ      vtec_state_store2_load_imm             ; 1156 0 100 280 CB0E
-vtec_state_finalize:     RB      off(0011dh).4          ; 1158 0 100 280 C41D0C
+vtec_state_finalize:
                 CLRB    A                      ; 115B 0 100 280 FA
                 STB     A, off(001c8h)         ; 115C 0 100 280 D4C8
                 CMPB    r1, #001h              ; 115E 0 100 280 21C001
@@ -1932,12 +1617,7 @@ vtec_rpm_vs_settings_check_cmp_acc:     CMPB    A, off(0012dh)         ; 119F 0 
                 VCAL    0                      ; 11A6 0 100 280 10
                 STB     A, off(00158h)         ; 11A7 0 100 280 D458
                 JBR     off(00116h).4, vtec_disengage_output ; 11A9 0 100 280 DC160D
-                L       A, off(00112h)         ; 11AC 1 100 280 E412
-                AND     A, #0c0bch             ; 11AE 1 100 280 D6BCC0
-                JNE     vtec_disengage_output             ; 11B1 1 100 280 CE06
-                LB      A, off(00114h)         ; 11B3 0 100 280 F414
-                ANDB    A, #031h               ; 11B5 0 100 280 D631
-                JEQ     vtec_engage_conditions_start             ; 11B7 0 100 280 C905
+                SJ       vtec_engage_conditions_start ; 11AC (skeleton: fault flags are always clear)
 vtec_disengage_output:     RB      P1.1                   ; 11B9 0 100 280 C52209
                 SJ      vtec_highcam_output             ; 11BC 0 100 280 CB24
 vtec_engage_conditions_start:     SB      P1.1                   ; 11BE 0 100 280 C52219
@@ -1992,21 +1672,9 @@ fuelmap_base_lookup:     MOVB    r0, #00ah              ; 1234 0 100 280 980A
                 MOV     er3, off(001dch)       ; 1241 0 100 280 B4DC4B
                 MOV     X1, #fuelmap_base_lookup_tbl_2          ; 1244 0 100 280 600471
                 JBS     off(0011fh).1, fuel_base_lookup_done ; 1247 0 100 280 E91F24
-                JBR     off(00114h).5, fuelmap_base_lookup_load_r3 ; 124A 0 100 280 DD1403
-                JBS     off(00118h).7, fuel_base_lookup_done ; 124D 0 100 280 EF181E
 fuelmap_base_lookup_load_r3:     MOVB    r3, off(001d8h)        ; 1250 0 100 280 C4D84B
                 MOV     er3, off(001dah)       ; 1253 0 100 280 B4DA4B
                 MOV     X1, #fuelmap_base_lookup_tbl          ; 1256 0 100 280 603270
-                JBR     off(00119h).6, fuel_base_lookup_done ; 1259 0 100 280 DE1912
-                LB      A, #000h               ; 125C 0 100 280 7700
-                CMPB    A, r3                  ; 125E 0 100 280 4B
-                JGT     fuel_base_lookup_done             ; 125F 0 100 280 C80D
-                ADDB    A, #00ah               ; 1261 0 100 280 860A
-                CMPB    A, r3                  ; 1263 0 100 280 4B
-                JLE     fuel_base_lookup_done             ; 1264 0 100 280 CF08
-                SUBB    r3, #000h              ; 1266 0 100 280 23A000
-                MOVB    r1, #00bh              ; 1269 0 100 280 990B
-                MOV     X1, #fuelmap_base_lookup_tbl_3          ; 126B 0 100 280 60D671
 fuel_base_lookup_done:     SB      PSWL.5                 ; 126E 0 100 280 A31D
                 CAL     table2d_lookup_interp             ; 1270 0 100 280 321050
                 CAL     map_result_postscale             ; 1273 0 100 280 328850
@@ -2058,7 +1726,6 @@ accelenrich_flags_clear:     RB      off(00124h).1          ; 12D4 1 100 280 C42
                 LB      A, #004h               ; 12DA 0 100 280 7704
                 CMPB    A, r0                  ; 12DC 0 100 280 48
 accelenrich_mode_flag_store:     MB      off(00124h).0, C       ; 12DD 0 100 280 C42438
-                JBS     off(0011dh).4, accelenrich_jump_cranking_path ; 12E0 0 100 280 EC1D1A
                 JBS     off(00111h).0, accelenrich_jump_cranking_path ; 12E3 0 100 280 E81117
                 JBR     off(00124h).0, accelenrich_clear_pulse_check ; 12E6 0 100 280 D82457
                 JBR     off(0011bh).3, accelenrich_jump_tipin_check ; 12E9 0 100 280 DB1B14
@@ -2069,7 +1736,7 @@ accelenrich_mode_flag_store:     MB      off(00124h).0, C       ; 12DD 0 100 280
                 CMPB    0bbh, #0b3h            ; 12F7 0 100 280 C5BBC0B3
                 JLT     accelenrich_base_calc             ; 12FB 0 100 280 CA06
 accelenrich_jump_cranking_path:     J       accelenrich_clear_and_cranking_prep             ; 12FD 0 100 280 03B913
-accelenrich_jump_tipin_check:     J       accelenrich_jump_tipin_check_load_ram13a             ; 1300 0 100 280 037713
+accelenrich_jump_tipin_check:     SJ       accelenrich_jump_tipin_check_load_ram13a            ; 1300 0 100 280 037713
 accelenrich_base_calc:     CLRB    A                      ; 1303 0 100 280 FA
                 JBR     off(00118h).1, accelenrich_base_adjust ; 1304 0 100 280 D91806
                 CMPB    0b4h, #005h            ; 1307 0 100 280 C5B4C005
@@ -2236,12 +1903,11 @@ crankfuel_timer_wait_loop:     L       A, off(001c6h)         ; 1474 1 100 280 E
                 JRNZ    DP, crankfuel_timer_wait_loop         ; 1476 1 100 280 30FC
                 CAL     injector_timer_schedule             ; 1478 1 100 280 32354B
                 JBS     off(00117h).3, cylinder_index_advance ; 147B 1 100 280 EB1710
-                JBS     off(00113h).7, cylinder_index_advance ; 147E 1 100 280 EF130D
                 J       crankfuel_timer_wait_loop_sll_er0             ; 1481 1 100 280 03F576
 crankfuel_timer_wait_loop_if_eq_goto_cylinder_index_adva:     JEQ     cylinder_index_advance             ; 1484 1 100 280 C908
                 RB      TRNSIT.2               ; 1486 1 100 280 C5460A
                 JNE     cylinder_index_advance             ; 1489 1 100 280 CE03
-dtc16_injector_latch_2: RB      09ch.6                 ; 148B 1 100 280 C59C1E
+dtc16_injector_latch_2:
 cylinder_index_advance:     LB      A, off(00134h)         ; 148E 0 100 280 F434
                 ADDB    A, #001h               ; 1490 0 100 280 8601
                 ANDB    A, #003h               ; 1492 0 100 280 D603
@@ -2254,8 +1920,6 @@ postfuel_calc_start:     SB      off(0011fh).0          ; 1496 1 100 280 C41F18
                 VCAL    1                      ; 14A2 0 100 280 11
                 STB     A, r0                  ; 14A3 0 100 280 88
                 STB     A, r1                  ; 14A4 0 100 280 89
-                JBS     off(00112h).5, postfuel_scale_apply ; 14A5 0 100 280 ED122B
-                JBS     off(00113h).1, postfuel_scale_apply ; 14A8 0 100 280 E91328
                 CMPB    0c1h, #0a2h            ; 14AB 0 100 280 C5C1C0A2
                 JLT     postfuel_scale_apply             ; 14AF 0 100 280 CA22
                 MOV     DP, #00352h            ; 14B1 0 100 280 625203
@@ -2337,16 +2001,7 @@ postfuel_decay_apply:     LC      A, [DP]                ; 1540 0 100 280 92A8
                 ST      A, off(00160h)         ; 1552 1 100 280 D460
                 CMPB    0c1h, #02eh            ; 1554 1 100 280 C5C1C02E
                 JLT     postfuel_final_store             ; 1558 1 100 280 CA1B
-                JBR     off(00111h).2, postfuel_final_store ; 155A 1 100 280 DA1118
-                CLRB    r0                     ; 155D 1 100 280 2015
-                MOVB    r1, #08dh              ; 155F 1 100 280 998D
-                MUL                            ; 1561 1 100 280 9035
-                SLL     A                      ; 1563 1 100 280 53
-                L       A, er1                 ; 1564 1 100 280 35
-                ROL     A                      ; 1565 1 100 280 33
-                JGE     postfuel_final_store             ; 1566 1 100 280 CD0D
-                L       A, #0ffffh             ; 1568 1 100 280 67FFFF
-                SJ      postfuel_final_store             ; 156B 1 100 280 CB08
+                SJ       postfuel_final_store ; 155A 1 100 280 DA1118
 postfuel_decay_zero_reset:     RB      off(0011fh).0          ; 156D 1 100 280 C41F08
 postfuel_decay_zero_reset_load_imm:     L       A, #02000h             ; 1570 1 100 280 670020
                 ST      A, off(00160h)         ; 1573 1 100 280 D460
@@ -2470,13 +2125,8 @@ ve_result_flag_store_store_carry_ram11e_bit3:     MB      off(0011eh).3, C      
                 MOVB    r1, #014h              ; 1678 0 100 280 9914
                 MOVB    r2, off(001d3h)        ; 167A 0 100 280 C4D34A
                 MOV     X2, off(001d6h)        ; 167D 0 100 280 B4D679
-                MOVB    r3, off(001d9h)        ; 1680 0 100 280 C4D94B
-                MOV     er3, off(001dch)       ; 1683 0 100 280 B4DC4B
-                MOV     X1, #ve_result_flag_store_tbl          ; 1686 0 100 280 601475
-                RB      PSWL.5                 ; 1689 0 100 280 A30D
-                JBS     off(0011fh).1, ve_table_result_store_call_table2d_lookup_interp ; 168B 0 100 280 E91F0F
-                JBR     off(00114h).5, ve_table_result_store ; 168E 0 100 280 DD1403
-                JBS     off(00118h).7, ve_table_result_store_call_table2d_lookup_interp ; 1691 0 100 280 EF1809
+; (skeleton: one VE table for both cams, as HTS - the low-cam table and axis)
+                RB      PSWL.5                 ; 1689
 ve_table_result_store:     MOVB    r3, off(001d8h)        ; 1694 0 100 280 C4D84B
                 MOV     er3, off(001dah)       ; 1697 0 100 280 B4DA4B
                 MOV     X1, #ve_table_result_store_tbl          ; 169A 0 100 280 604C74
@@ -2484,8 +2134,6 @@ ve_table_result_store_call_table2d_lookup_interp:     CAL     table2d_lookup_int
                 LB      A, r4                  ; 16A0 0 100 280 7C
                 SRLB    A                      ; 16A1 0 100 280 63
                 STB     A, r0                  ; 16A2 0 100 280 88
-                JBS     off(0011dh).4, ve_accel_state_store_clear_ram11d_bit5 ; 16A3 0 100 280 EC1D49
-                JBS     off(00112h).6, ve_accel_gate1 ; 16A6 0 100 280 EE1203
                 JBS     off(00127h).6, ve_accel_tps_threshold_check ; 16A9 0 100 280 EE271D
 ve_accel_gate1:     JBS     off(00127h).3, ve_accel_gate1_load_ram185 ; 16AC 0 100 280 EB2725
                 JBS     off(00127h).1, ve_accel_gate1_load_ram185 ; 16AF 0 100 280 E92722
@@ -2577,10 +2225,7 @@ tpsaccel_ignitioncut_flag_copy_store_carry_ram126_bit0:     MB      off(00126h).
                 JBR     off(0011ch).2, tpsaccel_threshold_pick ; 1780 0 100 280 DA1C04
                 LB      A, off(0017ah)         ; 1783 0 100 280 F47A
                 MOVB    r0, #047h              ; 1785 0 100 280 9847
-tpsaccel_threshold_pick:     JBR     off(0011bh).0, tps_hysteresis_check ; 1787 0 100 280 D81B04
-                CMPB    A, r0                  ; 178A 0 100 280 48
-                JGE     tps_hysteresis_check             ; 178B 0 100 280 CD01
-                LB      A, r0                  ; 178D 0 100 280 78
+tpsaccel_threshold_pick:     SJ       tps_hysteresis_check ; 1787 0 100 280 D81B04
 tps_hysteresis_check:     JBR     off(00117h).6, rpm_threshold_adjust ; 178E 0 100 280 DE1715
                 CMPB    0c4h, #082h            ; 1791 0 100 280 C5C4C082
                 JBS     off(00126h).7, tps_hysteresis_check_goto_tps_hysteresis_store ; 1795 0 100 280 EF2604
@@ -2608,14 +2253,13 @@ vss_threshold_226_3:     CMPB    A, off(0012dh)         ; 17CB 0 100 280 C72D
                 RB      PSWL.4                 ; 17D0 0 100 280 A30C
                 RB      PSWL.5                 ; 17D2 0 100 280 A30D
                 RB      off(00123h).7          ; 17D4 0 100 280 C4230F
-                JBS     off(00113h).5, vss_threshold_226_3_if_ram112_bit6_set ; 17D7 0 100 280 ED130B
-                MB      C, 099h.3              ; 17DA 0 100 280 C5992B
+                RC                             ; (skeleton: no fault codes - the fault field is always clear)
                 JLT     vss_threshold_226_3_if_ram112_bit6_set             ; 17DD 0 100 280 CA06
                 LB      A, 0cdh                ; 17DF 0 100 280 F5CD
                 CMPB    A, #010h               ; 17E1 0 100 280 C610
                 JGE     doubleup_limiter_gate             ; 17E3 0 100 280 CD1E
-vss_threshold_226_3_if_ram112_bit6_set:     JBS     off(00112h).6, vaccut_rpm_check ; 17E5 0 100 280 EE1213
-                MB      C, 098h.2              ; 17E8 0 100 280 C5982A
+vss_threshold_226_3_if_ram112_bit6_set:
+                RC                             ; (skeleton: no fault codes - the fault field is always clear)
                 JLT     vaccut_rpm_check             ; 17EB 0 100 280 CA0E
                 CMPB    0b9h, #02bh            ; 17ED 0 100 280 C5B9C02B
                 JGE     doubleup_limiter_gate             ; 17F1 0 100 280 CD10
@@ -2631,7 +2275,6 @@ doubleup_limiter_gate:     MOV     DP, #00228h            ; 1803 0 100 280 62280
                 L       A, #00218h             ; 1806 1 100 280 671802
                 MB      C, P4.0                ; 1809 1 100 280 C52C28
                 JLT     doubleup_limiter_cont             ; 180C 1 100 280 CA08
-                JBS     off(00113h).7, doubleup_limiter_cont ; 180E 1 100 280 EF1305
                 MOV     DP, off(00182h)        ; 1811 1 100 280 B4827A
                 L       A, off(00180h)         ; 1814 1 100 280 E480
 doubleup_limiter_cont:     JBR     off(0011ch).5, ignition_cut_mode_check ; 1816 1 100 280 DD1C01
@@ -2642,21 +2285,7 @@ ignition_cut_mode_check:     CMP     0ach, A                ; 181A 1 100 280 B5A
                 CMPB    off(001f0h), #000h     ; (skeleton) module fuel-cut request: any bit set cuts fuel like the rev limiter
                 JNE     revlimiter_fuelcut_set
                 JBS     off(00119h).7, fuelcuttrack_store ; 1822 1 100 280 EF1937
-                JBR     off(00116h).2, fuelcut_extra_gate ; 1825 1 100 280 DA1622
-                LB      A, #0c8h               ; 1828 0 100 280 77C8
-                CMPB    A, off(0012dh)         ; 182A 0 100 280 C72D
-                JGE     ignition_cut_mode_check_load_imm             ; 182C 0 100 280 CD0A
-                CMPB    0b4h, #0b9h            ; 182E 0 100 280 C5B4C0B9
-                JGE     ignition_cut_mode_check_load_ram190             ; 1832 0 100 280 CD0A
-                LB      A, off(00191h)         ; 1834 0 100 280 F491
-                JNE     revlimiter_fuelcut_set             ; 1836 0 100 280 CE0E
-ignition_cut_mode_check_load_imm:     LB      A, #028h               ; 1838 0 100 280 7728
-                STB     A, off(00190h)         ; 183A 0 100 280 D490
-                SJ      fuelcut_extra_gate             ; 183C 0 100 280 CB0C
-ignition_cut_mode_check_load_ram190:     LB      A, off(00190h)         ; 183E 0 100 280 F490
-                JNE     fuelcut_extra_gate             ; 1840 0 100 280 CE08
-                LB      A, #002h               ; 1842 0 100 280 7702
-                STB     A, off(00191h)         ; 1844 0 100 280 D491
+                SJ      fuelcut_extra_gate     ; 1825 (skeleton: no speed limiter)
 revlimiter_fuelcut_set:     SB      PSWL.5                 ; 1846 1 100 280 A31D
                 SJ      fuelcut_result_common             ; 1848 1 100 280 CB69
 fuelcut_extra_gate:     JBS     off(0011ch).2, ofc_enable_check ; 184A 1 100 280 EA1C03
@@ -2714,12 +2343,8 @@ fuelcut_output_flags_store_carry_ram11c_bit3:     MB      off(0011ch).3, C      
                 J       fuelcut_output_flags_load_ram0c4             ; 18CD 1 100 280 03375A
 tps_hysteresis_reentry_load_r2:     MOVB    r2, #00ah              ; 18D0 0 100 280 9A0A
                 JBR     off(00119h).7, tps_hysteresis_reentry_if_ram11d_bit4_clr ; 18D2 0 100 280 DF1903
-                J       ignmap2_result_check_clear_acc             ; 18D5 0 100 280 034C19
-tps_hysteresis_reentry_if_ram11d_bit4_clr:     JBR     off(0011dh).4, tps_hysteresis_reentry_if_ram124_bit3_set ; 18D8 0 100 280 DC1D08
-                LB      A, off(0012ch)         ; 18DB 0 100 280 F42C
-                MOV     X1, #tps_hysteresis_reentry_tbl          ; 18DD 0 100 280 604865
-                VCAL    0                      ; 18E0 0 100 280 10
-                SJ      to_set_pswl4_flag_b_set_pswl_bit4             ; 18E1 0 100 280 CB3F
+                SJ       ignmap2_result_check_clear_acc            ; 18D5 0 100 280 034C19
+tps_hysteresis_reentry_if_ram11d_bit4_clr:
 tps_hysteresis_reentry_if_ram124_bit3_set:     JBS     off(00124h).3, ignmap2_result_check_clear_acc ; 18E3 0 100 280 EB2466
                 JBS     off(0011dh).5, ignmap2_result_check_clear_acc ; 18E6 0 100 280 ED1D63
                 JBR     off(0011ah).3, postig_result_default ; 18E9 0 100 280 DB1A3A
@@ -2731,11 +2356,7 @@ postig_gate_chain2:     JBS     off(00118h).4, postig_result_default ; 18F2 0 10
                 JBS     off(00123h).5, postig_threshold_check1 ; 18F9 0 100 280 ED2304
                 LB      A, off(001ebh)         ; 18FC 0 100 280 F4EB
                 MOVB    r0, #05ah              ; 18FE 0 100 280 985A
-postig_threshold_check1:     JBR     off(0011bh).0, postig_threshold_check2 ; 1900 0 100 280 D81B04
-                CMPB    A, r0                  ; 1903 0 100 280 48
-                JGE     postig_threshold_check2             ; 1904 0 100 280 CD01
-                LB      A, r0                  ; 1906 0 100 280 78
-postig_threshold_check2:     J       postig_threshold_check2_if_ram117_bit6_clr             ; 1907 0 100 280 03495A
+postig_threshold_check1:     J       postig_threshold_check2_if_ram117_bit6_clr ; 1900 0 100 280 D81B04
 postig_rpm_compare_cmp_ram0c1:     CMPB    0c1h, #034h            ; 190B 0 100 280 C5C1C034
                 JGE     postig_result_high             ; 190F 0 100 280 CD08
                 JBR     off(00116h).3, postig_result_high ; 1911 0 100 280 DB1605
@@ -2799,13 +2420,11 @@ rpm_gate_final_check:     CMPB    A, off(0012dh)         ; 198F 0 100 280 C72D
                 JBR     off(00118h).0, o2_closedloop_read_and_select ; 1994 0 100 280 D81804
                 MOVB    off(0018eh), #019h     ; 1997 0 100 280 C48E9819
 o2_closedloop_read_and_select:     MOVB    r0, #032h      ; 199B (skeleton: no closed-loop O2 - always the open-loop path, O2 correction 1.0)
-                J       o2_trim_tps_mode_check_clear_ram16c
 o2_trim_tps_mode_check_clear_ram16c:     CLRB    off(0016ch)            ; 1AA9 1 100 280 C46C15
                 MOVB    off(0019fh), r0        ; 1AAC 1 100 280 207C9F
 o2_trim_default_target:     L       A, #08000h             ; 1AAF 1 100 280 670080
 o2_trim_clear_gate1:     RB      off(0011dh).1          ; 1AB2 1 100 280 C41D09
 o2_trim_clear_gate0_and_return:     RB      off(0011dh).0          ; 1AB5 1 100 280 C41D08
-                J       injtimer_finalize_start             ; 1AB8 1 100 280 03681C
 injtimer_finalize_start:     ST      A, off(00148h)         ; 1C68 1 100 280 D448
                 J       to_injtimer_sub_common             ; 1C6A 1 100 280 03A25B
 to_injtimer_sub_common_load_imm:     LB      A, #040h               ; 1C6F 0 100 280 7740
@@ -2855,12 +2474,7 @@ to_injtimer_store_0x166:     CMPB    A, 0b9h                ; 1CCB 0 100 280 C5B
                 JGE     injtimer_gate_common             ; 1CDB 0 100 280 CD16
                 J       to_injtimer_store_0x166_cmp_ram0c1             ; 1CDD 0 100 280 03405B
 to_injtimer_store_0x166_if_ram125_bit7_clr:     JBR     off(00125h).7, injtimer_gate_common ; 1CE0 0 100 280 DF2510
-                JBR     off(00119h).0, injtimer_gate_common ; 1CE3 0 100 280 D8190D
-                JBS     off(00123h).5, injtimer_gate_common ; 1CE6 0 100 280 ED230A
-                JBS     off(0011dh).1, injtimer_gate_common ; 1CE9 0 100 280 E91D07
-                JBS     off(00125h).2, injtimer_gate_common ; 1CEC 0 100 280 EA2504
-                LB      A, #014h               ; 1CEF 0 100 280 7714
-                SJ      injtimer_store_0x166             ; 1CF1 0 100 280 CB07
+                SJ       injtimer_gate_common ; 1CE3 0 100 280 D8190D
 injtimer_gate_common:     LB      A, off(00157h)         ; 1CF3 0 100 280 F457
                 SUBB    A, #001h               ; 1CF5 0 100 280 A601
                 JGE     injtimer_store_0x166             ; 1CF7 0 100 280 CD01
@@ -2906,9 +2520,6 @@ injtimer_mul_chain1:     MOVB    ACCH, #001h            ; 1D1E 0 100 280 C507980
 injtimer_mul_chain2:     L       A, off(0014ch)         ; 1D47 1 100 280 E44C
                 MUL                            ; 1D49 1 100 280 9035
                 MOV     er0, er1               ; 1D4B 1 100 280 4548
-                NOP                            ; 1D4D 1 100 280 00
-                NOP                            ; 1D4E 1 100 280 00
-                NOP                            ; 1D4F 1 100 280 00
                 JBR     off(0011fh).0, injtimer_mul_final ; 1D50 1 100 280 D81F19
                 SLL     A                      ; 1D53 1 100 280 53
                 ROL     er0                    ; 1D54 1 100 280 44B7
@@ -2927,7 +2538,6 @@ injtimer_mul_final:     L       A, off(00148h)         ; 1D6C 1 100 280 E448
                 MUL                            ; 1D6E 1 100 280 9035
                 MOV     off(00146h), er1       ; 1D70 1 100 280 457C46
                 CAL     hook_fuel              ; (skeleton) module slot: final pulse width is the word at 146h
-                JBS     off(0011dh).4, dwell_zero_result ; 1D73 1 100 280 EC1D4F
                 LB      A, off(0012dh)         ; 1D76 0 100 280 F42D
                 CMPB    A, #0c0h               ; 1D78 0 100 280 C6C0
                 JGE     dwell_zero_result             ; 1D7A 0 100 280 CD49
@@ -2965,7 +2575,6 @@ dwell_zero_result:     CLR     A                      ; 1DC5 1 100 280 F9
 dwell_store_result:     ST      A, off(0013eh)         ; 1DC6 1 100 280 D43E
                 CLRB    r4                     ; 1DC8 1 100 280 2415
                 RC                             ; 1DCA 1 100 280 95
-                JBS     off(0011dh).4, rpm_accel_skip ; 1DCB 1 100 280 EC1D6E
                 JBR     off(0011ah).4, rpm_accel_skip ; 1DCE 1 100 280 DC1A6B
                 JBS     off(00124h).7, rpm_accel_track_calc ; 1DD1 1 100 280 EF2409
                 JBS     off(0011ah).5, rpm_accel_alt_path ; 1DD4 1 100 280 ED1A68
@@ -3022,7 +2631,6 @@ rpm_accel_alt_path:     LB      A, r4                  ; 1E3F 0 100 280 7C
 rpm_accel_store_0x148:     STB     A, off(00140h)         ; 1E46 0 100 280 D440
                 CLR     A                      ; 1E48 1 100 280 F9
                 CLRB    r0                     ; 1E49 1 100 280 2015
-                JBS     off(0011dh).4, rpm_decel_flags_clear ; 1E4B 1 100 280 EC1D59
                 JBS     off(0011ch).0, rpm_decel_flags_clear ; 1E4E 1 100 280 E81C56
                 MOVB    r0, #004h              ; 1E51 1 100 280 9804
                 JBS     off(0011ch).2, rpm_decel_flags_clear ; 1E53 1 100 280 EA1C51
@@ -3090,7 +2698,6 @@ idle_sub_result_store:     ST      A, off(00176h)         ; 1ED3 1 100 280 D476
                 ST      A, 003b0h[X1]          ; 1EE0 1 100 280 D0B003
                 ST      A, 003b2h[X1]          ; 1EE3 1 100 280 D0B203
                 J       idle_sub_result_store_store_tbl_x1             ; 1EE6 1 100 280 031759
-idle_sub_result_store_goto_1fe6:     J       cylinder_ign_correct_apply_goto_5c43             ; 1EE9 1 100 280 03E61F
 tipin_time_calc:     L       A, off(0013ah)         ; 1EEC 1 100 280 E43A
                 JBR     off(00123h).3, tipin_time_calc_add_acc ; 1EEE 1 100 280 DB230C
                 CMPB    0e8h, #004h            ; 1EF1 1 100 280 C5E8C004
@@ -3139,7 +2746,6 @@ injtimer_bank_a_calc:     ST      A, er2                 ; 1F45 1 100 280 8A
                 J       injtimer_bank_a_calc_if_ram11c_bit5_clr             ; 1F49 1 100 280 032059
 injtimer_bank_a_store_load_er0:     MOV     er0, [DP]              ; 1F4C 1 100 280 B248
                 ST      A, [DP]                ; 1F4E 1 100 280 D2
-                JBS     off(0011dh).4, injtimer_bank_b_zero ; 1F4F 1 100 280 EC1D18
                 JBS     off(00126h).4, injtimer_bank_b_zero ; 1F52 1 100 280 EC2615
                 CMPB    off(0012dh), #0a0h     ; 1F55 1 100 280 C42DC0A0
                 JGE     injtimer_bank_b_zero             ; 1F59 1 100 280 CD0F
@@ -3220,11 +2826,8 @@ cylinder_ign_correct_apply:     MOV     er3, X2                ; 1FD6 1 100 280 
                 JLT     cylinder_ign_correct_loop             ; 1FE4 1 100 280 CADB
 cylinder_ign_correct_apply_goto_5c43:     J       cylinder_ign_correct_apply_load_imm_2             ; 1FE6 1 100 280 03435C
 cylinder_ign_correct_apply_load_imm:     LB      A, #005h               ; 1FEA 0 100 280 7705
-                JBS     off(0011dh).4, deadtime_retry_store_goto_injector_effective_pw_store ; 1FEC 0 100 280 EC1D5F
                 MOVB    r6, #007h              ; 1FEF 0 100 280 9E07
-                L       A, off(00112h)         ; 1FF1 1 100 280 E412
-                AND     A, #01034h             ; 1FF3 1 100 280 D63410
-                JNE     to_gio_mode_dispatch             ; 1FF6 1 100 280 CE58
+                CLR     A                      ; 1FF1 (skeleton: fault flags are always clear)
                 MOVB    r6, #006h              ; 1FF8 1 100 280 9E06
                 JBS     off(00117h).5, to_gio_mode_dispatch ; 1FFA 1 100 280 ED1753
                 MOVB    r6, #006h              ; 1FFD 1 100 280 9E06
@@ -3286,36 +2889,12 @@ rpm_hyst_flag_124_0:     CMPB    A, off(0012dh)         ; 2076 0 100 280 C72D
                 LB      A, #0f0h               ; 2080 0 100 280 77F0
 rpm_hyst_flag_124_1:     CMPB    A, off(0012dh)         ; 2082 0 100 280 C72D
                 MB      off(0011ch).1, C       ; 2084 0 100 280 C41C39
-                JBR     off(00119h).1, crank_edge_carry_clear ; 2087 0 100 280 D9193D
-                JBR     off(00116h).6, crank_edge_carry_clear ; 208A 0 100 280 DE163A
-                LB      A, off(00194h)         ; 208D 0 100 280 F494
-                JNE     crank_edge_carry_clear             ; 208F 0 100 280 CE36
-                JBR     off(00119h).3, crank_edge_carry_clear ; 2091 0 100 280 DB1933
-                MOV     DP, #00f00h            ; 2094 0 100 280 62000F
-                LB      A, [DP]                ; 2097 0 100 280 F2
-                ANDB    A, #040h               ; 2098 0 100 280 D640
-                MB      C, 0a0h.5              ; 209A 0 100 280 C5A02D
-                JLT     crank_edge_sync_check             ; 209D 0 100 280 CA1A
-                JNE     crank_edge_carry_set             ; 209F 0 100 280 CE29
-                RB      P1.2                   ; 20A1 0 100 280 C5220A
-                AND     IE, #002a0h            ; 20A4 0 100 280 B51AD0A002
-                RB      PSWH.0                 ; 20A9 0 100 280 A208
-                LB      A, P1                  ; 20AB 0 100 280 F522
-                MOV     DP, #02f00h            ; 20AD 0 100 280 62002F
-                STB     A, [DP]                ; 20B0 0 100 280 D2
-                SB      PSWH.0                 ; 20B1 0 100 280 A218
-                L       A, 0f2h                ; 20B3 1 100 280 E5F2
-                ST      A, IE                  ; 20B5 1 100 280 D51A
-                SJ      crank_edge_direction_toggle             ; 20B7 1 100 280 CB02
-crank_edge_sync_check:     JEQ     crank_edge_carry_set             ; 20B9 0 100 280 C90F
-crank_edge_direction_toggle:     XORB    PSWH, #080h            ; 20BB 0 100 280 A2F080
-                MB      0a0h.5, C              ; 20BE 0 100 280 C5A03D
-                JGE     crank_edge_carry_clear             ; 20C1 0 100 280 CD04
-                MOVB    off(00194h), #019h     ; 20C3 0 100 280 C4949819
-crank_edge_carry_clear:     RC                             ; 20C7 0 100 280 95
-                SJ      dtc27_code27_latch             ; 20C8 0 100 280 CB01
-crank_edge_carry_set:     SC                             ; 20CA 0 100 280 85
-dtc27_code27_latch:     RB      09bh.2                 ; 20CB 0 100 280 C59B3A
+crank_edge_sync_check:
+crank_edge_direction_toggle:
+crank_edge_carry_clear:
+crank_edge_carry_set:
+                                                ; 2087 (skeleton: no O2 heater drive / feedback check)
+dtc27_code27_latch:
                 JBR     off(00116h).7, crank_edge_flag_store_clear_acc ; 20CE 0 100 280 DF1677
                 JBR     off(00116h).3, crank_edge_flag_store_clear_acc ; 20D1 0 100 280 DB1674
                 LB      A, #001h               ; 20D4 0 100 280 7701
@@ -3348,27 +2927,14 @@ crank_edge_flag_store_cmp_acc_2:     CMPB    A, off(0012dh)         ; 2101 0 100
                 SJ      crank_edge_flag_store_clear_carry             ; 2114 0 100 280 CB33
 crank_edge_flag_store_if_ram11c_bit7_set:     JBS     off(0011ch).7, crank_edge_flag_store_clear_acc ; 2116 0 100 280 EF1C2F
                 JBS     off(00117h).5, crank_edge_flag_store_clear_acc ; 2119 0 100 280 ED172C
-                L       A, off(00112h)         ; 211C 1 100 280 E412
-                AND     A, #0907ch             ; 211E 1 100 280 D67C90
-                JNE     crank_edge_flag_store_clear_acc             ; 2121 1 100 280 CE25
-                JBR     off(00113h).3, crank_edge_flag_store_if_ram11c_bit2_set ; 2123 1 100 280 DB130D
-                JBR     off(0011ah).1, crank_edge_flag_store_clear_acc ; 2126 1 100 280 D91A1F
-                LB      A, (002f2h-00280h)[USP] ; 2129 0 100 280 F372
-                CMPB    A, #0ffh               ; 212B 0 100 280 C6FF
-                JLT     crank_edge_flag_store_clear_acc             ; 212D 0 100 280 CA19
-                CMPB    A, #0ffh               ; 212F 0 100 280 C6FF
-                JGT     crank_edge_flag_store_clear_acc             ; 2131 0 100 280 C815
+                CLR     A                      ; 211C (skeleton: fault flags are always clear)
 crank_edge_flag_store_if_ram11c_bit2_set:     JBS     off(0011ch).2, crank_edge_flag_store_clear_acc ; 2133 0 100 280 EA1C12
                 JBS     off(0011dh).5, crank_edge_flag_store_clear_acc ; 2136 0 100 280 ED1D0F
                 JBR     off(00118h).2, crank_edge_flag_store_clear_acc ; 2139 0 100 280 DA180C
-                JBS     off(00112h).0, crank_edge_flag_store_if_ram11d_bit2_clr ; 213C 0 100 280 E8120D
-                JBS     off(00115h).2, crank_edge_flag_store_if_ram11d_bit2_clr ; 213F 0 100 280 EA150A
-                JBS     off(00115h).4, crank_edge_flag_store_if_ram11d_bit2_clr ; 2142 0 100 280 EC1507
                 JBS     off(0011dh).1, crank_edge_flag_store_if_ram129_bit0_clr ; 2145 0 100 280 E91D07
 crank_edge_flag_store_clear_acc:     CLRB    A                      ; 2148 0 100 280 FA
 crank_edge_flag_store_clear_carry:     RC                             ; 2149 0 100 280 95
                 SJ      crank_edge_flag_store_store_carry_ram11d_bit7             ; 214A 0 100 280 CB68
-crank_edge_flag_store_if_ram11d_bit2_clr:     JBR     off(0011dh).2, crank_edge_flag_store_clear_acc ; 214C 0 100 280 DA1DF9
 crank_edge_flag_store_if_ram129_bit0_clr:     JBR     off(00129h).0, crank_edge_flag_store_clear_acc ; 214F 0 100 280 D829F6
                 JBR     off(00129h).1, crank_edge_flag_store_clear_acc ; 2152 0 100 280 D929F3
                 JBS     off(00129h).2, crank_edge_flag_store_clear_acc ; 2155 0 100 280 EA29F0
@@ -3423,9 +2989,6 @@ crank_edge_flag_store_store_carry_ram11d_bit7:     MB      off(0011dh).7, C     
                 L       A, 0f4h                ; 21BF 1 100 280 E5F4
                 ST      A, IE                  ; 21C1 1 100 280 D51A
                 RB      PSWH.0                 ; 21C3 1 100 280 A208
-                NOP                            ; 21C5 1 100 280 00
-                NOP                            ; 21C6 1 100 280 00
-                NOP                            ; 21C7 1 100 280 00
                 J       int1_rti_epilogue             ; 21C8 1 100 280 038006
 ; [flow] int_spurious_irq_trap: every interrupt vector this ROM never enables points here. It stamps trap
 ;    reason 045h and goes through fault_retry_check (retry budget, then BRK -> int_break re-init).
@@ -3462,57 +3025,12 @@ breset_reason_46_or_47_common:     CLRB    off(000e7h)            ; 220B 0 080 ?
                 MOVB    off(000ech), #020h     ; 2219 0 080 ??? C4EC9820
 breset_check_p4_1:     JBR     off(P4).1, selftest_reg_stuckbit_check  ; 221D 0 080 ??? D92C03
                 J       int_NMI                ; 2220 0 080 ??? 033C00
-selftest_reg_stuckbit_check:     L       A, #05555h             ; 2223 1 080 ??? 675555
-                XCHG    A, SSP                 ; 2226 1 080 ??? A010
-                XCHG    A, SSP                 ; 2228 1 080 ??? A010
-                CMP     A, #05555h             ; 222A 1 080 ??? C65555
-                JNE     selftest_fail_041             ; 222D 1 080 ??? CE5E
-                ST      A, IE                  ; 222F 1 080 ??? D51A
-                CMP     A, IE                  ; 2231 1 080 ??? B51AC2
-                JNE     selftest_fail_041             ; 2234 1 080 ??? CE57
-                L       A, #01555h             ; 2236 1 080 ??? 675515
-                MOV     LRB, A                 ; 2239 1 080 ??? A48A
-                CMP     A, LRB                 ; 223B 1 080 ??? A4C2
-                JNE     selftest_fail_041             ; 223D 1 080 ??? CE4E
-                L       A, #0aaaah             ; 223F 1 080 ??? 67AAAA
-                XCHG    A, SSP                 ; 2242 1 080 ??? A010
-                XCHG    A, SSP                 ; 2244 1 080 ??? A010
-                CMP     A, #0aaaah             ; 2246 1 080 ??? C6AAAA
-                JNE     selftest_fail_041             ; 2249 1 080 ??? CE42
-                ST      A, IE                  ; 224B 1 080 ??? D51A
-                CMP     A, IE                  ; 224D 1 080 ??? B51AC2
-                JNE     selftest_fail_041             ; 2250 1 080 ??? CE3B
-                L       A, #00aaah             ; 2252 1 080 ??? 67AA0A
-                MOV     LRB, A                 ; 2255 1 080 ??? A48A
-                CMP     A, LRB                 ; 2257 1 080 ??? A4C2
-                JNE     selftest_fail_041             ; 2259 1 080 ??? CE32
-                CLR     A                      ; 225B 1 080 ??? F9
-                ST      A, IE                  ; 225C 1 080 ??? D51A
-                ST      A, 0f2h                ; 225E 1 080 ??? D5F2
-                ST      A, 0f4h                ; 2260 1 080 ??? D5F4
-                MOV     LRB, #00010h           ; 2262 1 080 ??? 571000
-                LB      A, #055h               ; 2265 0 080 ??? 7755
-                XCHGB   A, PSWL                ; 2267 0 080 ??? A310
-                XCHGB   A, PSWL                ; 2269 0 080 ??? A310
-                CMPB    A, #0ddh               ; 226B 0 080 ??? C6DD
-                JNE     selftest_fail_041             ; 226D 0 080 ??? CE1E
-                LB      A, #0aah               ; 226F 0 080 ??? 77AA
-                XCHGB   A, PSWL                ; 2271 0 080 ??? A310
-                XCHGB   A, PSWL                ; 2273 0 080 ??? A310
-                CMPB    A, #0eah               ; 2275 0 080 ??? C6EA
-                JNE     selftest_fail_041             ; 2277 0 080 ??? CE14
-                SB      PSWH.0                 ; 2279 0 080 ??? A218
-                MB      C, PSWH.0              ; 227B 0 080 ??? A228
-                MB      PSWH.6, C              ; 227D 0 080 ??? A23E
-                JGE     selftest_fail_041             ; 227F 0 080 ??? CD0C
-                JNE     selftest_fail_041             ; 2281 0 080 ??? CE0A
-                RB      PSWH.0                 ; 2283 0 080 ??? A208
-                MB      C, PSWH.0              ; 2285 0 080 ??? A228
-                MB      PSWH.6, C              ; 2287 0 080 ??? A23E
-                JLT     selftest_fail_041             ; 2289 0 080 ??? CA02
-                JNE     periph_init_start             ; 228B 0 080 ??? CE05
-selftest_fail_041:     MOVB    0ebh, #041h            ; 228D 0 080 ??? C5EB9841
-                BRK                            ; 2291 0 080 ??? FF
+; (skeleton: no stuck-bit self-test on SSP/IE/LRB/PSW - just the initialisation it ended with)
+selftest_reg_stuckbit_check:     CLR     A
+                ST      A, IE
+                ST      A, 0f2h
+                ST      A, 0f4h
+                MOV     LRB, #00010h
 periph_init_start:     CLRB    off(PRPHF)             ; 2292 0 080 ??? C41215
                 LB      A, #0ffh               ; 2295 0 080 ??? 77FF
                 MOVB    off(P0), #0ebh         ; 2297 0 080 ??? C42098EB
@@ -3584,62 +3102,9 @@ periph_init_delay_loop_load_imm:     L       A, #0ffffh             ; 234A 1 080
                 ST      A, off(PWMR0)          ; 234D 1 080 ??? D472
                 ST      A, off(PWMR1)          ; 234F 1 080 ??? D476
                 RB      off(P4SF).3            ; 2351 1 080 ??? C42E0B
-                L       A, #05555h             ; 2354 1 080 ??? 675555
-                MOV     X1, A                  ; 2357 1 080 ??? 50
-                CMP     A, X1                  ; 2358 1 080 ??? 90C2
-                JNE     selftest_fail_042             ; 235A 1 080 ??? CE10
-                MOV     X2, A                  ; 235C 1 080 ??? 51
-                CMP     A, X2                  ; 235D 1 080 ??? 91C2
-                JNE     selftest_fail_042             ; 235F 1 080 ??? CE0B
-                SLL     A                      ; 2361 1 080 ??? 53
-                MOV     X1, A                  ; 2362 1 080 ??? 50
-                CMP     A, X1                  ; 2363 1 080 ??? 90C2
-                JNE     selftest_fail_042             ; 2365 1 080 ??? CE05
-                MOV     X2, A                  ; 2367 1 080 ??? 51
-                CMP     A, X2                  ; 2368 1 080 ??? 91C2
-                JEQ     ram_clear_loop1             ; 236A 1 080 ??? C905
-selftest_fail_042:     MOVB    off(000ebh), #042h     ; 236C 1 080 ??? C4EB9842
-                BRK                            ; 2370 1 080 ??? FF
-ram_clear_loop1:     MOV     LRB, #00040h           ; 2371 1 200 ??? 574000
-                MOV     X1, #003fah            ; 2374 1 200 ??? 60FA03
-ram_clear_loop1_body:     MOV     DP, 00084h[X1]         ; 2377 1 200 ??? B084007A
-                L       A, #05555h             ; 237B 1 200 ??? 675555
-                CAL     selftest_regbank_verify             ; 237E 1 200 ??? 329352
-                SLL     A                      ; 2381 1 200 ??? 53
-                CAL     selftest_regbank_verify             ; 2382 1 200 ??? 329352
-                SUB     X1, #00002h            ; 2385 1 200 ??? 90A00200
-                JGE     ram_clear_loop1_body             ; 2389 1 200 ??? CDEC
+; (skeleton: no index-register or RAM march self-test)
                 MOV     LRB, #00041h           ; 238B 1 208 ??? 574100
-                CMPB    0ebh, #047h            ; 238E 1 208 ??? C5EBC047
-                JNE     restore_trapstate_after_ramclear             ; 2392 1 208 ??? CE4F
-                JBR     off(00230h).0, cfgvariant_check_320h_bit7 ; 2394 1 208 ??? D8302C
-                JBR     off(00230h).1, cfgvariant_check_320h_bit7 ; 2397 1 208 ??? D93029
-                CLR     A                      ; 239A 1 208 ??? F9
-                LB      A, r6                  ; 239B 0 208 ??? 7E
-                CAL     cfgvariant_set_flags             ; 239C 0 208 ??? 32B951
-                CMPB    r6, #018h              ; 239F 0 208 ??? 26C018
-                JEQ     cfgvariant_index_lookup             ; 23A2 0 208 ??? C90C
-                CAL     cfgvariant_eval_condition             ; 23A4 0 208 ??? 324153
-                CAL     cfgvariant_snapshot_capture             ; 23A7 0 208 ??? 32AB54
-                CAL     cfgvariant_checksum2_calc             ; 23AA 0 208 ??? 324855
-                INC     DP                     ; 23AD 0 208 ??? 72
-                L       A, er0                 ; 23AE 1 208 ??? 34
-                ST      A, [DP]                ; 23AF 1 208 ??? D2
-cfgvariant_index_lookup:     CLR     A                      ; 23B0 1 208 ??? F9
-                LB      A, r7                  ; 23B1 0 208 ??? 7F
-                LCB     A, cfgvariant_index_lookup_tbl[ACC]       ; 23B2 0 208 ??? B506AB996C
-                CMPB    A, r6                  ; 23B7 0 208 ??? 4E
-                JEQ     cfgvariant_clear_232h_bits45             ; 23B8 0 208 ??? C905
-                MOVB    0ebh, #043h            ; 23BA 0 208 ??? C5EB9843
-                BRK                            ; 23BE 0 208 ??? FF
-cfgvariant_clear_232h_bits45:     ANDB    off(00230h), #0fch     ; 23BF 0 208 ??? C430D0FC
-cfgvariant_check_320h_bit7:     MOV     DP, #0031ch            ; 23C3 1 208 ??? 621C03
-                RB      [DP].7                 ; 23C6 1 208 ??? C20F
-                CAL     cfgvariant_checksum_calc             ; 23C8 1 208 ??? 32CD51
-                JBR     off(00232h).2, cfgvariant_check_232h_bits01 ; 23CB 1 208 ??? DA320A
-                JBR     off(00232h).3, cfgvariant_check_232h_bits01 ; 23CE 1 208 ??? DB3207
-                CAL     cfgvariant_state_reset             ; 23D1 1 208 ??? 320555
-                ANDB    off(00232h), #0f3h     ; 23D4 1 208 ??? C432D0F3
+; (skeleton: no stored trouble codes to restore at power-up, no stored-code checksum)
 cfgvariant_check_232h_bits01:     JBR     off(00232h).0, restore_trapstate_after_ramclear ; 23D8 1 208 ??? D83208
                 JBR     off(00232h).1, restore_trapstate_after_ramclear ; 23DB 1 208 ??? D93205
                 J       cfgvariant_check_232h_bits01_call_cfgvariant_ram_init_0x             ; 23DE 1 208 ??? 038B5A
@@ -3712,9 +3177,6 @@ adc_wait_loop:     MB      r0.0, C                ; 2459 1 208 180 2038
                 STB     A, 0c5h                ; 2473 0 208 180 D5C5
                 MOV     DP, #003d2h            ; 2475 0 208 180 62D203
                 STB     A, [DP]                ; 2478 0 208 180 D2
-                MOV     DP, #003beh            ; 2479 0 208 180 62BE03
-                LB      A, [DP]                ; 247C 0 208 180 F2
-                STB     A, 0c2h                ; 247D 0 208 180 D5C2
                 MOV     DP, #003c5h            ; 247F 0 208 180 62C503
                 LB      A, [DP]                ; 2482 0 208 180 F2
                 STB     A, 0c3h                ; 2483 0 208 180 D5C3
@@ -3759,18 +3221,6 @@ clamp_result_store:     STB     A, 0bch                ; 24BF 0 208 180 D5BC
                 ST      A, (001bch-00180h)[USP] ; 24DF 1 208 180 D33C
                 ST      A, (001bah-00180h)[USP] ; 24E1 1 208 180 D33A
                 ST      A, (001b8h-00180h)[USP] ; 24E3 1 208 180 D338
-                NOP                            ; 24E5 1 208 180 00
-                NOP                            ; 24E6 1 208 180 00
-                NOP                            ; 24E7 1 208 180 00
-                NOP                            ; 24E8 1 208 180 00
-                NOP                            ; 24E9 1 208 180 00
-                NOP                            ; 24EA 1 208 180 00
-                NOP                            ; 24EB 1 208 180 00
-                NOP                            ; 24EC 1 208 180 00
-                NOP                            ; 24ED 1 208 180 00
-                NOP                            ; 24EE 1 208 180 00
-                NOP                            ; 24EF 1 208 180 00
-                NOP                            ; 24F0 1 208 180 00
                 LB      A, #00fh               ; 24F1 0 208 180 770F
                 STB     A, (001bfh-00180h)[USP] ; 24F3 0 208 180 D33F
                 STB     A, (001b7h-00180h)[USP] ; 24F5 0 208 180 D337
@@ -3783,7 +3233,7 @@ clamp_result_store:     STB     A, 0bch                ; 24BF 0 208 180 D5BC
                 CAL     ect_step_helper             ; 250A 0 208 180 322F52
                 CLRB    A                      ; 250D 0 208 180 FA
                 MOV     DP, #001a9h            ; 250E 0 208 180 62A901
-clamp_result_store_rom_load_tbl_6ab3_dp:     LCB     A, clamp_result_store_tbl[DP]        ; 2511 0 208 180 92ABB36A
+clamp_result_store_rom_load_tbl_6ab3_dp:     LCB     A, (skel_ram1a9_init_tbl-001a9h)[DP]        ; 2511 0 208 180 92ABB36A (skeleton: own table, stock read 6C5C-6C68 through the P30 table layout)
                 STB     A, [DP]                ; 2515 0 208 180 D2
                 INC     DP                     ; 2516 0 208 180 72
                 CMP     DP, #001b6h            ; 2517 0 208 180 92C0B601
@@ -3811,11 +3261,7 @@ serial_baud_store_common:     STB     A, off(002a4h)         ; 253D 0 208 180 D4
                 ST      A, [DP]                ; 2551 1 208 180 D2
                 MOV     DP, #00352h            ; 2552 1 208 180 625203
                 MOVB    [DP], #03bh            ; 2555 1 208 180 C2983B
-serial_baud_select_done:     MOVB    off(002b6h), #032h     ; 2558 1 208 180 C4B69832
-                NOP                            ; 255C 1 208 180 00
-                NOP                            ; 255D 1 208 180 00
-                NOP                            ; 255E 1 208 180 00
-                NOP                            ; 255F 1 208 180 00
+serial_baud_select_done:
                 MOV     DP, #04700h            ; 2581 0 208 180 620047
                 LB      A, [DP]                ; 2584 0 208 180 F2
                 XORB    A, #01ah               ; 2585 0 208 180 F61A
@@ -3862,11 +3308,8 @@ vcal3_leanprotect_ratelimit_clear_ram09e_bit4:     RB      09eh.4               
                 JNE     vcal3_task_a             ; 26B2 1 208 180 CE01
                 RT                             ; 26B4 1 208 180 01
 vcal3_task_a:     J       battery_voltage_check             ; 26B5 1 208 180 03842A
-vcal3_leanprotect_ratelimit_if_ram227_bit2_set:     JBS     off(00227h).2, vcal3_dispatch_check1 ; 26B8 1 208 180 EA270B
-                JBR     off(00216h).3, vcal3_dispatch_check1 ; 26BB 1 208 180 DB1608
-                RB      09eh.3                 ; 26BE 1 208 180 C59E0B
-                JEQ     vcal3_dispatch_check1             ; 26C1 1 208 180 C903
-                J       ignition_timing_calc_task             ; 26C3 1 208 180 03DB31
+                                                ; 26B8 (skeleton: no A/T lock-up / shift control task - P0.4 stays off)
+vcal3_leanprotect_ratelimit_if_ram227_bit2_set:
 vcal3_dispatch_check1:     RB      off(00231h).1          ; 26C6 1 208 180 C43109
                 JEQ     vcal3_dispatch_check2             ; 26C9 1 208 180 C903
                 J       periodic_decay_task_1             ; 26CB 1 208 180 03B935
@@ -3904,16 +3347,9 @@ scheduler_divider_check:     MOVB    r0, #00ah              ; 2714 0 208 180 980
                 JNE     scheduler_task_done             ; 2719 0 208 180 CE3D
                 SB      off(00231h).1          ; 271B 0 208 180 C43119
                 JBR     off(00216h).5, scheduler_gate_common ; 271E 0 208 180 DD1629
-                NOP                            ; 2721 0 208 180 00
-                NOP                            ; 2722 0 208 180 00
-                L       A, off(00214h)         ; 2723 1 208 180 E414
-                AND     A, #00320h             ; 2725 1 208 180 D62003
-                JNE     scheduler_gate_common             ; 2728 1 208 180 CE20
-                L       A, off(00212h)         ; 272A 1 208 180 E412
-                AND     A, #001bch             ; 272C 1 208 180 D6BC01
-                JNE     scheduler_gate_common             ; 272F 1 208 180 CE19
-                JBR     off(0021ah).6, scheduler_gate_common ; 2731 1 208 180 DE1A16
-                JBS     off(0021ah).7, scheduler_gate_common ; 2734 1 208 180 EF1A13
+                CLR     A                      ; 2723 (skeleton: fault flags are always clear)
+                                                ; 2731 (skeleton: no VTEC pressure-switch state to test - treated as healthy)
+                                                ; 2734 (skeleton: no VTEC pressure-switch state to test - treated as healthy)
                 LB      A, 0c1h                ; 2737 0 208 180 F5C1
                 CMPB    A, #00ch               ; 2739 0 208 180 C60C
                 JLE     scheduler_ect_sign_check             ; 273B 0 208 180 CF15
@@ -3928,7 +3364,6 @@ scheduler_gate_common:     SB      P0.6                   ; 274A 0 208 180 C5201
 scheduler_ect_sign_check:     RB      P0.6                   ; 2752 0 208 180 C5200E
                 RB      off(00223h).6          ; 2755 0 208 180 C4230E
 scheduler_task_done:     MOV     DP, #000b6h            ; 2758 0 208 180 62B600
-                JBS     off(00214h).0, vss_calc_skip ; 275B 0 208 180 E81474
                 RB      09eh.2                 ; 275E 0 208 180 C59E0A
                 JEQ     vss_calc_gate2             ; 2761 0 208 180 C977
                 JBS     off(00217h).5, vss_calc_gate3 ; 2763 0 208 180 ED177D
@@ -3998,7 +3433,6 @@ vss_calc_gate3:     RB      off(00231h).4          ; 27E3 0 208 180 C4310C
 vss_calc_gate2_if_ram231_bit3_set:     JBS     off(00231h).3, vss_calc_gate2_if_ram227_bit6_clr ; 27F0 1 208 180 EB3104
                 MOVB    off(002e5h), #008h     ; 27F3 1 208 180 C4E59808
 vss_calc_gate2_if_ram227_bit6_clr:     JBR     off(00227h).6, idle_gate1_clear ; 27F7 1 208 180 DE2722
-                JBS     off(00214h).7, idle_gate1_clear ; 27FA 1 208 180 EF141F
                 MOV     DP, #00f00h            ; 27FD 1 208 180 62000F
                 MB      C, [DP].2              ; 2800 1 208 180 C22A
                 RB      off(00232h).6          ; 2802 1 208 180 C4320E
@@ -4008,14 +3442,14 @@ vss_calc_gate2_if_ram227_bit6_clr:     JBR     off(00227h).6, idle_gate1_clear ;
 idle_gate1:     JGE     idle_gate1_timer_check             ; 280D 1 208 180 CD10
                 CMPB    0adh, #00dh            ; 280F 1 208 180 C5ADC00D
                 JGT     idle_gate1_trigger             ; 2813 1 208 180 C803
-                JBS     off(00233h).7, idle_gate1_timer_check ; 2815 1 208 180 EF3307
+                                                ; 2815 (skeleton: no knock flag to test)
 idle_gate1_trigger:     MOVB    off(002e8h), #00ah     ; 2818 1 208 180 C4E8980A
 idle_gate1_clear:     RC                             ; 281C 1 208 180 95
                 SJ      dtc24_code24_latch             ; 281D 1 208 180 CB05
 idle_gate1_timer_check:     LB      A, off(002e8h)         ; 281F 0 208 180 F4E8
                 JNE     idle_gate1_clear             ; 2821 0 208 180 CEF9
                 SC                             ; 2823 0 208 180 85
-dtc24_code24_latch:     RB      09ah.3                 ; 2824 0 208 180 C59A3B
+dtc24_code24_latch:
                 J       idle_init_start_clear_stk             ; 2827 0 208 180 03895F
 idle_init_start_load_er0:     MOV     er0, off(002ech)       ; 282A 0 208 180 B4EC48
                 CLR     A                      ; 282D 1 208 180 F9
@@ -4181,8 +3615,7 @@ transit_gate_check:     MOV     DP, #000f6h            ; 297C 0 208 180 62F600
                 LB      A, 0c4h                ; 297F 0 208 180 F5C4
                 STB     A, ACCH                ; 2981 0 208 180 D507
                 CLRB    A                      ; 2983 0 208 180 FA
-                JBS     off(00214h).3, idle_scratch_store ; 2984 0 208 180 EB140B
-                MB      C, 099h.7              ; 2987 0 208 180 C5992F
+                RC                             ; (skeleton: no fault codes - the fault field is always clear)
                 JLT     idle_task_done             ; 298A 0 208 180 CA11
                 CMPB    0e9h, #032h            ; 298C 0 208 180 C5E9C032
                 JGE     idle_scratch_scale             ; 2990 0 208 180 CD04
@@ -4199,7 +3632,7 @@ battery_voltage_check:     MB      C, off(0022bh).2       ; 2A84 1 208 180 C42B2
                 ROLB    A                      ; 2A8E 0 208 180 33
                 MB      C, off(00210h).3       ; 2A8F 0 208 180 C4102B
                 ROLB    A                      ; 2A92 0 208 180 33
-                MB      C, off(00211h).2       ; 2A93 0 208 180 C4112A
+                RC                             ; 2A93 (skeleton: A/C request ignored)
                 ROLB    A                      ; 2A96 0 208 180 33
                 MB      C, off(00211h).5       ; 2A97 0 208 180 C4112D
                 ROLB    A                      ; 2A9A 0 208 180 33
@@ -4228,18 +3661,14 @@ battery_voltage_store_load_x1:     MOV     X1, #battery_voltage_store_tbl       
                 SB      PSWL.4                 ; 2AD0 0 208 180 A31C
                 J       battery_voltage_store_call_timer_or_counter_helper             ; 2AD2 0 208 180 03E956
 battery_voltage_store_set_carry:     SC                             ; 2AD5 0 208 180 85
-                L       A, off(00212h)         ; 2AD6 1 208 180 E412
-                AND     A, #02054h             ; 2AD8 1 208 180 D65420
-                JNE     freezeframe_flag_225_7             ; 2ADB 1 208 180 CE04
-                JBS     off(00214h).0, freezeframe_flag_225_7 ; 2ADD 1 208 180 E81401
+                CLR     A                      ; 2AD6 (skeleton: fault flags are always clear)
                 RC                             ; 2AE0 1 208 180 95
 freezeframe_flag_225_7:     MB      off(0022bh).4, C       ; 2AE1 1 208 180 C42B3C
                 MB      C, off(0021ah).0       ; 2AE4 1 208 180 C41A28
                 MB      off(00223h).5, C       ; 2AE7 1 208 180 C4233D
                 JBS     off(0022bh).4, freezeframe_flag_225_7_set_carry ; 2AEA 1 208 180 EC2B36
-                MB      C, 098h.1              ; 2AED 1 208 180 C59829
+                RC                             ; (skeleton: no fault codes - the fault field is always clear)
                 JLT     freezeframe_flag_225_7_set_carry             ; 2AF0 1 208 180 CA31
-                JBS     off(00212h).5, freezeframe_flag_225_7_set_carry ; 2AF2 1 208 180 ED122E
                 JBR     off(00217h).5, freezeframe_flag_225_7_if_ram216_bit3_clr ; 2AF5 1 208 180 DD170A
                 CMPB    0c0h, #030h            ; 2AF8 1 208 180 C5C0C030
                 MB      off(0022ah).6, C       ; 2AFC 1 208 180 C42A3E
@@ -4273,15 +3702,6 @@ freezeframe_flag_225_7_load_ram0c1:     LB      A, 0c1h                ; 2B36 0 
                 STB     A, off(00278h)         ; 2B40 0 208 180 D478
                 LB      A, 0c1h                ; 2B42 0 208 180 F5C1
                 STB     A, r0                  ; 2B44 0 208 180 88
-                NOP                            ; 2B45 0 208 180 00
-                NOP                            ; 2B46 0 208 180 00
-                NOP                            ; 2B47 0 208 180 00
-                NOP                            ; 2B48 0 208 180 00
-                NOP                            ; 2B49 0 208 180 00
-                NOP                            ; 2B4A 0 208 180 00
-                NOP                            ; 2B4B 0 208 180 00
-                NOP                            ; 2B4C 0 208 180 00
-                NOP                            ; 2B4D 0 208 180 00
                 MOV     X1, #IdleVsECT          ; 2B4E 0 208 180 60E566
                 MOV     X2, #freezeframe_flag_225_7_tbl          ; 2B51 0 208 180 610F67
                 MOVB    r2, #034h              ; 2B54 0 208 180 9A34
@@ -4295,12 +3715,10 @@ idle_ectvs_check2:     CMPB    A, r2                  ; 2B65 0 208 180 4A
                 JGE     idle_ectvs_result3             ; 2B66 0 208 180 CD4D
                 MOVB    r1, #030h              ; 2B68 0 208 180 9930
                 J       cfg_selector3_dispatch             ; 2B6A 0 208 180 03D277
-cfg_selector3_dispatch_goto_5802:     J       cfg_selector3_dispatch_cmp_ram280             ; 2B6D 0 208 180 030258
 cfg_selector3_dispatch_if_ge_goto_idle_ectvs_result3:     JGE     idle_ectvs_result3             ; 2B72 0 208 180 CD41
 idle_ectvs_result2:     L       A, #009c4h             ; 2B74 1 208 180 67C409
                 MOV     er3, #00280h           ; 2B77 1 208 180 47988002
                 SJ      idle_target_correction_start             ; 2B7B 1 208 180 CB3C
-cfg_selector3_dispatch_goto_idle_ectvs_result1:     J       idle_ectvs_result1             ; 2B7D 0 208 180 03775E
 idle_ectvs_result1_cmp_acc:     CMPB    A, r1                  ; 2B80 0 208 180 49
                 JGE     idle_ectvs_result3             ; 2B81 0 208 180 CD32
                 L       A, off(00270h)         ; 2B83 1 208 180 E470
@@ -4328,7 +3746,6 @@ idle_ectvs_result3:     LB      A, r0                  ; 2BB5 0 208 180 78
                 VCAL    1                      ; 2BB6 0 208 180 11
                 CLR     er3                    ; 2BB7 0 208 180 4715
 idle_target_correction_start:     MOV     DP, A                  ; 2BB9 1 208 180 52
-                NOP                            ; 2BBA 1 208 180 00
                 L       A, er3                 ; 2BBB 1 208 180 37
                 JEQ     to_idle_step_condition_dispatch             ; 2BBC 1 208 180 C91C
                 MOV     X1, #IdleVsECT          ; 2BBE 1 208 180 60E566
@@ -4344,7 +3761,6 @@ idle_target_correction_start:     MOV     DP, A                  ; 2BB9 1 208 18
                 JLE     idle_target_correction_done_clear_acc             ; 2BD3 0 208 180 CF03
                 J       idle_target_correction_done             ; 2BD5 0 208 180 038F57
 idle_target_correction_done_clear_acc:     CLR     A                      ; 2BD8 1 208 180 F9
-                NOP                            ; 2BD9 1 208 180 00
 to_idle_step_condition_dispatch:     J       idle_step_flag_store             ; 2BDA 1 208 180 03B959
 idle_step_flag_store_load_ram0c1:     LB      A, 0c1h                ; 2BDE 0 208 180 F5C1
                 VCAL    0                      ; 2BE0 0 208 180 10
@@ -4393,7 +3809,6 @@ idle_pid_mul_apply_resume:     JGE     idle_pid_er3_store             ; 2C3A 1 2
                 L       A, er1                 ; 2C42 1 208 180 35
 idle_pid_er3_store:     ST      A, er3                 ; 2C43 1 208 180 8B
                 JBS     off(0022bh).4, idle_pid_common ; 2C44 1 208 180 EC2B25
-                JBS     off(00211h).2, idle_pid_common ; 2C47 1 208 180 EA1122
                 JBS     off(0022ah).0, idle_pid_common ; 2C4A 1 208 180 E82A1F
                 LB      A, #028h               ; 2C4D 0 208 180 7728
                 CLRB    r1                     ; 2C4F 0 208 180 2115
@@ -4442,38 +3857,7 @@ idle_pid_decrement:     DECB    off(00297h)            ; 2CAF 1 208 180 C49717
 idle_pid_store_final:     MOV     off(00268h), er3       ; 2CB2 1 208 180 477C68
                 ST      A, off(0026ah)         ; 2CB5 1 208 180 D46A
                 MOVB    off(00291h), r5        ; 2CB7 1 208 180 257C91
-                JBR     off(00226h).4, idle_integrator_check2 ; 2CBA 1 208 180 DC263E
-                MOV     X1, #ZoneCorrectionRowSelect_SetA          ; 2CBD 1 208 180 604468
-                JBS     off(00216h).3, to_idle_integrator_store ; 2CC0 1 208 180 EB1603
-                MOV     X1, #ZoneCorrectionRowSelect_SetB          ; 2CC3 1 208 180 605368
-to_idle_integrator_store:     LB      A, 0c0h                ; 2CC6 0 208 180 F5C0
-                VCAL    1                      ; 2CC8 0 208 180 11
-                SLLB    A                      ; 2CC9 0 208 180 53
-                MOV     X2, A                  ; 2CCA 0 208 180 51
-                MOV     X1, #ZoneCorrection2DTable          ; 2CCB 0 208 180 606268
-                LB      A, off(00236h)         ; 2CCE 0 208 180 F436
-                VCAL    0                      ; 2CD0 0 208 180 10
-                L       A, ACC                 ; 2CD1 1 208 180 E506
-                SWAP                           ; 2CD3 1 208 180 83
-                CLRB    A                      ; 2CD4 0 208 180 FA
-                MOV     er0, X2                ; 2CD5 0 208 180 9148
-                MUL                            ; 2CD7 0 208 180 9035
-                L       A, off(00266h)         ; 2CD9 1 208 180 E466
-                MOV     DP, #003d0h            ; 2CDB 1 208 180 62D003
-                JEQ     idle_integrator_reset             ; 2CDE 1 208 180 C90C
-                JBS     off(00267h).7, idle_integrator_reset ; 2CE0 1 208 180 EF6709
-                L       A, [DP]                ; 2CE3 1 208 180 E2
-                SUB     A, #00004h             ; 2CE4 1 208 180 A60400
-                JGE     idle_integrator_store             ; 2CE7 1 208 180 CD06
-                CLR     A                      ; 2CE9 1 208 180 F9
-                SJ      idle_integrator_store             ; 2CEA 1 208 180 CB03
-idle_integrator_reset:     L       A, #00200h             ; 2CEC 1 208 180 670002
-idle_integrator_store:     ST      A, [DP]                ; 2CEF 1 208 180 D2
-                ADD     A, er1                 ; 2CF0 1 208 180 09
-                CMP     A, #08000h             ; 2CF1 1 208 180 C60080
-                JLT     idle_integrator_final_store             ; 2CF4 1 208 180 CA18
-                L       A, #07fffh             ; 2CF6 1 208 180 67FF7F
-                SJ      idle_integrator_final_store             ; 2CF9 1 208 180 CB13
+                SJ       idle_integrator_check2 ; 2CBA 1 208 180 DC263E
 idle_integrator_check2:     L       A, off(00266h)         ; 2CFB 1 208 180 E466
                 JEQ     idle_integrator_final_store             ; 2CFD 1 208 180 C90F
                 JBR     off(00267h).7, idle_integrator_fault ; 2CFF 1 208 180 DF6708
@@ -4672,8 +4056,7 @@ vcal5_call:     VCAL    6                      ; 2EC0 0 208 180 16
                 J       idle_stall_check2_if_ram217_bit5_clr             ; 2EC3 0 208 180 03C230
 carry_set_flag_gate_0b0:     SC                             ; 2EC6 1 208 180 85
                 JBS     off(0022bh).4, idle_direction_toggle ; 2EC7 1 208 180 EC2B06
-                JBS     off(00212h).5, idle_direction_toggle ; 2ECA 1 208 180 ED1203
-                MB      C, 098h.1              ; 2ECD 1 208 180 C59829
+                RC                             ; (skeleton: no fault codes - the fault field is always clear)
 idle_direction_toggle:     XORB    PSWH, #080h            ; 2ED0 1 208 180 A2F080
                 MB      off(00228h).5, C       ; 2ED3 1 208 180 C4283D
 idle_gear_calc_start:     CLR     A                      ; 2ED6 1 208 180 F9
@@ -4845,16 +4228,10 @@ idle_pi_result_common:     ST      A, er3                 ; 3043 1 208 180 8B
                 L       A, off(00262h)         ; 3049 1 208 180 E462
 idle_vcal5_call3:     VCAL    6                      ; 304B 1 208 180 16
                 ST      A, off(0025eh)         ; 304C 1 208 180 D45E
-                L       A, off(00212h)         ; 304E 1 208 180 E412
-                JNE     idle_stall_check2_if_ram217_bit5_clr             ; 3050 1 208 180 CE70
-                L       A, off(00214h)         ; 3052 1 208 180 E414
-                AND     A, #014fdh             ; 3054 1 208 180 D6FD14
-                JNE     idle_stall_check2_if_ram217_bit5_clr             ; 3057 1 208 180 CE69
+                CLR     A                      ; 304E (skeleton: fault flags are always clear)
                 JBR     off(00228h).5, idle_stall_check2_if_ram217_bit5_clr ; 3059 1 208 180 DD2866
                 JBS     off(0021ah).3, idle_stall_check2_if_ram217_bit5_clr ; 305C 1 208 180 EB1A63
                 J       idle_vcal5_call3_if_ram21a_bit0_clr             ; 305F 1 208 180 032D57
-idle_vcal5_call3_goto_5b4f:     J       idle_vcal5_call3_load_ram27c             ; 3062 1 208 180 034F5B
-idle_vcal5_call3_goto_5f09:     J       idle_vcal5_call3_load_ram266             ; 3066 1 208 180 03095F
 idle_vcal5_call3_cmp_ram0a6:     CMPB    0a6h, #070h            ; 3069 1 208 180 C5A6C070
                 JLT     idle_stall_check2_if_ram217_bit5_clr             ; 306D 1 208 180 CA53
                 CMP     0b0h, #00018h          ; 306F 1 208 180 B5B0C01800
@@ -4935,20 +4312,11 @@ idle_target_clamp2:     CMP     A, #08000h             ; 3116 1 208 180 C60080
 idle_target_clamp_max:     L       A, #07fffh             ; 311B 1 208 180 67FF7F
 idle_target_final_store:     ST      A, off(00280h)         ; 311E 1 208 180 D480
                 JBS     off(00217h).5, idle_output_gate2 ; 3120 1 208 180 ED172C
-                L       A, off(00212h)         ; 3123 1 208 180 E412
-                JNE     idle_target_final_store_load_dp             ; 3125 1 208 180 CE07
-                L       A, off(00214h)         ; 3127 1 208 180 E414
-                AND     A, #014fdh             ; 3129 1 208 180 D6FD14
-                JEQ     idle_target_final_store_load_er3             ; 312C 1 208 180 C907
-idle_target_final_store_load_dp:     MOV     DP, #0030ch            ; 312E 1 208 180 620C03
-                CAL     stub_or_short_helper             ; 3131 1 208 180 326B51
-                ST      A, [DP]                ; 3134 1 208 180 D2
 idle_target_final_store_load_er3:     MOV     er3, #00600h           ; 3135 1 208 180 47980006
                 CAL     stub_or_short_helper             ; 3139 1 208 180 326B51
                 VCAL    6                      ; 313C 1 208 180 16
-                MB      C, 098h.1              ; 313D 1 208 180 C59829
+                RC                             ; (skeleton: no fault codes - the fault field is always clear)
                 JLT     idle_output_common             ; 3140 1 208 180 CA18
-                JBS     off(00212h).5, idle_output_common ; 3142 1 208 180 ED1215
                 MOV     er3, off(00276h)       ; 3145 1 208 180 B4764B
                 J       idle_target_final_store_call_stub_or_short_helper             ; 3148 1 208 180 034577
 idle_output_vcal5:     VCAL    6                      ; 314B 1 208 180 16
@@ -5022,428 +4390,7 @@ idle_gear_target_final:     ST      A, off(0025ah)         ; 31C8 1 208 180 D45A
                 SWAPB                          ; 31D7 0 208 180 83
                 STB     A, off(00228h)         ; 31D8 0 208 180 D428
                 RT                             ; 31DA 0 208 180 01
-ignition_timing_calc_task:     MOVB    r5, 0b9h               ; 31DB 1 208 180 C5B94D
-                LB      A, 0b4h                ; 31DE 0 208 180 F5B4
-                MOV     X1, #ignition_timing_calc_task_tbl_2          ; 31E0 0 208 180 608064
-                VCAL    0                      ; 31E3 0 208 180 10
-                STB     A, r4                  ; 31E4 0 208 180 8C
-                LB      A, 0b4h                ; 31E5 0 208 180 F5B4
-                MOV     X1, #ignition_timing_calc_task_tbl_3          ; 31E7 0 208 180 608E64
-                VCAL    0                      ; 31EA 0 208 180 10
-                STB     A, r3                  ; 31EB 0 208 180 8B
-                LB      A, 0b4h                ; 31EC 0 208 180 F5B4
-                MOV     X1, #ignition_timing_calc_task_tbl_4          ; 31EE 0 208 180 60A664
-                VCAL    0                      ; 31F1 0 208 180 10
-                STB     A, r2                  ; 31F2 0 208 180 8A
-                JBS     off(0022eh).5, ignition_timing_calc_task_cmp_acc ; 31F3 0 208 180 ED2E01
-                LB      A, r3                  ; 31F6 0 208 180 7B
-ignition_timing_calc_task_cmp_acc:     CMPB    A, r5                  ; 31F7 0 208 180 4D
-                MB      off(0022eh).5, C       ; 31F8 0 208 180 C42E3D
-                LB      A, r2                  ; 31FB 0 208 180 7A
-                JBS     off(0022eh).4, ignition_timing_calc_task_subb_acc ; 31FC 0 208 180 EC2E01
-                LB      A, r3                  ; 31FF 0 208 180 7B
-ignition_timing_calc_task_subb_acc:     SUBB    A, r4                  ; 3200 0 208 180 2C
-                J       ignition_timing_calc_task_if_ge_goto_57a2             ; 3201 0 208 180 039F57
-ignition_timing_calc_task_load_ram0b4:     LB      A, 0b4h                ; 3205 0 208 180 F5B4
-                MOV     X1, #ignition_timing_calc_task_tbl_5          ; 3207 0 208 180 60BE64
-                VCAL    0                      ; 320A 0 208 180 10
-                STB     A, r3                  ; 320B 0 208 180 8B
-                LB      A, 0b4h                ; 320C 0 208 180 F5B4
-                MOV     X1, #ignition_timing_calc_task_tbl_6          ; 320E 0 208 180 60D664
-                VCAL    0                      ; 3211 0 208 180 10
-                STB     A, r2                  ; 3212 0 208 180 8A
-                JBS     off(0022eh).7, ignition_timing_calc_task_cmp_acc_2 ; 3213 0 208 180 EF2E01
-                LB      A, r3                  ; 3216 0 208 180 7B
-ignition_timing_calc_task_cmp_acc_2:     CMPB    A, r5                  ; 3217 0 208 180 4D
-                MB      off(0022eh).7, C       ; 3218 0 208 180 C42E3F
-                LB      A, r2                  ; 321B 0 208 180 7A
-                JBS     off(0022eh).6, ignition_timing_calc_task_subb_acc_2 ; 321C 0 208 180 EE2E01
-                LB      A, r3                  ; 321F 0 208 180 7B
-ignition_timing_calc_task_subb_acc_2:     SUBB    A, r4                  ; 3220 0 208 180 2C
-                J       ignition_timing_calc_task_if_ge_goto_57ac             ; 3221 0 208 180 03A957
-ignition_timing_calc_task_load_ram0b4_2:     LB      A, 0b4h                ; 3225 0 208 180 F5B4
-                STB     A, r4                  ; 3227 0 208 180 8C
-                MOV     X1, #ignition_timing_calc_task_tbl_9          ; 3228 0 208 180 600265
-                VCAL    0                      ; 322B 0 208 180 10
-                STB     A, off(0029fh)         ; 322C 0 208 180 D49F
-                LB      A, r4                  ; 322E 0 208 180 7C
-                MOV     X1, #ignition_timing_calc_task_tbl_10          ; 322F 0 208 180 601065
-                VCAL    0                      ; 3232 0 208 180 10
-                STB     A, off(002a0h)         ; 3233 0 208 180 D4A0
-                CMPB    A, r5                  ; 3235 0 208 180 4D
-                XORB    PSWH, #080h            ; 3236 0 208 180 A2F080
-                JGE     ignition_timing_calc_task_store_carry_ram22f_bit3             ; 3239 0 208 180 CD03
-                LB      A, off(0029fh)         ; 323B 0 208 180 F49F
-                CMPB    A, r5                  ; 323D 0 208 180 4D
-ignition_timing_calc_task_store_carry_ram22f_bit3:     MB      off(0022fh).3, C       ; 323E 0 208 180 C42F3B
-                LB      A, r4                  ; 3241 0 208 180 7C
-                MOV     X1, #ignition_timing_calc_task_tbl_11          ; 3242 0 208 180 601E65
-                VCAL    0                      ; 3245 0 208 180 10
-                STB     A, off(002a1h)         ; 3246 0 208 180 D4A1
-                LB      A, r4                  ; 3248 0 208 180 7C
-                MOV     X1, #ignition_timing_calc_task_tbl_12          ; 3249 0 208 180 602C65
-                VCAL    0                      ; 324C 0 208 180 10
-                STB     A, off(002a2h)         ; 324D 0 208 180 D4A2
-                CMPB    A, r5                  ; 324F 0 208 180 4D
-                XORB    PSWH, #080h            ; 3250 0 208 180 A2F080
-                JGE     ignition_timing_calc_task_store_carry_ram22f_bit4             ; 3253 0 208 180 CD03
-                LB      A, off(002a1h)         ; 3255 0 208 180 F4A1
-                CMPB    A, r5                  ; 3257 0 208 180 4D
-ignition_timing_calc_task_store_carry_ram22f_bit4:     MB      off(0022fh).4, C       ; 3258 0 208 180 C42F3C
-                LB      A, 0b4h                ; 325B 0 208 180 F5B4
-                MOV     X1, #ignition_timing_calc_task_tbl_7          ; 325D 0 208 180 60EE64
-                JBS     off(0022eh).3, ignition_timing_calc_task_vcal_0 ; 3260 0 208 180 EB2E03
-                MOV     X1, #ignition_timing_calc_task_tbl_8          ; 3263 0 208 180 60F864
-ignition_timing_calc_task_vcal_0:     VCAL    0                      ; 3266 0 208 180 10
-                MOV     DP, #00311h            ; 3267 0 208 180 621103
-                ADDB    A, [DP]                ; 326A 0 208 180 C282
-                CMPB    A, 0bch                ; 326C 0 208 180 C5BCC2
-                MB      off(0022eh).3, C       ; 326F 0 208 180 C42E3B
-                MOV     DP, #0022ch            ; 3272 0 208 180 622C02
-                MOV     er0, #00800h           ; 3275 0 208 180 44980008
-                MOV     X1, #ignition_timing_calc_task_tbl          ; 3279 0 208 180 605A64
-                MOVB    r2, 0b4h               ; 327C 0 208 180 C5B44A
-                RB      PSWL.4                 ; 327F 0 208 180 A30C
-                CAL     timer_or_counter_helper             ; 3281 0 208 180 327752
-                INC     DP                     ; 3284 0 208 180 72
-                MOV     er0, #00800h           ; 3285 0 208 180 44980008
-                CAL     timer_or_counter_helper             ; 3289 0 208 180 327752
-                INC     DP                     ; 328C 0 208 180 72
-                MOV     er0, #00100h           ; 328D 0 208 180 44980001
-                CAL     timer_or_counter_helper             ; 3291 0 208 180 327752
-                MOVB    r1, #001h              ; 3294 0 208 180 9901
-                MOVB    r2, off(00236h)        ; 3296 0 208 180 C4364A
-                CAL     timer_or_counter_helper             ; 3299 0 208 180 327752
-                MOVB    r1, #001h              ; 329C 0 208 180 9901
-                MOVB    r2, 0b9h               ; 329E 0 208 180 C5B94A
-                CAL     timer_or_counter_helper             ; 32A1 0 208 180 327752
-                LB      A, 0b4h                ; 32A4 0 208 180 F5B4
-                MOVB    r7, #080h              ; 32A6 0 208 180 9F80
-                JBS     off(00211h).5, ignition_timing_calc_task_load_r7 ; 32A8 0 208 180 ED1134
-                JBS     off(00211h).6, ignition_timing_calc_task_if_ram22e_bit2_set ; 32AB 0 208 180 EE1106
-                JBR     off(00211h).7, ignition_timing_calc_task_load_r7 ; 32AE 0 208 180 DF112E
-                JBS     off(0022ch).0, ignition_timing_calc_task_clear_r7 ; 32B1 0 208 180 E82C29
-ignition_timing_calc_task_if_ram22e_bit2_set:     JBS     off(0022eh).2, ignition_timing_calc_task_load_r7 ; 32B4 0 208 180 EA2E28
-                JBR     off(0022fh).6, ignition_timing_calc_task_cmp_acc_3 ; 32B7 0 208 180 DE2F08
-                CMPB    A, #027h               ; 32BA 0 208 180 C627
-                JLT     ignition_timing_calc_task_load_r7             ; 32BC 0 208 180 CA21
-                MOVB    r7, #040h              ; 32BE 0 208 180 9F40
-                SJ      ignition_timing_calc_task_if_ram22c_bit1_clr             ; 32C0 0 208 180 CB12
-ignition_timing_calc_task_cmp_acc_3:     CMPB    A, #010h               ; 32C2 0 208 180 C610
-                JLT     ignition_timing_calc_task_load_r7             ; 32C4 0 208 180 CA19
-                MOVB    r7, #040h              ; 32C6 0 208 180 9F40
-                JBS     off(0022fh).7, ignition_timing_calc_task_if_ram22c_bit1_clr ; 32C8 0 208 180 EF2F09
-                JBS     off(0022eh).3, ignition_timing_calc_task_if_ram22c_bit1_clr ; 32CB 0 208 180 EB2E06
-                CMPB    A, #010h               ; 32CE 0 208 180 C610
-                JGE     ignition_timing_calc_task_clear_r7             ; 32D0 0 208 180 CD0B
-                SJ      ignition_timing_calc_task_load_r7             ; 32D2 0 208 180 CB0B
-ignition_timing_calc_task_if_ram22c_bit1_clr:     JBR     off(0022ch).1, ignition_timing_calc_task_load_r7 ; 32D4 0 208 180 D92C08
-                JBS     off(00211h).6, ignition_timing_calc_task_load_r7 ; 32D7 0 208 180 EE1105
-                JBS     off(0022eh).6, ignition_timing_calc_task_load_r7 ; 32DA 0 208 180 EE2E02
-ignition_timing_calc_task_clear_r7:     CLRB    r7                     ; 32DD 0 208 180 2715
-ignition_timing_calc_task_load_r7:     LB      A, r7                  ; 32DF 0 208 180 7F
-                SLLB    A                      ; 32E0 0 208 180 53
-                MB      off(0022fh).6, C       ; 32E1 0 208 180 C42F3E
-                SLLB    A                      ; 32E4 0 208 180 53
-                MB      off(0022fh).7, C       ; 32E5 0 208 180 C42F3F
-                LB      A, off(00214h)         ; 32E8 0 208 180 F414
-                STB     A, ACCH                ; 32EA 0 208 180 D507
-                LB      A, off(00212h)         ; 32EC 0 208 180 F412
-                AND     ACC, #00560h           ; 32EE 0 208 180 B506D06005
-                JNE     ignition_timing_calc_task_load_ram2ca             ; 32F3 0 208 180 CE1C
-                CMPB    0c1h, #03ch            ; 32F5 0 208 180 C5C1C03C
-                JGE     ignition_timing_calc_task_load_ram2ca             ; 32F9 0 208 180 CD16
-                JBR     off(0022eh).1, ignition_timing_calc_task_load_ram2ca ; 32FB 0 208 180 D92E13
-                JBS     off(00211h).7, ignition_timing_calc_task_load_ram2cc_2 ; 32FE 0 208 180 EF111A
-                JBR     off(00211h).6, ignition_timing_calc_task_load_ram2ca ; 3301 0 208 180 DE110D
-                JBR     off(0022fh).0, ignition_timing_calc_task_load_ram2cc ; 3304 0 208 180 D82F04
-                MOVB    off(002c9h), #014h     ; 3307 0 208 180 C4C99814
-ignition_timing_calc_task_load_ram2cc:     LB      A, off(002cch)         ; 330B 0 208 180 F4CC
-                JNE     ignition_timing_calc_task_clear_carry             ; 330D 0 208 180 CE41
-                SJ      ignition_timing_calc_task_load_ram2ca_2             ; 330F 0 208 180 CB04
-ignition_timing_calc_task_load_ram2ca:     MOVB    off(002cah), #002h     ; 3311 0 208 180 C4CA9802
-ignition_timing_calc_task_load_ram2ca_2:     LB      A, off(002cah)         ; 3315 0 208 180 F4CA
-                JEQ     ignition_timing_calc_task_if_ram21b_bit6_set             ; 3317 0 208 180 C90A
-                SJ      ignition_timing_calc_task_clear_carry             ; 3319 0 208 180 CB35
-ignition_timing_calc_task_load_ram2cc_2:     MOVB    off(002cch), #00ch     ; 331B 0 208 180 C4CC980C
-                LB      A, off(002c9h)         ; 331F 0 208 180 F4C9
-                JEQ     ignition_timing_calc_task_load_ram2ca_2             ; 3321 0 208 180 C9F2
-ignition_timing_calc_task_if_ram21b_bit6_set:     JBS     off(0021bh).6, ignition_timing_calc_task_load_ram2cb ; 3323 0 208 180 EE1B0B
-                CMP     0aeh, #00120h          ; 3326 0 208 180 B5AEC02001
-                JLT     ignition_timing_calc_task_load_ram2cb             ; 332B 0 208 180 CA04
-                MOVB    off(002cbh), #014h     ; 332D 0 208 180 C4CB9814
-ignition_timing_calc_task_load_ram2cb:     LB      A, off(002cbh)         ; 3331 0 208 180 F4CB
-                JNE     ignition_timing_calc_task_clear_carry             ; 3333 0 208 180 CE1B
-                JBS     off(0022eh).3, ignition_timing_calc_task_if_ram211_bit6_set ; 3335 0 208 180 EB2E1B
-                JBS     off(0022fh).6, ignition_timing_calc_task_clear_carry ; 3338 0 208 180 EE2F15
-                MB      C, off(0022dh).6       ; 333B 0 208 180 C42D2E
-                JBS     off(0022fh).7, ignition_timing_calc_task_if_ge_goto_3350 ; 333E 0 208 180 EF2F03
-                MB      C, off(0022dh).7       ; 3341 0 208 180 C42D2F
-ignition_timing_calc_task_if_ge_goto_3350:     JGE     ignition_timing_calc_task_clear_carry             ; 3344 0 208 180 CD0A
-                JBS     off(0022eh).0, ignition_timing_calc_task_clear_carry ; 3346 0 208 180 E82E07
-                LB      A, off(002e5h)         ; 3349 0 208 180 F4E5
-                JEQ     ignition_timing_calc_task_clear_carry             ; 334B 0 208 180 C903
-                JBS     off(0021ch).3, ignition_timing_calc_task_if_ram22f_bit0_set ; 334D 0 208 180 EB1C22
-ignition_timing_calc_task_clear_carry:     RC                             ; 3350 0 208 180 95
-                SJ      ignition_timing_calc_task_store_carry_ram22f_bit0             ; 3351 0 208 180 CB31
-ignition_timing_calc_task_if_ram211_bit6_set:     JBS     off(00211h).6, ignition_timing_calc_task_if_ram22c_bit2_set ; 3353 0 208 180 EE110F
-                JBS     off(0022ch).4, ignition_timing_calc_task_if_ram22f_bit0_set ; 3356 0 208 180 EC2C19
-                JBR     off(0022ch).5, ignition_timing_calc_task_load_ram2cd ; 3359 0 208 180 DD2C03
-                JBR     off(0022eh).7, ignition_timing_calc_task_load_ram2cd_2 ; 335C 0 208 180 DF2E0F
-ignition_timing_calc_task_load_ram2cd:     MOVB    off(002cdh), #014h     ; 335F 0 208 180 C4CD9814
-                SJ      ignition_timing_calc_task_load_ram2cd_2             ; 3363 0 208 180 CB09
-ignition_timing_calc_task_if_ram22c_bit2_set:     JBS     off(0022ch).2, ignition_timing_calc_task_if_ram22f_bit0_set ; 3365 0 208 180 EA2C0A
-                JBR     off(0022ch).3, ignition_timing_calc_task_load_ram2cd ; 3368 0 208 180 DB2CF4
-                JBS     off(0022eh).5, ignition_timing_calc_task_load_ram2cd ; 336B 0 208 180 ED2EF1
-ignition_timing_calc_task_load_ram2cd_2:     LB      A, off(002cdh)         ; 336E 0 208 180 F4CD
-                JNE     ignition_timing_calc_task_clear_carry             ; 3370 0 208 180 CEDE
-ignition_timing_calc_task_if_ram22f_bit0_set:     JBS     off(0022fh).0, ignition_timing_calc_task_set_carry ; 3372 0 208 180 E82F0E
-                J       ignition_timing_calc_task_load_ram0bd             ; 3375 0 208 180 03135F
-ignition_timing_calc_task_if_le_goto_337f:     JLE     ignition_timing_calc_task_load_ram2d2_2             ; 3379 0 208 180 CF04
-ignition_timing_calc_task_load_ram2d2:     MOVB    off(002d2h), #002h     ; 337B 0 208 180 C4D29802
-ignition_timing_calc_task_load_ram2d2_2:     LB      A, off(002d2h)         ; 337F 0 208 180 F4D2
-                JNE     ignition_timing_calc_task_clear_carry             ; 3381 0 208 180 CECD
-ignition_timing_calc_task_set_carry:     SC                             ; 3383 0 208 180 85
-ignition_timing_calc_task_store_carry_ram22f_bit0:     MB      off(0022fh).0, C       ; 3384 0 208 180 C42F38
-                MB      P0.4, C                ; 3387 0 208 180 C5203C
-                CMPB    0c0h, #0e1h            ; 338A 0 208 180 C5C0C0E1
-                JGE     ignition_timing_calc_task_load_imm             ; 338E 0 208 180 CD06
-                CMPB    0c1h, #02eh            ; 3390 0 208 180 C5C1C02E
-                JLT     ignition_timing_calc_task_if_ram22d_bit0_set             ; 3394 0 208 180 CA08
-ignition_timing_calc_task_load_imm:     LB      A, #00ch               ; 3396 0 208 180 770C
-                STB     A, off(002b0h)         ; 3398 0 208 180 D4B0
-                STB     A, off(0029eh)         ; 339A 0 208 180 D49E
-                SJ      ignition_timing_calc_task_goto_3595             ; 339C 0 208 180 CB72
-ignition_timing_calc_task_if_ram22d_bit0_set:     JBS     off(0022dh).0, ignition_timing_calc_task_load_ram2b0 ; 339E 0 208 180 E82D06
-                LB      A, off(0029eh)         ; 33A1 0 208 180 F49E
-                STB     A, off(002b0h)         ; 33A3 0 208 180 D4B0
-                SJ      ignition_timing_calc_task_if_ne_goto_3410             ; 33A5 0 208 180 CB04
-ignition_timing_calc_task_load_ram2b0:     LB      A, off(002b0h)         ; 33A7 0 208 180 F4B0
-                STB     A, off(0029eh)         ; 33A9 0 208 180 D49E
-ignition_timing_calc_task_if_ne_goto_3410:     JNE     ignition_timing_calc_task_goto_3595             ; 33AB 0 208 180 CE63
-                JBR     off(0022fh).0, ignition_timing_calc_task_goto_3595 ; 33AD 0 208 180 D82F60
-                JBS     off(0022eh).3, ignition_timing_calc_task_load_carry_ram22e_bit4 ; 33B0 0 208 180 EB2E08
-                JBS     off(0022fh).7, ignition_timing_calc_task_goto_340a ; 33B3 0 208 180 EF2F03
-                JBS     off(0022fh).6, ignition_timing_calc_task_goto_3595 ; 33B6 0 208 180 EE2F57
-ignition_timing_calc_task_goto_340a:     SJ      ignition_timing_calc_task_goto_348c             ; 33B9 0 208 180 CB4F
-ignition_timing_calc_task_load_carry_ram22e_bit4:     MB      C, off(0022eh).4       ; 33BB 0 208 180 C42E2C
-                JBS     off(00211h).6, ignition_timing_calc_task_if_ge_goto_33ca ; 33BE 0 208 180 EE1103
-                MB      C, off(0022eh).6       ; 33C1 0 208 180 C42E2E
-ignition_timing_calc_task_if_ge_goto_33ca:     JGE     ignition_timing_calc_task_load_ram2ce             ; 33C4 0 208 180 CD04
-                MOVB    off(002ceh), #00ah     ; 33C6 0 208 180 C4CE980A
-ignition_timing_calc_task_load_ram2ce:     LB      A, off(002ceh)         ; 33CA 0 208 180 F4CE
-                JNE     ignition_timing_calc_task_goto_3595             ; 33CC 0 208 180 CE42
-                MOV     er1, #00028h           ; 33CE 0 208 180 45982800
-                JBR     off(00211h).6, ignition_timing_calc_task_if_ram22d_bit5_clr ; 33D2 0 208 180 DE1105
-                JBR     off(0022dh).4, ignition_timing_calc_task_goto_3595 ; 33D5 0 208 180 DC2D38
-                SJ      ignition_timing_calc_task_goto_3583             ; 33D8 0 208 180 CB33
-ignition_timing_calc_task_if_ram22d_bit5_clr:     JBR     off(0022dh).5, ignition_timing_calc_task_if_ram22d_bit1_set ; 33DA 0 208 180 DD2D06
-                MOV     er1, #00033h           ; 33DD 0 208 180 45983300
-                SJ      ignition_timing_calc_task_goto_3583             ; 33E1 0 208 180 CB2A
-ignition_timing_calc_task_if_ram22d_bit1_set:     JBS     off(0022dh).1, ignition_timing_calc_task_goto_3583 ; 33E3 0 208 180 E92D27
-                JBS     off(0022fh).7, ignition_timing_calc_task_if_ram22d_bit2_clr ; 33E6 0 208 180 EF2F08
-                JBS     off(0022fh).6, ignition_timing_calc_task_goto_3595 ; 33E9 0 208 180 EE2F24
-                JBR     off(0022dh).3, ignition_timing_calc_task_goto_3595 ; 33EC 0 208 180 DB2D21
-                SJ      ignition_timing_calc_task_load_carry_ram22f_bit3             ; 33EF 0 208 180 CB03
-ignition_timing_calc_task_if_ram22d_bit2_clr:     JBR     off(0022dh).2, ignition_timing_calc_task_goto_3595 ; 33F1 0 208 180 DA2D1C
-ignition_timing_calc_task_load_carry_ram22f_bit3:     MB      C, off(0022fh).3       ; 33F4 0 208 180 C42F2B
-                JBS     off(0022fh).7, ignition_timing_calc_task_if_lt_goto_3403 ; 33F7 0 208 180 EF2F03
-                MB      C, off(0022fh).4       ; 33FA 0 208 180 C42F2C
-ignition_timing_calc_task_if_lt_goto_3403:     JLT     ignition_timing_calc_task_goto_7756             ; 33FD 0 208 180 CA04
-                MOVB    off(002cfh), #00ah     ; 33FF 0 208 180 C4CF980A
-ignition_timing_calc_task_goto_7756:     J       ignition_timing_calc_task_load_ram2cf             ; 3403 0 208 180 035677
-                DB  000h,003h,039h,035h ; 3406
-ignition_timing_calc_task_goto_348c:     J       ignition_timing_calc_task_clear_r0             ; 340A 0 208 180 038C34
-ignition_timing_calc_task_goto_3583:     J       ignition_timing_calc_task_load_ram298             ; 340D 0 208 180 038335
-ignition_timing_calc_task_goto_3595:     J       ignition_timing_calc_task_clear_acc             ; 3410 0 208 180 039535
-ignition_timing_calc_task_load_ram29f:     LB      A, off(0029fh)         ; 3413 0 208 180 F49F
-                MOVB    r0, #060h              ; 3415 0 208 180 9860
-                MOV     er1, #0332eh           ; 3417 0 208 180 45982E33
-                MOVB    r6, #020h              ; 341B 0 208 180 9E20
-                MOVB    r7, #020h              ; 341D 0 208 180 9F20
-                JBS     off(0022fh).7, ignition_timing_calc_task_subb_acc_3 ; 341F 0 208 180 EF2F0C
-                LB      A, off(002a1h)         ; 3422 0 208 180 F4A1
-                MOVB    r0, #060h              ; 3424 0 208 180 9860
-                MOV     er1, #044a1h           ; 3426 0 208 180 4598A144
-                MOVB    r6, #020h              ; 342A 0 208 180 9E20
-                MOVB    r7, #020h              ; 342C 0 208 180 9F20
-ignition_timing_calc_task_subb_acc_3:     SUBB    A, 0b9h                ; 342E 0 208 180 C5B9A2
-                MB      PSWL.4, C              ; 3431 0 208 180 A33C
-                JGE     ignition_timing_calc_task_mulb_acc             ; 3433 0 208 180 CD01
-                VCAL    7                      ; 3435 0 208 180 17
-ignition_timing_calc_task_mulb_acc:     MULB                           ; 3436 0 208 180 A234
-                L       A, ACC                 ; 3438 1 208 180 E506
-                MOVB    r0, #020h              ; 343A 1 208 180 9820
-                NOP                            ; 343C 1 208 180 00
-                NOP                            ; 343D 1 208 180 00
-                NOP                            ; 343E 1 208 180 00
-                NOP                            ; 343F 1 208 180 00
-                MB      C, PSWL.4              ; 3440 1 208 180 A32C
-                JGE     ignition_timing_calc_task_add_acc             ; 3442 1 208 180 CD08
-                XCHG    A, er1                 ; 3444 1 208 180 4510
-                SUB     A, er1                 ; 3446 1 208 180 29
-                JGE     ignition_timing_calc_task_store_er0             ; 3447 1 208 180 CD09
-                CLR     A                      ; 3449 1 208 180 F9
-                SJ      ignition_timing_calc_task_store_er0             ; 344A 1 208 180 CB06
-ignition_timing_calc_task_add_acc:     ADD     A, er1                 ; 344C 1 208 180 09
-                JGE     ignition_timing_calc_task_store_er0             ; 344D 1 208 180 CD03
-                L       A, #0ffffh             ; 344F 1 208 180 67FFFF
-ignition_timing_calc_task_store_er0:     ST      A, er0                 ; 3452 1 208 180 88
-                L       A, 0b6h                ; 3453 1 208 180 E5B6
-                MUL                            ; 3455 1 208 180 9035
-                L       A, er1                 ; 3457 1 208 180 35
-                MOV     DP, #0038ah            ; 3458 1 208 180 628A03
-                ST      A, [DP]                ; 345B 1 208 180 D2
-                SUB     A, 0ach                ; 345C 1 208 180 B5ACA2
-                MB      PSWL.4, C              ; 345F 1 208 180 A33C
-                JGE     ignition_timing_calc_task_load_dp             ; 3461 1 208 180 CD01
-                VCAL    7                      ; 3463 1 208 180 17
-ignition_timing_calc_task_load_dp:     MOV     DP, #0038ch            ; 3464 1 208 180 628C03
-                ST      A, [DP]                ; 3467 1 208 180 D2
-                CAL     weighted_sum_2term_trim             ; 3468 1 208 180 328451
-ignition_timing_calc_task_if_eq_goto_3475:     JEQ     ignition_timing_calc_task_load_x2             ; 346B 1 208 180 C908
-                CMP     A, #00333h             ; 346D 1 208 180 C63303
-                JLT     ignition_timing_calc_task_load_x2             ; 3470 1 208 180 CA03
-                L       A, #00333h             ; 3472 1 208 180 673303
-ignition_timing_calc_task_load_x2:     MOV     X2, A                  ; 3475 1 208 180 51
-                MOV     X1, #00316h            ; 3476 1 208 180 601603
-                JBS     off(0022fh).7, ignition_timing_calc_task_load_er0 ; 3479 1 208 180 EF2F02
-                INC     X1                     ; 347C 1 208 180 70
-                INC     X1                     ; 347D 1 208 180 70
-ignition_timing_calc_task_load_er0:     MOV     er0, #000ffh           ; 347E 1 208 180 4498FF00
-                CAL     interp_bracket_delta_scale_2             ; 3482 1 208 180 32624F
-                CAL     clamp_to_35_512             ; 3485 1 208 180 32FA50
-                L       A, X2                  ; 3488 1 208 180 41
-                J       ignition_timing_calc_task_clear_ram22f_bit2_2             ; 3489 1 208 180 037477
-ignition_timing_calc_task_clear_r0:     CLRB    r0                     ; 348C 0 208 180 2015
-                MOV     DP, #00312h            ; 348E 0 208 180 621203
-                MOVB    r1, #090h              ; 3491 0 208 180 9990
-                MOVB    r2, #040h              ; 3493 0 208 180 9A40
-                JBS     off(0022fh).7, ignition_timing_calc_task_load_dp_ind ; 3495 0 208 180 EF2F06
-                INC     DP                     ; 3498 0 208 180 72
-                INC     DP                     ; 3499 0 208 180 72
-                MOVB    r1, #080h              ; 349A 0 208 180 9980
-                MOVB    r2, #040h              ; 349C 0 208 180 9A40
-ignition_timing_calc_task_load_dp_ind:     L       A, [DP]                ; 349E 1 208 180 E2
-                SUB     A, off(0029ah)         ; 349F 1 208 180 A79A
-                MB      PSWL.4, C              ; 34A1 1 208 180 A33C
-                JGE     ignition_timing_calc_task_cmp_acc_4             ; 34A3 1 208 180 CD03
-                VCAL    7                      ; 34A5 1 208 180 17
-                MOVB    r1, r2                 ; 34A6 1 208 180 2249
-ignition_timing_calc_task_cmp_acc_4:     CMP     A, #00155h             ; 34A8 1 208 180 C65501
-                SB      off(0022fh).1          ; 34AB 1 208 180 C42F19
-                JGE     ignition_timing_calc_task_goto_5a68             ; 34AE 1 208 180 CD05
-                JNE     ignition_timing_calc_task_if_ram22f_bit5_set             ; 34B0 1 208 180 CE19
-                J       ignition_timing_calc_task_load_dp_ind_3             ; 34B2 1 208 180 037D77
-ignition_timing_calc_task_goto_5a68:     J       ignition_timing_calc_task_mul_acc_3             ; 34B5 1 208 180 03685A
-ignition_timing_calc_task_load_carry_pswl_bit4:     MB      C, PSWL.4              ; 34B9 1 208 180 A32C
-                JLT     ignition_timing_calc_task_sub_acc             ; 34BB 1 208 180 CA08
-                ADD     A, er1                 ; 34BD 1 208 180 09
-                J       ignition_timing_calc_task_if_lt_goto_7787             ; 34BE 1 208 180 038077
-ignition_timing_calc_task_goto_34c9:     SJ      ignition_timing_calc_task_store_ram29a             ; 34C3 1 208 180 CB04
-ignition_timing_calc_task_sub_acc:     SUB     A, er1                 ; 34C5 1 208 180 29
-                JGE     ignition_timing_calc_task_store_ram29a             ; 34C6 1 208 180 CD01
-                CLR     A                      ; 34C8 1 208 180 F9
-ignition_timing_calc_task_store_ram29a:     ST      A, off(0029ah)         ; 34C9 1 208 180 D49A
-ignition_timing_calc_task_if_ram22f_bit5_set:     JBS     off(0022fh).5, ignition_timing_calc_task_load_ram2d0 ; 34CB 1 208 180 ED2F10
-                CMP     off(0029ch), #00180h   ; 34CE 1 208 180 B49CC08001
-                JLT     ignition_timing_calc_task_load_ram2d0             ; 34D3 1 208 180 CA09
-                LB      A, off(002d0h)         ; 34D5 0 208 180 F4D0
-                JNE     ignition_timing_calc_task_load_ram0b6             ; 34D7 0 208 180 CE09
-                RB      off(0022fh).7          ; 34D9 0 208 180 C42F0F
-                SJ      ignition_timing_calc_task_load_ram0b6             ; 34DC 0 208 180 CB04
-ignition_timing_calc_task_load_ram2d0:     MOVB    off(002d0h), #028h     ; 34DE 1 208 180 C4D09828
-ignition_timing_calc_task_load_ram0b6:     L       A, 0b6h                ; 34E2 1 208 180 E5B6
-                MOV     er0, #034c2h           ; 34E4 1 208 180 4498C234
-                JBS     off(0022fh).7, ignition_timing_calc_task_mul_acc ; 34E8 1 208 180 EF2F04
-                MOV     er0, #04a55h           ; 34EB 1 208 180 4498554A
-ignition_timing_calc_task_mul_acc:     MUL                            ; 34EF 1 208 180 9035
-                L       A, er1                 ; 34F1 1 208 180 35
-                MOV     DP, #0038ah            ; 34F2 1 208 180 628A03
-                ST      A, [DP]                ; 34F5 1 208 180 D2
-                L       A, 0ach                ; 34F6 1 208 180 E5AC
-                SUB     A, er1                 ; 34F8 1 208 180 29
-                MB      off(0022fh).5, C       ; 34F9 1 208 180 C42F3D
-                MB      PSWL.4, C              ; 34FC 1 208 180 A33C
-                JGE     ignition_timing_calc_task_store_ram29c             ; 34FE 1 208 180 CD01
-                VCAL    7                      ; 3500 1 208 180 17
-ignition_timing_calc_task_store_ram29c:     ST      A, off(0029ch)         ; 3501 1 208 180 D49C
-                MOVB    r6, #040h              ; 3503 1 208 180 9E40
-                MOVB    r7, #040h              ; 3505 1 208 180 9F40
-                CAL     weighted_sum_2term_trim             ; 3507 1 208 180 328451
-                MOV     X2, A                  ; 350A 1 208 180 51
-                JEQ     ignition_timing_calc_task_cmp_ram2d1             ; 350B 1 208 180 C904
-                MOVB    off(002d1h), #014h     ; 350D 1 208 180 C4D19814
-ignition_timing_calc_task_cmp_ram2d1:     CMPB    off(002d1h), #000h     ; 3511 1 208 180 C4D1C000
-                JNE     ignition_timing_calc_task_if_ram22c_bit6_clr             ; 3515 1 208 180 CE04
-                CLR     X2                     ; 3517 1 208 180 9115
-                SJ      ignition_timing_calc_task_load_x2_2             ; 3519 1 208 180 CB18
-ignition_timing_calc_task_if_ram22c_bit6_clr:     JBR     off(0022ch).6, ignition_timing_calc_task_load_x2_2 ; 351B 1 208 180 DE2C15
-                JBS     off(0022ch).7, ignition_timing_calc_task_load_x2_2 ; 351E 1 208 180 EF2C12
-                MOV     X1, #00312h            ; 3521 1 208 180 601203
-                JBS     off(0022fh).7, ignition_timing_calc_task_load_er0_2 ; 3524 1 208 180 EF2F02
-                INC     X1                     ; 3527 1 208 180 70
-                INC     X1                     ; 3528 1 208 180 70
-ignition_timing_calc_task_load_er0_2:     MOV     er0, #000ffh           ; 3529 1 208 180 4498FF00
-                CAL     interp_bracket_delta_scale_2             ; 352D 1 208 180 32624F
-                CAL     ignition_timing_calc_task_sub_load_er2             ; 3530 1 208 180 32F050
-ignition_timing_calc_task_load_x2_2:     L       A, X2                  ; 3533 1 208 180 41
-                J       ignition_timing_calc_task_clear_ram22f_bit2_3             ; 3534 1 208 180 03C277
-ignition_timing_calc_task_load_ram29f_2:     LB      A, off(0029fh)         ; 3539 0 208 180 F49F
-                MOVB    r0, #0ffh              ; 353B 0 208 180 98FF
-                MOV     DP, #00316h            ; 353D 0 208 180 621603
-                JBS     off(0022fh).7, ignition_timing_calc_task_subb_acc_4 ; 3540 0 208 180 EF2F06
-                LB      A, off(002a1h)         ; 3543 0 208 180 F4A1
-                MOVB    r0, #0ffh              ; 3545 0 208 180 98FF
-                INC     DP                     ; 3547 0 208 180 72
-                INC     DP                     ; 3548 0 208 180 72
-ignition_timing_calc_task_subb_acc_4:     SUBB    A, 0b9h                ; 3549 0 208 180 C5B9A2
-                JLT     ignition_timing_calc_task_vcal_7             ; 354C 0 208 180 CA02
-                CLRB    r0                     ; 354E 0 208 180 2015
-ignition_timing_calc_task_vcal_7:     VCAL    7                      ; 3550 0 208 180 17
-                MULB                           ; 3551 0 208 180 A234
-                L       A, ACC                 ; 3553 1 208 180 E506
-                J       ignition_timing_calc_task_sll_acc             ; 3555 1 208 180 038D77
-ignition_timing_calc_task_load_imm_2:     L       A, #0ffffh             ; 3558 1 208 180 67FFFF
-ignition_timing_calc_task_load_r1:     MOVB    r1, ACCH               ; 355B 1 208 180 C50749
-                ADDB    r1, #040h              ; 355E 1 208 180 218040
-                J       ignition_timing_calc_task_if_ge_goto_779d             ; 3561 1 208 180 039977
-ignition_timing_calc_task_mul_acc_2:     MUL                            ; 3564 1 208 180 9035
-                J       ignition_timing_calc_task_sll_acc_2             ; 3566 1 208 180 03A377
-ignition_timing_calc_task_if_ram22f_bit2_set:     JBS     off(0022fh).2, ignition_timing_calc_task_store_ram29a_2 ; 3569 1 208 180 EA2F13
-                CMP     A, off(00298h)         ; 356C 1 208 180 C798
-                MB      off(0022fh).2, C       ; 356E 1 208 180 C42F3A
-                JLT     ignition_timing_calc_task_store_ram29a_2             ; 3571 1 208 180 CA0C
-                L       A, off(00298h)         ; 3573 1 208 180 E498
-                ADD     A, #00020h             ; 3575 1 208 180 862000
-                CAL     clamp_0_3ff_simple             ; 3578 1 208 180 32C777
-                SJ      ignition_timing_calc_task_goto_77b7             ; 357B 1 208 180 CB1E
                 DW  to_injtimer_store_0x166       ; 357D CB1C
-ignition_timing_calc_task_store_ram29a_2:     ST      A, off(0029ah)         ; 357F 1 208 180 D49A
-                SJ      ignition_timing_calc_task_goto_77b7             ; 3581 1 208 180 CB18
-ignition_timing_calc_task_load_ram298:     L       A, off(00298h)         ; 3583 1 208 180 E498
-                ADD     A, er1                 ; 3585 1 208 180 09
-                JLT     ignition_timing_calc_task_load_imm_3             ; 3586 1 208 180 CA08
-                J       ignition_timing_calc_task_cmp_acc_11             ; 3588 1 208 180 03AC77
-ignition_timing_calc_task_cmp_acc_5:     CMP     A, #003ffh             ; 358B 1 208 180 C6FF03
-                JLT     ignition_timing_calc_task_clear_ram22f_bit2             ; 358E 1 208 180 CA08
-ignition_timing_calc_task_load_imm_3:     L       A, #003ffh             ; 3590 1 208 180 67FF03
-                SJ      ignition_timing_calc_task_clear_ram22f_bit2             ; 3593 1 208 180 CB03
-ignition_timing_calc_task_clear_acc:     CLR     A                      ; 3595 1 208 180 F9
-                ST      A, off(0029ah)         ; 3596 1 208 180 D49A
-ignition_timing_calc_task_clear_ram22f_bit2:     RB      off(0022fh).2          ; 3598 1 208 180 C42F0A
-ignition_timing_calc_task_goto_77b7:     J       ignition_timing_calc_task_clear_ram22f_bit1             ; 359B 1 208 180 03B777
-ignition_timing_calc_task_cmp_acc_6:     CMP     A, #00023h             ; 35A0 1 208 180 C62300
-                JGE     ignition_timing_calc_task_load_er0_3             ; 35A3 1 208 180 CD01
-                CLR     A                      ; 35A5 1 208 180 F9
-ignition_timing_calc_task_load_er0_3:     MOV     er0, #00064h           ; 35A6 1 208 180 44986400
-                MUL                            ; 35AA 1 208 180 9035
-                MOV     er0, er1               ; 35AC 1 208 180 4548
-                MOV     er2, #003ffh           ; 35AE 1 208 180 4698FF03
-                DIV                            ; 35B2 1 208 180 9037
-                LB      A, ACC                 ; 35B4 0 208 180 F506
-                STB     A, 0dfh                ; 35B6 0 208 180 D5DF
-                RT                             ; 35B8 0 208 180 01
 ; [CG] periodic_decay_task_1  @0x35B9
 ; [CG] TRACED: dispatch target from background_task_scheduler, runs only when the
 ; [CG] divide-by-10 slow tick sets off(231h).1. Calls decrement_timer_array (0x5204) over two
@@ -5556,59 +4503,17 @@ learn_retry_store_cmp_acc:     CMPB    A, (00184h-00180h)[USP] ; 3747 0 208 180 
                 JLE     vcal3_task_a_return             ; 374A 0 208 180 CF03
                 INCB    (00184h-00180h)[USP]   ; 374C 0 208 180 C30416
 vcal3_task_a_return:     RT                             ; 374F 0 208 180 01
-regbank_selftest2_start:     L       A, #02ba9h             ; 3750 (skeleton: serial receive interrupt off; stock 2BABh)
-                MOV     X1, #002a0h            ; 3753 1 208 180 60A002
-                JBR     off(00217h).2, regbank_selftest2_ie_check ; 3756 1 208 180 DA1706
-                L       A, #0a9a1h             ; 3759 (skeleton: serial interrupts off; stock A9A3h)
-                MOV     X1, #000a0h            ; 375C 1 208 180 60A000
-regbank_selftest2_ie_check:     CMP     A, 0f2h                ; 375F 1 208 180 B5F2C2
-                JNE     selftest_fail_04f             ; 3762 1 208 180 CE0B
-                CMP     A, IE                  ; 3764 1 208 180 B51AC2
-                JNE     selftest_fail_04f             ; 3767 1 208 180 CE06
-                L       A, X1                  ; 3769 1 208 180 40
-                CMP     A, 0f4h                ; 376A 1 208 180 B5F4C2
-                JEQ     regbank_selftest2_range_check             ; 376D 1 208 180 C907
-selftest_fail_04f:     MOVB    0ebh, #04fh            ; 376F 1 208 180 C5EB984F
-                J       fault_retry_check             ; 3773 1 208 180 03D521
-regbank_selftest2_range_check:     L       A, off(002eeh)         ; 3776 1 208 180 E4EE
-                CMP     A, #003fah             ; 3778 1 208 180 C6FA03
-                JGT     regbank_selftest2_default             ; 377B 1 208 180 C832
-                MOV     X1, A                  ; 377D 1 208 180 50
-                MOV     DP, 00084h[X1]         ; 377E 1 208 180 B084007A
-                L       A, #05555h             ; 3782 1 208 180 675555
-                CAL     selftest_regbank_verify             ; 3785 1 208 180 329352
-                SLL     A                      ; 3788 1 208 180 53
-                CAL     selftest_regbank_verify             ; 3789 1 208 180 329352
-                L       A, X1                  ; 378C 1 208 180 40
-                SUB     A, #00002h             ; 378D 1 208 180 A60200
-                JGE     irqmode_dispatch             ; 3790 1 208 180 CD20
-                L       A, #05555h             ; 3792 1 208 180 675555
-                MOV     X1, A                  ; 3795 1 208 180 50
-                CMP     A, X1                  ; 3796 1 208 180 90C2
-                JNE     selftest_fail_042_alt             ; 3798 1 208 180 CE0B
-                MOV     X2, A                  ; 379A 1 208 180 51
-                CMP     A, X2                  ; 379B 1 208 180 91C2
-                JNE     selftest_fail_042_alt             ; 379D 1 208 180 CE06
-                SLL     A                      ; 379F 1 208 180 53
-                MOV     X1, A                  ; 37A0 1 208 180 50
-                CMP     A, X1                  ; 37A1 1 208 180 90C2
-                JEQ     regbank_selftest2_check3             ; 37A3 1 208 180 C905
-selftest_fail_042_alt:     MOVB    0ebh, #042h            ; 37A5 1 208 180 C5EB9842
-                BRK                            ; 37A9 1 208 180 FF
-regbank_selftest2_check3:     MOV     X2, A                  ; 37AA 1 208 180 51
-                CMP     A, X2                  ; 37AB 1 208 180 91C2
-                JNE     selftest_fail_042_alt             ; 37AD 1 208 180 CEF6
-regbank_selftest2_default:     L       A, #003fah             ; 37AF 1 208 180 67FA03
-irqmode_dispatch:     ST      A, off(002eeh)         ; 37B2 1 208 180 D4EE
+; (skeleton: no register-bank, interrupt-mask or RAM self-tests in the main loop)
+regbank_selftest2_start:
+irqmode_dispatch:
                 VCAL    4                      ; 37B4 1 208 180 14
                 AND     IE, #002a0h            ; 37B5 1 208 180 B51AD0A002
                 RB      PSWH.0                 ; 37BA 1 208 180 A208
-                JBS     off(00212h).3, irqmode_select_b ; 37BC 1 208 180 EB1247
                 JBS     off(00217h).2, irqmode_check1 ; 37BF 1 208 180 EA170B
                 RB      IRQH.7                 ; 37C2 1 208 180 C5190F
                 JEQ     irqmode_check1             ; 37C5 1 208 180 C906
                 SB      09eh.7                 ; 37C7 1 208 180 C59E1F
-dtc04_ckp_latch_2: RB      09ch.0                 ; 37CA 1 208 180 C59C18
+dtc04_ckp_latch_2:
 irqmode_check1:     SB      PSWH.0                 ; 37CD 1 208 180 A218
                 CMPB    (001a9h-00180h)[USP], #029h ; 37CF 1 208 180 C329C029
                 RB      PSWH.0                 ; 37D3 1 208 180 A208
@@ -5640,137 +4545,8 @@ irqmode_select_b:     JBS     off(00217h).2, irqmode_done ; 3806 1 208 180 EA171
 irqmode_done:     SB      PSWH.0                 ; 3821 1 208 180 A218
                 L       A, 0f2h                ; 3823 1 208 180 E5F2
                 ST      A, IE                  ; 3825 1 208 180 D51A
-                NOP                            ; 3827 1 208 180 00
-stack_sanity_check:     CMP     SSP, #0047eh           ; 3828 1 208 180 A0C07E04
-; [H] --- Post-init peripheral verification: re-reads SSP, LRB, every port direction/special-
-; [H] function register, all four timer control regs, PWM control regs, A/D select/scan, and the
-; [H] diagnostic-serial baud/control regs, comparing each against the exact values int_break's
-; [H] init sequence (0x235F periph_init_start onward) programmed them to. Any mismatch -> stamps
-; [H] trapReasonCode=0x50 (selftest_fail_050) and BRKs, forcing a full re-init retry. This is a
-; [H] "did my own initialization actually stick" check, not a fresh self-test of new hardware.
-                JNE     selftest_fail_050             ; 382C 1 208 180 CE64
-                MOV     DP, #00400h            ; 382E 1 208 180 620004
-                L       A, [DP]                ; 3831 1 208 180 E2
-                JNE     selftest_fail_050             ; 3832 1 208 180 CE5E
-                L       A, PSW                 ; 3834 1 208 180 E504
-                AND     A, #01107h             ; 3836 1 208 180 D60711
-                CMP     A, #01100h             ; 3839 1 208 180 C60011
-                JNE     selftest_fail_050             ; 383C 1 208 180 CE54
-                CMP     LRB, #00041h           ; 383E 1 208 180 A4C04100
-                JNE     selftest_fail_050             ; 3842 1 208 180 CE4E
-                CMPB    P0IO, #0ffh            ; 3844 1 208 180 C521C0FF
-                JNE     selftest_fail_050             ; 3848 1 208 180 CE48
-                CMPB    P1IO, #0ffh            ; 384A 1 208 180 C523C0FF
-                JNE     selftest_fail_050             ; 384E 1 208 180 CE42
-                CMPB    P2IO, #0ffh            ; 3850 1 208 180 C525C0FF
-                JNE     selftest_fail_050             ; 3854 1 208 180 CE3C
-                CMPB    P2SF, #007h            ; 3856 1 208 180 C526C007
-                JNE     selftest_fail_050             ; 385A 1 208 180 CE36
-                CMPB    P3IO, #0b1h            ; 385C 1 208 180 C529C0B1
-                JNE     selftest_fail_050             ; 3860 1 208 180 CE30
-                CMPB    P3SF, #0ffh            ; 3862 1 208 180 C52AC0FF
-                JNE     selftest_fail_050             ; 3866 1 208 180 CE2A
-                CMPB    P4IO, #00dh            ; 3868 1 208 180 C52DC00D
-                JNE     selftest_fail_050             ; 386C 1 208 180 CE24
-                CMPB    P4SF, #0f4h            ; 386E 1 208 180 C52EC0F4
-                JNE     selftest_fail_050             ; 3872 1 208 180 CE1E
-                LB      A, TCON0               ; 3874 0 208 180 F540
-                MOVB    r0, #0f3h              ; 3876 0 208 180 98F3
-                ANDB    A, r0                  ; 3878 0 208 180 58
-                CMPB    A, #093h               ; 3879 0 208 180 C693
-                JNE     selftest_fail_050             ; 387B 0 208 180 CE15
-                LB      A, TCON1               ; 387D 0 208 180 F541
-                ANDB    A, r0                  ; 387F 0 208 180 58
-                CMPB    A, #053h               ; 3880 0 208 180 C653
-                JNE     selftest_fail_050             ; 3882 0 208 180 CE0E
-                LB      A, TCON2               ; 3884 0 208 180 F542
-                ANDB    A, r0                  ; 3886 0 208 180 58
-                CMPB    A, #092h               ; 3887 0 208 180 C692
-                JNE     selftest_fail_050             ; 3889 0 208 180 CE07
-                LB      A, TCON3               ; 388B 0 208 180 F543
-                ANDB    A, r0                  ; 388D 0 208 180 58
-                CMPB    A, #093h               ; 388E 0 208 180 C693
-                JEQ     periph_init_verify_pwm_adc             ; 3890 0 208 180 C905
-selftest_fail_050:     MOVB    0ebh, #050h            ; 3892 0 208 180 C5EB9850
-                BRK                            ; 3896 0 208 180 FF
-periph_init_verify_pwm_adc:     LB      A, PWCON0              ; 3897 0 208 180 F578
-                ANDB    A, #07bh               ; 3899 0 208 180 D67B
-                CMPB    A, #03ah               ; 389B 0 208 180 C63A
-                JNE     selftest_fail_050             ; 389D 0 208 180 CEF3
-                LB      A, PWCON1              ; 389F 0 208 180 F57A
-                ANDB    A, #07bh               ; 38A1 0 208 180 D67B
-                CMPB    A, #07ah               ; 38A3 0 208 180 C67A
-                JNE     selftest_fail_050             ; 38A5 0 208 180 CEEB
-                LB      A, ADSEL               ; 38A7 0 208 180 F559
-                ANDB    A, #05fh               ; 38A9 0 208 180 D65F
-                JNE     selftest_fail_050             ; 38AB 0 208 180 CEE5
-                LB      A, ADSCAN              ; 38AD 0 208 180 F558
-                ANDB    A, #05fh               ; 38AF 0 208 180 D65F
-                CMPB    A, #010h               ; 38B1 0 208 180 C610
-                JNE     selftest_fail_050             ; 38B3 0 208 180 CEDD
-                J       periph_init_verify_pwm_adc_and_ie ; 38B5 (skeleton: no serial registers to verify)
-periph_init_verify_pwm_adc_and_ie:     AND     IE, #002a0h            ; 38D8 0 208 180 B51AD0A002
-                RB      PSWH.0                 ; 38DD 0 208 180 A208
-                MOV     er0, TM0               ; 38DF 0 208 180 B53048
-                MOV     er1, TM1               ; 38E2 0 208 180 B53449
-                MOV     er2, TM2               ; 38E5 0 208 180 B5384A
-                MOV     er3, TM3               ; 38E8 0 208 180 B53C4B
-                SB      PSWH.0                 ; 38EB 0 208 180 A218
-                NOP                            ; 38ED 0 208 180 00
-                RB      PSWH.0                 ; 38EE 0 208 180 A208
-                MOV     X1, TM0                ; 38F0 0 208 180 B53078
-                MOV     X2, TM1                ; 38F3 0 208 180 B53479
-                MOV     DP, TM2                ; 38F6 0 208 180 B5387A
-                SB      PSWH.0                 ; 38F9 0 208 180 A218
-                L       A, 0f2h                ; 38FB 1 208 180 E5F2
-                ST      A, IE                  ; 38FD 1 208 180 D51A
-                L       A, X1                  ; 38FF 1 208 180 40
-; [H] --- Oscillator/timer cross-check: snapshots TM0/TM1/TM2 into X1/X2/DP, re-enables
-; [H] interrupts briefly (IE/PSWH toggling), re-snapshots into er0/er1/er2, then verifies the
-; [H] deltas fall within expected ranges (0x22, 0x80, 0x22, a ratio check against er1>>2) --
-; [H] confirms the timers are actually counting at the rate the code expects (i.e. the clock
-; [H] source/oscillator is running correctly) before trusting any timing-dependent logic
-; [H] (ignition/injection scheduling) downstream. Out-of-range -> selftest_fail_04b.
-                SUB     A, er0                 ; 3900 1 208 180 28
-                ST      A, er0                 ; 3901 1 208 180 88
-                JEQ     selftest_fail_04b             ; 3902 1 208 180 C93D
-                CMP     A, #00021h             ; 3904 1 208 180 C62100
-                JGE     selftest_fail_04b             ; 3907 1 208 180 CD38
-                L       A, X2                  ; 3909 1 208 180 41
-                SUB     A, er1                 ; 390A 1 208 180 29
-                ST      A, er1                 ; 390B 1 208 180 89
-                JEQ     selftest_fail_04b             ; 390C 1 208 180 C933
-                CMP     A, #0007fh             ; 390E 1 208 180 C67F00
-                JGE     selftest_fail_04b             ; 3911 1 208 180 CD2E
-                L       A, DP                  ; 3913 1 208 180 42
-                SUB     A, er2                 ; 3914 1 208 180 2A
-                MOV     X2, A                  ; 3915 1 208 180 51
-                JEQ     selftest_fail_04b             ; 3916 1 208 180 C929
-                CMP     A, #00021h             ; 3918 1 208 180 C62100
-                JGE     selftest_fail_04b             ; 391B 1 208 180 CD24
-                L       A, er3                 ; 391D 1 208 180 37
-                SUB     A, er2                 ; 391E 1 208 180 2A
-                MB      C, ACCH.7              ; 391F 1 208 180 C5072F
-                JGE     clock_selftest_check2             ; 3922 1 208 180 CD01
-                VCAL    7                      ; 3924 1 208 180 17
-clock_selftest_check2:     CMP     A, #00002h             ; 3925 1 208 180 C60200
-                JGE     selftest_fail_04b             ; 3928 1 208 180 CD17
-                L       A, er1                 ; 392A 1 208 180 35
-                SRL     A                      ; 392B 1 208 180 63
-                SRL     A                      ; 392C 1 208 180 63
-                SUB     A, X2                  ; 392D 1 208 180 91A2
-                JGE     clock_selftest_check3             ; 392F 1 208 180 CD01
-                VCAL    7                      ; 3931 1 208 180 17
-clock_selftest_check3:     CMP     A, #00002h             ; 3932 1 208 180 C60200
-                JGE     selftest_fail_04b             ; 3935 1 208 180 CD0A
-                L       A, X2                  ; 3937 1 208 180 41
-                SUB     A, er0                 ; 3938 1 208 180 28
-                JGE     clock_selftest_check4             ; 3939 1 208 180 CD01
-                VCAL    7                      ; 393B 1 208 180 17
-clock_selftest_check4:     CMP     A, #00002h             ; 393C 1 208 180 C60200
-                JLT     clock_selftest_passed             ; 393F 1 208 180 CA05
-selftest_fail_04b:     MOVB    0ebh, #04bh            ; 3941 1 208 180 C5EB984B
-                BRK                            ; 3945 1 208 180 FF
+; (skeleton: no stack, peripheral-register or clock self-tests)
+stack_sanity_check:
 clock_selftest_passed:     VCAL    4                      ; 3946 1 208 180 14
                 CAL     boot_completion_helper             ; 3947 1 208 180 326055
                 MOVB    r0, #001h              ; 394A 1 208 180 9801
@@ -5834,7 +4610,6 @@ coldstart_full_reset:     SB      off(00217h).4          ; 3974 1 208 180 C4171C
                 STB     A, 0035dh[X1]          ; 39D9 0 208 180 D05D03
                 ORB     0a0h, #01ch            ; 39DC 0 208 180 C5A0E01C
                 J       coldstart_full_reset_andb_p1             ; 39E0 0 208 180 03925F
-coldstart_full_reset_goto_7831:     J       coldstart_full_reset_clear_ram221_bit7             ; 39E5 0 208 180 033178
 coldstart_full_reset_orb_tcon3:     ORB     TCON3, #00ch           ; 39E8 0 208 180 C543E00C
                 CLR     A                      ; 39EC 1 208 180 F9
                 ST      A, (00120h-00180h)[USP] ; 39ED 1 208 180 D3A0
@@ -5861,16 +4636,10 @@ warmcold_deg_flag:     MB      off(00217h).5, C       ; 3A1C 0 208 180 C4173D
                 JGE     warmcold_state_stamp             ; 3A1F 0 208 180 CD21
                 JBR     off(00211h).0, warmcold_msec_reset ; 3A21 0 208 180 D81103
                 SB      off(00230h).4          ; 3A24 0 208 180 C4301C
-warmcold_msec_reset:     ANDB    098h, #0e2h            ; 3A27 0 208 180 C598D0E2
-                ANDB    099h, #0cdh            ; 3A2B 0 208 180 C599D0CD
-                ANDB    09ah, #008h            ; 3A2F 0 208 180 C59AD008
-                ANDB    09bh, #007h            ; 3A33 0 208 180 C59BD007
+warmcold_msec_reset:
                 CLRB    A                      ; 3A37 0 208 180 FA
                 STB     A, 0e9h                ; 3A38 0 208 180 D5E9
                 STB     A, 0e8h                ; 3A3A 0 208 180 D5E8
-                NOP                            ; 3A3C 0 208 180 00
-                NOP                            ; 3A3D 0 208 180 00
-                NOP                            ; 3A3E 0 208 180 00
                 JBR     off(00217h).4, tps_learn_vcal3_call ; 3A3F 0 208 180 DC1704
 warmcold_state_stamp:     MOVB    off(002bah), #063h     ; 3A42 0 208 180 C4BA9863
 tps_learn_vcal3_call:     VCAL    4                      ; 3A46 0 208 180 14
@@ -5989,37 +4758,18 @@ sensor_check_vcal3:     VCAL    4                      ; 3B3A 1 208 180 14
                 MOV     DP, #003c5h            ; 3B3B 1 208 180 62C503
                 LB      A, [DP]                ; 3B3E 0 208 180 F2
                 STB     A, 0c3h                ; 3B3F 0 208 180 D5C3
-                JBS     off(00212h).2, sensor_check_clear ; 3B41 0 208 180 EA1223
-                JBS     off(00212h).4, sensor_check_clear ; 3B44 0 208 180 EC1220
-                J       sensor_check_vcal3_if_ram217_bit5_set             ; 3B47 0 208 180 03FD76
-sensor_check_vcal3_cmp_ram236:     CMPB    off(00236h), #002h     ; 3B4A 0 208 180 C436C002
-                JGE     sensor_check_vcal3_if_ram230_bit4_clr             ; 3B4E 0 208 180 CD04
-                MOVB    off(002beh), #064h     ; 3B50 0 208 180 C4BE9864
-sensor_check_vcal3_if_ram230_bit4_clr:     JBR     off(00230h).4, sensor_check_clear ; 3B54 0 208 180 DC3010
-                LB      A, off(00234h)         ; 3B57 0 208 180 F434
-                SUBB    A, ADCR6H              ; 3B59 0 208 180 C56DA2
-                JGE     sensor_check_result             ; 3B5C 0 208 180 CD01
-                VCAL    7                      ; 3B5E 0 208 180 17
-sensor_check_result:     CMPB    A, #002h               ; 3B5F 0 208 180 C602
-                JGE     sensor_check_set             ; 3B61 0 208 180 CD07
-                LB      A, off(002beh)         ; 3B63 0 208 180 F4BE
-                JEQ     dtc05_map_range_latch             ; 3B65 0 208 180 C906
-sensor_check_clear:     RC                             ; 3B67 0 208 180 95
-                SJ      dtc05_map_range_latch             ; 3B68 0 208 180 CB03
-sensor_check_set:     SB      off(00230h).5          ; 3B6A 0 208 180 C4301D
-dtc05_map_range_latch:     RB      098h.3                 ; 3B6D 0 208 180 C5983B
+; (skeleton: no MAP sensor plausibility check)
+dtc05_map_range_latch:
                 MOV     DP, #003c8h            ; 3B70 0 208 180 62C803
                 LB      A, [DP]                ; 3B73 0 208 180 F2
                 STB     A, r1                  ; 3B74 0 208 180 89
                 RC                             ; 3B75 0 208 180 95
-                JBS     off(00212h).5, dtc06_ect_latch ; 3B76 0 208 180 ED1208
                 LB      A, #0fch               ; 3B79 0 208 180 77FC
                 CMPB    A, r1                  ; 3B7B 0 208 180 49
                 JLT     dtc06_ect_latch             ; 3B7C 0 208 180 CA03
                 LB      A, r1                  ; 3B7E 0 208 180 79
                 CMPB    A, #004h               ; 3B7F 0 208 180 C604
-dtc06_ect_latch:     RB      098h.1                 ; 3B81 0 208 180 C59839
-                JBS     off(00212h).5, ect_simulate_ramp ; 3B84 0 208 180 ED121C
+dtc06_ect_latch:
                 JLT     ect_simulate_ramp_load_ram0c1             ; 3B87 0 208 180 CA2F
                 JBS     off(00210h).7, ect_fault_range_check_load_dp ; 3B89 0 208 180 EF1032
                 SUBB    A, off(002a5h)         ; 3B8C 0 208 180 A7A5
@@ -6034,16 +4784,6 @@ ect_fault_delta_check:     CMPB    A, #002h               ; 3B91 0 208 180 C602
                 CMPB    A, off(002a6h)         ; 3B9D 0 208 180 C7A6
                 JGT     sensor_bank_ect_check             ; 3B9F 0 208 180 C830
                 SJ      ect_fault_range_check_load_dp             ; 3BA1 0 208 180 CB1B
-ect_simulate_ramp:     JBR     off(00217h).5, ect_simulate_ramp_load_ram0c1 ; 3BA3 0 208 180 DD1712
-                CLR     A                      ; 3BA6 1 208 180 F9
-                LB      A, off(002bah)         ; 3BA7 0 208 180 F4BA
-                MOVB    r0, #014h              ; 3BA9 0 208 180 9814
-                DIVB                           ; 3BAB 0 208 180 A236
-                MOV     DP, #ect_simulate_ramp_tbl          ; 3BAD 0 208 180 621F6B
-                ADD     DP, A                  ; 3BB0 0 208 180 9281
-                LCB     A, [DP]                ; 3BB2 0 208 180 92AA
-                STB     A, 0c1h                ; 3BB4 0 208 180 D5C1
-                SJ      sensor_bank_ect_check             ; 3BB6 0 208 180 CB19
 ect_simulate_ramp_load_ram0c1:     MOVB    0c1h, #03bh            ; 3BB8 0 208 180 C5C1983B
                 SJ      sensor_bank_ect_check             ; 3BBC 0 208 180 CB13
 ect_fault_range_check_load_dp:     MOV     DP, #000c1h            ; 3BBE 0 208 180 62C100
@@ -6054,17 +4794,9 @@ ect_fault_range_check_load_dp:     MOV     DP, #000c1h            ; 3BBE 0 208 1
 ect_step_call:     CAL     ect_step_helper             ; 3BCB 0 208 180 322F52
 ect_fault_normal_store:     MOVB    off(002a5h), r1        ; 3BCE 0 208 180 217CA5
 sensor_bank_ect_check:     MOVB    off(002b9h), #005h     ; 3BD1 0 208 180 C4B99805
-sensor_bank_ect_check_clear_carry:     RC                             ; 3BD5 0 208 180 95
-                JBS     off(00212h).7, dtc08_tdc_latch ; 3BD6 0 208 180 EF120E
-                JBR     off(00217h).4, dtc08_tdc_latch ; 3BD9 0 208 180 DC170B
-                MB      C, off(00211h).0       ; 3BDC 0 208 180 C41128
-                JBR     off(00216h).3, dtc08_tdc_latch ; 3BDF 0 208 180 DB1605
-                JGE     dtc08_tdc_latch             ; 3BE2 0 208 180 CD03
-                MB      C, off(00211h).5       ; 3BE4 0 208 180 C4112D
-dtc08_tdc_latch:     RB      098h.5                 ; 3BE7 0 208 180 C5983D
-                JBR     off(00213h).1, iat_range_check ; 3BEA 0 208 180 D91306
-                MOVB    0c0h, #057h            ; 3BED 0 208 180 C5C09857
-                SJ      iat_check_return             ; 3BF1 0 208 180 CB14
+; (skeleton: no TDC/CKP code check)
+sensor_bank_ect_check_clear_carry:
+dtc08_tdc_latch:
 iat_range_check:     LB      A, #0fch               ; 3BF3 0 208 180 77FC
                 MOV     DP, #003c0h            ; 3BF5 0 208 180 62C003
                 CMPB    A, [DP]                ; 3BF8 0 208 180 C2C2
@@ -6075,12 +4807,11 @@ iat_range_check:     LB      A, #0fch               ; 3BF3 0 208 180 77FC
                 MOV     DP, #000c0h            ; 3C01 0 208 180 62C000
                 CAL     ect_smooth_helper             ; 3C04 0 208 180 324852
 iat_check_return:     RC                             ; 3C07 0 208 180 95
-dtc10_iat_latch:     RB      098h.6                 ; 3C08 0 208 180 C5983E
+dtc10_iat_latch:
                 LB      A, #080h               ; 3C0B 0 208 180 7780
                 RC                             ; 3C0D 0 208 180 95
                 JBS     off(00217h).6, sensor_bank_store_e3 ; 3C0E 0 208 180 EE1714
                 JBS     off(00219h).1, sensor_bank_store_e3 ; 3C11 0 208 180 E91911
-                JBS     off(00213h).2, sensor_bank_store_e3 ; 3C14 0 208 180 EA130E
                 MOV     DP, #003c6h            ; 3C17 0 208 180 62C603
                 LB      A, #0ffh               ; 3C1A 0 208 180 77FF
                 CMPB    A, [DP]                ; 3C1C 0 208 180 C2C2
@@ -6089,9 +4820,9 @@ dtc10_iat_latch:     RB      098h.6                 ; 3C08 0 208 180 C5983E
                 CMPB    A, #000h               ; 3C21 0 208 180 C600
                 JLT     dtc_bit08_latch             ; 3C23 0 208 180 CA02
 sensor_bank_store_e3:     STB     A, 0c7h                ; 3C25 0 208 180 D5C7
-dtc_bit08_latch:     RB      098h.7                 ; 3C27 0 208 180 C5983F
+dtc_bit08_latch:
                 JBR     off(00227h).4, sensor_bank_stamp_bc ; 3C2A 0 208 180 DC2703
-                JBR     off(00213h).4, sensor_bank_bc_alt ; 3C2D 0 208 180 DC1306
+                SJ       sensor_bank_bc_alt ; (skeleton: fault flags are always clear)
 sensor_bank_stamp_bc:     MOVB    0a4h, #0f9h            ; 3C30 0 208 180 C5A498F9
                 SJ      dcode14_return             ; 3C34 0 208 180 CB18
 sensor_bank_bc_alt:     CLR     A                      ; 3C36 1 208 180 F9
@@ -6106,45 +4837,10 @@ sensor_bank_bc_alt:     CLR     A                      ; 3C36 1 208 180 F9
                 MOV     DP, #000a4h            ; 3C48 0 208 180 62A400
                 CAL     ect_smooth_helper             ; 3C4B 0 208 180 324852
 dcode14_return:     RC                             ; 3C4E 0 208 180 95
-dcode14_check:     J       dtc13_baro_latch             ; 3C4F 0 208 180 03AE5F
-dcode14_check_if_ram217_bit5_set:     JBS     off(00217h).5, dcode14_clear ; 3C52 0 208 180 ED171B
-                JBS     off(00213h).5, dcode14_clear ; 3C55 0 208 180 ED1318
-                LB      A, 0c3h                ; 3C58 0 208 180 F5C3
-                MOV     X1, #tbl_dcode14_lo          ; 3C5A 0 208 180 60246B
-                VCAL    3                      ; 3C5D 0 208 180 13
-                CMPB    A, off(0025ah)         ; 3C5E 0 208 180 C75A
-                JLT     dcode14_clear             ; 3C60 0 208 180 CA0E
-                LB      A, 0c3h                ; 3C62 0 208 180 F5C3
-                MOV     X1, #tbl_dcode14_hi          ; 3C64 0 208 180 602A6B
-                VCAL    3                      ; 3C67 0 208 180 13
-                CMPB    A, off(0025ah)         ; 3C68 0 208 180 C75A
-                JGE     dcode14_clear             ; 3C6A 0 208 180 CD04
-                LB      A, off(002bdh)         ; 3C6C 0 208 180 F4BD
-                JEQ     dtc14_iacv_latch             ; 3C6E 0 208 180 C901
-dcode14_clear:     RC                             ; 3C70 0 208 180 95
-dtc14_iacv_latch:     RB      099h.3                 ; 3C71 0 208 180 C5993B
-                LB      A, #044h               ; 3C74 0 208 180 7744
-                CMPB    A, 0c3h                ; 3C76 0 208 180 C5C3C2
-                JGE     dtc17_vss_latch             ; 3C79 0 208 180 CD10
-                CMPB    off(00236h), #0b0h     ; 3C7B 0 208 180 C436C0B0
-                JGE     dtc17_vss_latch             ; 3C7F 0 208 180 CD0A
-                RC                             ; 3C81 0 208 180 95
-                JBS     off(00214h).0, dtc17_vss_latch ; 3C82 0 208 180 E81406
-                JBR     off(00231h).3, dtc17_vss_latch ; 3C85 0 208 180 DB3103
-                MB      C, off(0021ch).4       ; 3C88 0 208 180 C41C2C
-dtc17_vss_latch:     RB      099h.4                 ; 3C8B 0 208 180 C5993C
-                RC                             ; 3C8E 0 208 180 95
-                JBS     off(00227h).2, dtc_bit0F_latch ; 3C8F 0 208 180 EA2713
-                JBR     off(00216h).3, dtc_bit0F_latch ; 3C92 0 208 180 DB1610
-                JBS     off(00214h).2, dtc_bit0F_latch ; 3C95 0 208 180 EA140D
-                MOV     DP, #00f00h            ; 3C98 0 208 180 62000F
-                LB      A, [DP]                ; 3C9B 0 208 180 F2
-                MB      C, ACC.4               ; 3C9C 0 208 180 C5062C
-                JBS     off(0022fh).0, dtc_bit0F_latch ; 3C9F 0 208 180 E82F03
-                XORB    PSWH, #080h            ; 3CA2 0 208 180 A2F080
-dtc_bit0F_latch:     RB      099h.6                 ; 3CA5 0 208 180 C5993E
-                VCAL    4                      ; 3CA8 0 208 180 14
-                J       skel_block5_end ; (skeleton: diagnostics block removed)
+dcode14_check:     J       skel_block5_end ; (skeleton: no IACV / VSS / port-A diagnostic checks)
+dtc14_iacv_latch:
+dtc17_vss_latch:
+dtc_bit0F_latch:
 skel_block5_end: VCAL    4                      ; 3DEB 0 208 180 14
                 LB      A, 0c1h                ; 3DEC 0 208 180 F5C1
                 MOV     X1, #tbl_ect_fuelcorrect          ; 3DEE 0 208 180 60636A
@@ -6179,7 +4875,6 @@ threshold_bank_220_6:     CMPB    A, off(00235h)         ; 3E28 0 208 180 C735
                 CLRB    A                      ; 3E2D 0 208 180 FA
                 JGE     threshold_bank_222_6             ; 3E2E 0 208 180 CD0C
                 JBR     off(00221h).0, threshold_bank_222_6 ; 3E30 0 208 180 D82109
-                JBS     off(00213h).1, threshold_bank_222_6 ; 3E33 0 208 180 E91306
                 LB      A, 0c0h                ; 3E36 0 208 180 F5C0
                 MOV     X1, #threshold_bank_220_6_tbl          ; 3E38 0 208 180 606F6A
                 VCAL    0                      ; 3E3B 0 208 180 10
@@ -6232,7 +4927,6 @@ div_scale_store:     STB     A, off(00242h)         ; 3E99 0 208 180 D442
                 J       div_scale_store_load_x1             ; 3E9D 0 208 180 03245F
 div_scale_store_clear_x1:     CLR     X1                     ; 3EA0 0 208 180 9015
                 JBS     off(00217h).5, gear_detect_store ; 3EA2 0 208 180 ED172F
-                JBS     off(00214h).0, gear_detect_store ; 3EA5 0 208 180 E8142C
                 JBR     off(00227h).3, div_scale_store_load_r1 ; 3EA8 0 208 180 DB270B
                 JBR     off(0022fh).3, div_scale_store_load_ram2d2 ; 3EAB 0 208 180 DB2F04
                 MOVB    off(002d2h), #005h     ; 3EAE 0 208 180 C4D29805
@@ -6311,16 +5005,9 @@ revlimit_table_select:     LC      A, 00002h[X1]          ; 3F45 1 208 180 90A90
 revlimit_table_select_load_stk:     LB      A, (001a1h-00180h)[USP] ; 3F51 0 208 180 F321
                 JNE     revlimit_table_select_load_ram0c1             ; 3F53 0 208 180 CE55
                 MOVB    (001a1h-00180h)[USP], #014h ; 3F55 0 208 180 C3219814
-                JBS     off(00212h).5, revlimit_table_select_if_ram223_bit2_clr ; 3F59 0 208 180 ED1206
                 CMPB    0c1h, #044h            ; 3F5C 0 208 180 C5C1C044
                 JGE     revlimit_table_select_load_stk_2             ; 3F60 0 208 180 CD1C
 revlimit_table_select_if_ram223_bit2_clr:     JBR     off(00223h).2, revlimit_table_select_load_stk_2 ; 3F62 0 208 180 DA2319
-                NOP                            ; 3F65 0 208 180 00
-                NOP                            ; 3F66 0 208 180 00
-                NOP                            ; 3F67 0 208 180 00
-                NOP                            ; 3F68 0 208 180 00
-                NOP                            ; 3F69 0 208 180 00
-                NOP                            ; 3F6A 0 208 180 00
                 LB      A, (00189h-00180h)[USP] ; 3F6B 0 208 180 F309
                 JNE     callhelper_sub37_clamp_to_er0             ; 3F6D 0 208 180 CE13
                 L       A, (00182h-00180h)[USP] ; 3F6F 1 208 180 E302
@@ -6565,114 +5252,35 @@ knock_table2d_lookup:     MOV     X2, X1                 ; 412C 1 208 180 9079
                 VCAL    1                      ; 4151 0 208 180 11
                 STB     A, (0013ch-00180h)[USP] ; 4152 0 208 180 D3BC
                 VCAL    4                      ; 4154 0 208 180 14
-                MOV     DP, #003beh            ; 4155 0 208 180 62BE03
-                LB      A, [DP]                ; 4158 0 208 180 F2
-                STB     A, 0c2h                ; 4159 0 208 180 D5C2
-                JBR     off(00219h).1, injidx_gate2 ; 415B 0 208 180 D91916
-                MOV     DP, #0039bh            ; 415E 0 208 180 629B03
-                LB      A, [DP]                ; 4161 0 208 180 F2
-                CMPB    A, #031h               ; 4162 0 208 180 C631
-                JNE     injidx_gate1             ; 4164 0 208 180 CE0B
-                SB      off(00223h).7          ; 4166 0 208 180 C4231F
-                SB      off(00219h).0          ; 4169 0 208 180 C41918
-                RB      off(00223h).3          ; 416C 0 208 180 C4230B
-                SJ      injidx_flag_set             ; 416F 0 208 180 CB0C
-injidx_gate1:     JBR     off(00223h).7, injidx_gate3 ; 4171 0 208 180 DF230F
-injidx_gate2:     RB      off(00223h).7          ; 4174 0 208 180 C4230F
-injidx_flag_clear:     RB      off(00219h).0          ; 4177 0 208 180 C41908
-                SB      off(00223h).3          ; 417A 0 208 180 C4231B
-injidx_flag_set:     SB      off(00223h).0          ; 417D 0 208 180 C42318
-                J       vss_ect_stamp             ; 4180 0 208 180 030A42
-injidx_gate3:     JBS     off(00219h).4, injidx_flag_clear ; 4183 0 208 180 EC19F1
-                JBS     off(0021dh).4, injidx_flag_clear ; 4186 0 208 180 EC1DEE
-                LB      A, off(002b6h)         ; 4189 0 208 180 F4B6
-                JEQ     injidx_gate4             ; 418B 0 208 180 C90F
-                RB      off(00219h).0          ; 418D 0 208 180 C41908
-                RB      off(00223h).3          ; 4190 0 208 180 C4230B
-injidx_flag_set2:     RB      off(00223h).0          ; 4193 0 208 180 C42308
-                MOVB    off(002b7h), #064h     ; 4196 0 208 180 C4B79864
-                SJ      vss_ect_stamp             ; 419A 0 208 180 CB6E
-injidx_gate4:     JBS     off(00217h).5, injidx_flag_set2 ; 419C 0 208 180 ED17F4
-                JBS     off(00219h).0, vss_ect_gate ; 419F 0 208 180 E81947
-                JBR     off(00223h).3, injidx_gate6 ; 41A2 0 208 180 DB2312
-                JBS     off(00216h).6, injidx_gate5 ; 41A5 0 208 180 EE1603
-                JBS     off(00218h).0, vss_ect_gate ; 41A8 0 208 180 E8183E
-injidx_gate5:     JBR     off(0021dh).2, vss_ect_gate ; 41AB 0 208 180 DA1D3B
-                RB      off(00219h).0          ; 41AE 0 208 180 C41908
-                RB      off(00223h).3          ; 41B1 0 208 180 C4230B
-                SB      off(00223h).0          ; 41B4 0 208 180 C42318
-injidx_gate6:     JBR     off(00216h).6, closeloopnarrow_check ; 41B7 0 208 180 DE1620
-                JBS     off(00219h).0, closeloopnarrow_check ; 41BA 0 208 180 E8191D
-                JBS     off(00223h).3, closeloopnarrow_check ; 41BD 0 208 180 EB231A
-                JBS     off(00223h).0, closeloopnarrow_check ; 41C0 0 208 180 E82317
-                JBR     off(00219h).3, injidx_stamp_c2 ; 41C3 0 208 180 DB1906
-                JBR     off(00219h).2, injidx_stamp_c2 ; 41C6 0 208 180 DA1903
-                JBS     off(0021dh).2, injidx_c2_check ; 41C9 0 208 180 EA1D06
-injidx_stamp_c2:     MOVB    off(002b7h), #064h     ; 41CC 0 208 180 C4B79864
-                SJ      closeloopnarrow_check             ; 41D0 0 208 180 CB08
-injidx_c2_check:     LB      A, off(002b7h)         ; 41D2 0 208 180 F4B7
-                JNE     closeloopnarrow_check             ; 41D4 0 208 180 CE04
-                LB      A, #02eh               ; 41D6 0 208 180 772E
-                SJ      closeloopnarrow_result             ; 41D8 0 208 180 CB07
-closeloopnarrow_check:     LB      A, #01ah               ; 41DA 0 208 180 771A
-                JBS     off(00216h).0, closeloopnarrow_result ; 41DC 0 208 180 E81602
-                LB      A, #01ah               ; 41DF 0 208 180 771A
-closeloopnarrow_result:     CMPB    A, 0c2h                ; 41E1 0 208 180 C5C2C2
-                JLT     vss_ect_gate             ; 41E4 0 208 180 CA03
-                SB      off(00219h).0          ; 41E6 0 208 180 C41918
-vss_ect_gate:     CMPB    0c1h, #028h            ; 41E9 0 208 180 C5C1C028
-                JGE     vss_ect_stamp             ; 41ED 0 208 180 CD1B
-                CMPB    0b4h, #005h            ; 41EF 0 208 180 C5B4C005
-                JGE     vss_ect_stamp             ; 41F3 0 208 180 CD15
-                CMPB    off(00236h), #080h     ; 41F5 0 208 180 C436C080
-                JLT     vss_ect_stamp             ; 41F9 0 208 180 CA0F
-                JBR     off(0021dh).2, vss_ect_stamp ; 41FB 0 208 180 DA1D0C
-                LB      A, off(002aah)         ; 41FE 0 208 180 F4AA
-                JNE     idle_state_defaults             ; 4200 0 208 180 CE0C
-                SB      off(00219h).0          ; 4202 0 208 180 C41918
-                RB      off(00223h).3          ; 4205 0 208 180 C4230B
-                SJ      idle_state_defaults             ; 4208 0 208 180 CB04
-vss_ect_stamp:     MOVB    off(002aah), #004h     ; 420A 0 208 180 C4AA9804
-idle_state_defaults:     MOVB    r0, #005h              ; 420E 0 208 180 9805
-                MOVB    r1, #032h              ; 4210 0 208 180 9932
-                MOVB    r2, #032h              ; 4212 0 208 180 9A32
-                MOVB    r3, #01bh              ; 4214 0 208 180 9B1B
-                JBS     off(00216h).0, idle_state_defaults_if_ram21d_bit1_clr ; 4216 0 208 180 E81602
-                MOVB    r3, #01bh              ; 4219 0 208 180 9B1B
-idle_state_defaults_if_ram21d_bit1_clr:     JBR     off(0021dh).1, idle_stage_alt_start ; 421B 0 208 180 D91D25
-                JBR     off(00218h).0, idle_stage_alt_start ; 421E 0 208 180 D81822
-                MOVB    off(002b4h), r1        ; 4221 0 208 180 217CB4
-                MOVB    off(002b5h), r2        ; 4224 0 208 180 227CB5
-                J       idle_state_defaults_if_ram219_bit0_clr             ; 4227 0 208 180 033D78
-idle_state_defaults_load_stk:     L       A, (00148h-00180h)[USP] ; 422A 1 208 180 E3C8
-                CMP     A, #0bc15h             ; 422C 1 208 180 C615BC
-                JGE     idle_stage_c0_load_clear_ram219_bit0             ; 422F 1 208 180 CD3B
-                CMP     A, #05e20h                                    ; 4231 1 208 180 C6205E
-                JLE     idle_stage_c0_load_clear_ram219_bit0             ; 4234 1 208 180 CF36
-                LB      A, r3                  ; 4236 0 208 180 7B
-                CMPB    A, 0c2h                ; 4237 0 208 180 C5C2C2
-                JLT     idle_stage_b7_load             ; 423A 0 208 180 CA03
-idle_stage_b7_store:     MOVB    off(002abh), r0        ; 423C 0 208 180 207CAB
-idle_stage_b7_load:     LB      A, off(002abh)         ; 423F 0 208 180 F4AB
-                SJ      idle_stage_c0_load_if_ne_goto_gio_fuelpump_dispatch             ; 4241 0 208 180 CB27
-idle_stage_alt_start:     MOVB    off(002abh), r0        ; 4243 0 208 180 207CAB
-                JBR     off(0021ch).2, idle_stage_c0_start ; 4246 0 208 180 DA1C13
-                MOVB    off(002b5h), r2        ; 4249 0 208 180 227CB5
-                JBR     off(00219h).0, idle_stage_bf_store ; 424C 0 208 180 D81906
-                LB      A, r3                  ; 424F 0 208 180 7B
-                CMPB    A, 0c2h                ; 4250 0 208 180 C5C2C2
-                JLT     idle_stage_bf_load             ; 4253 0 208 180 CA03
-idle_stage_bf_store:     MOVB    off(002b4h), r1        ; 4255 0 208 180 217CB4
-idle_stage_bf_load:     LB      A, off(002b4h)         ; 4258 0 208 180 F4B4
-                SJ      idle_stage_c0_load_if_ne_goto_gio_fuelpump_dispatch             ; 425A 0 208 180 CB0E
-idle_stage_c0_start:     MOVB    off(002b4h), r1        ; 425C 0 208 180 217CB4
-                JBR     off(00219h).0, idle_stage_c0_store ; 425F 0 208 180 D81903
-                JBR     off(0021ch).6, idle_stage_c0_load ; 4262 0 208 180 DE1C03
-idle_stage_c0_store:     MOVB    off(002b5h), r2        ; 4265 0 208 180 227CB5
-idle_stage_c0_load:     LB      A, off(002b5h)         ; 4268 0 208 180 F4B5
-idle_stage_c0_load_if_ne_goto_gio_fuelpump_dispatch:     JNE     gio_fuelpump_dispatch             ; 426A 0 208 180 CE06
-idle_stage_c0_load_clear_ram219_bit0:     RB      off(00219h).0          ; 426C 0 208 180 C41908
-                SB      off(00223h).3          ; 426F 0 208 180 C4231B
+injidx_gate1:
+injidx_gate2:
+injidx_flag_clear:
+injidx_flag_set:
+injidx_gate3:
+injidx_flag_set2:
+injidx_gate4:
+injidx_gate5:
+injidx_gate6:
+injidx_stamp_c2:
+injidx_c2_check:
+closeloopnarrow_check:
+closeloopnarrow_result:
+vss_ect_gate:
+vss_ect_stamp:
+idle_state_defaults:
+idle_state_defaults_if_ram21d_bit1_clr:
+idle_state_defaults_load_stk:
+idle_stage_b7_store:
+idle_stage_b7_load:
+idle_stage_alt_start:
+idle_stage_bf_store:
+idle_stage_bf_load:
+idle_stage_c0_start:
+idle_stage_c0_store:
+idle_stage_c0_load:
+idle_stage_c0_load_if_ne_goto_gio_fuelpump_dispatch:
+idle_stage_c0_load_clear_ram219_bit0:
+                                                ; 4155 (skeleton: no O2 control - closed loop never enables (219h.0 stays 0), no O2 switching timers)
 gio_fuelpump_dispatch:     VCAL    4                      ; 4272 0 208 180 14
                 RC                             ; 4273 0 208 180 95
                 LB      A, off(002bch)         ; 4274 0 208 180 F4BC
@@ -6702,72 +5310,23 @@ fuelpump_state_check:     RC                             ; 42A8 0 208 180 95
 fuelpump_state_active:     SC                             ; 42AD 0 208 180 85
 ; (skeleton: the stock key-on bulb check wrote P1.4 here; the lamp output is left to feature modules)
 fuelpump_state_active_store_carry_p1_bit4:
-fuelpump_state_active_cmp_ram0e9:     CMPB    0e9h, #014h            ; 42B1 0 208 180 C5E9C014
-                JLT     accut_reset_c3             ; 42B5 0 208 180 CA63
-                CMPB    0c1h, #015h            ; 42B7 0 208 180 C5C1C015
-                JGE     rpm_threshold_226_0_if_ram218_bit6_set             ; 42BB 0 208 180 CD1D
-                LB      A, #07eh               ; 42BD 0 208 180 777E
-                JBS     off(00226h).1, rpm_threshold_226_0 ; 42BF 0 208 180 E92602
-                LB      A, #082h               ; 42C2 0 208 180 7782
-rpm_threshold_226_0:     CMPB    A, 0b4h                ; 42C4 0 208 180 C5B4C2
-                MB      off(00226h).1, C       ; 42C7 0 208 180 C42639
-                JGE     rpm_threshold_226_0_if_ram218_bit6_set             ; 42CA 0 208 180 CD0E
-                LB      A, #0c8h               ; 42CC 0 208 180 77C8
-                JBS     off(00226h).0, rpm_threshold_226_0_cmp_acc ; 42CE 0 208 180 E82602
-                LB      A, #0d0h               ; 42D1 0 208 180 77D0
-rpm_threshold_226_0_cmp_acc:     CMPB    A, off(00236h)         ; 42D3 0 208 180 C736
-                MB      off(00226h).0, C       ; 42D5 0 208 180 C42638
-                JLT     accut_reset_f7             ; 42D8 0 208 180 CA43
-rpm_threshold_226_0_if_ram218_bit6_set:     JBS     off(00218h).6, accut_check_c3_if_ram211_bit2_clr ; 42DA 0 208 180 EE1829
-                LB      A, #033h               ; 42DD 0 208 180 7733
-                JBS     off(00226h).3, rpm_threshold_226_0_cmp_acc_2 ; 42DF 0 208 180 EB2602
-                LB      A, #080h               ; 42E2 0 208 180 7780
-rpm_threshold_226_0_cmp_acc_2:     CMPB    A, 0b9h                ; 42E4 0 208 180 C5B9C2
-                MB      off(00226h).3, C       ; 42E7 0 208 180 C4263B
-                JLT     accut_check_c3             ; 42EA 0 208 180 CA16
-                LB      A, #010h               ; 42EC 0 208 180 7710
-                JBS     off(00226h).2, rpm_threshold_226_1 ; 42EE 0 208 180 EA2602
-                LB      A, #020h               ; 42F1 0 208 180 7720
-rpm_threshold_226_1:     CMPB    A, 0b4h                ; 42F3 0 208 180 C5B4C2
-                MB      off(00226h).2, C       ; 42F6 0 208 180 C4263A
-                CLRB    A                      ; 42F9 0 208 180 FA
-                JLT     accut_store_c3             ; 42FA 0 208 180 CA02
-                LB      A, #032h               ; 42FC 0 208 180 7732
-accut_store_c3:     STB     A, off(002b8h)         ; 42FE 0 208 180 D4B8
-                SJ      accut_check_c3_if_ram211_bit2_clr             ; 4300 0 208 180 CB04
-accut_check_c3:     LB      A, off(002b8h)         ; 4302 0 208 180 F4B8
-                JNE     accut_reset_f7             ; 4304 0 208 180 CE17
-accut_check_c3_if_ram211_bit2_clr:     JBR     off(00211h).2, accut_common ; 4306 0 208 180 DA1117
-                SB      off(00226h).4          ; 4309 0 208 180 C4261C
-                LB      A, off(002e2h)         ; 430C 0 208 180 F4E2
-                JNE     accut_result_common             ; 430E 0 208 180 CE1B
-                MOVB    off(002e3h), #032h     ; 4310 0 208 180 C4E39832
-accut_delay_check:     SB      off(0021bh).0          ; 4314 0 208 180 C41B18
-                RC                             ; 4317 0 208 180 95
-                SJ      accut_output_drive             ; 4318 0 208 180 CB15
-accut_reset_c3:     CLRB    off(002b8h)            ; 431A 0 208 180 C4B815
-accut_reset_f7:     CLRB    off(002e3h)            ; 431D 0 208 180 C4E315
-accut_common:     RB      off(00226h).4          ; 4320 0 208 180 C4260C
-                LB      A, off(002e3h)         ; 4323 0 208 180 F4E3
-                JNE     accut_delay_check             ; 4325 0 208 180 CEED
-                MOVB    off(002e2h), #032h     ; 4327 0 208 180 C4E29832
-accut_result_common:     RB      off(0021bh).0          ; 432B 0 208 180 C41B08
-                SC                             ; 432E 0 208 180 85
-accut_output_drive:     MB      P0.0, C                ; 432F 0 208 180 C52038
-                JBS     off(00217h).5, purge_result_clear ; 4332 0 208 180 ED171F
-                JBS     off(00212h).5, accut_output_drive_goto_purge_counter_check ; 4335 0 208 180 ED1206
-                CMPB    0c1h, #035h            ; 4338 0 208 180 C5C1C035
-                JGE     purge_result_clear             ; 433C 0 208 180 CD16
-accut_output_drive_goto_purge_counter_check:     J       purge_counter_check             ; 433E 0 208 180 034C78
-purge_counter_check_if_lt_goto_purge_result_clear:     JLT     purge_result_clear             ; 4343 0 208 180 CA0F
-                CMPB    off(002a7h), #005h     ; 4345 0 208 180 C4A7C005
-                JNE     purge_result_set             ; 4349 0 208 180 CE06
-                CMPB    off(002c1h), #019h     ; 434B 0 208 180 C4C1C019
-                JLT     purge_result_clear             ; 434F 0 208 180 CA03
-purge_result_set:     SC                             ; 4351 0 208 180 85
-                SJ      purge_result_clear_goto_vss_band_dispatch             ; 4352 0 208 180 CB01
-purge_result_clear:     RC                             ; 4354 0 208 180 95
-purge_result_clear_goto_vss_band_dispatch:     J       vss_band_dispatch             ; 4355 0 208 180 03C35F
+fuelpump_state_active_cmp_ram0e9:
+rpm_threshold_226_0:
+rpm_threshold_226_0_cmp_acc:
+rpm_threshold_226_0_if_ram218_bit6_set:
+rpm_threshold_226_0_cmp_acc_2:
+rpm_threshold_226_1:
+accut_store_c3:
+accut_check_c3:
+accut_check_c3_if_ram211_bit2_clr:
+accut_delay_check:
+accut_reset_c3:
+accut_reset_f7:
+accut_common:
+accut_result_common:
+accut_output_drive:
+                                                ; 42B1 (skeleton: no A/C clutch control - P0.0 stays at its power-up level, clutch off; the A/C request is ignored)
+                VCAL    4                      ; 4332 (skeleton: no EVAP purge control - P0.1 stays at its power-up level, solenoid off, the stock warm-engine state)
 vss_band_dispatch_load_r2:     MOVB    r2, off(00236h)        ; 4358 0 208 180 C4364A
                 LB      A, #046h               ; 435B 0 208 180 7746
                 MOVB    r1, #046h              ; 435D 0 208 180 9946
@@ -6850,7 +5409,6 @@ state_dispatch4:     JBS     off(00224h).3, state_225_1_check ; 441F 0 208 180 E
                 JGE     state_225_1_check             ; 4429 0 208 180 CD23
                 CMPB    0c0h, #0a9h            ; 442B 0 208 180 C5C0C0A9
                 JGE     state_225_1_check             ; 442F 0 208 180 CD1D
-                JBS     off(00211h).2, state_225_1_check ; 4431 0 208 180 EA111A
                 LB      A, off(002afh)         ; 4434 0 208 180 F4AF
                 JEQ     state_225_1_check             ; 4436 0 208 180 C916
                 RB      off(00225h).1          ; 4438 0 208 180 C42509
@@ -6877,7 +5435,6 @@ altc_gio_override_check_load_adcr7h:     LB      A, ADCR7H              ; 4472 0
                 CMPB    r0, A                  ; 4474 0 208 180 20C1
                 MB      off(00225h).7, C       ; 4476 0 208 180 C4253F
                 JBR     off(00211h).4, altc_gio_override_check_set_carry ; 4479 0 208 180 DC110E
-                JBS     off(00212h).6, altc_normal_drive ; 447C 0 208 180 EE120E
                 CMPB    A, #0fch               ; 447F 0 208 180 C6FC
                 JGE     altc_normal_drive             ; 4481 0 208 180 CD0A
                 CMPB    A, #005h               ; 4483 0 208 180 C605
@@ -6887,39 +5444,12 @@ altc_gio_override_check_set_carry:     SC                             ; 448A 0 2
                 SJ      altc_normal_drive_store_carry_p0_bit5             ; 448B 0 208 180 CB01
 altc_normal_drive:     RC                             ; 448D 0 208 180 95
 altc_normal_drive_store_carry_p0_bit5:     MB      P0.5, C                ; 448E 0 208 180 C5203D
-altc_normal_drive_nop_acc:     NOP                            ; 4491 0 208 180 00
-                NOP                            ; 4492 0 208 180 00
-                NOP                            ; 4493 0 208 180 00
-                NOP                            ; 4494 0 208 180 00
-                NOP                            ; 4495 0 208 180 00
-                NOP                            ; 4496 0 208 180 00
-                NOP                            ; 4497 0 208 180 00
-                NOP                            ; 4498 0 208 180 00
-                NOP                            ; 4499 0 208 180 00
-                NOP                            ; 449A 0 208 180 00
-                NOP                            ; 449B 0 208 180 00
-                NOP                            ; 449C 0 208 180 00
-                NOP                            ; 449D 0 208 180 00
-                NOP                            ; 449E 0 208 180 00
-                NOP                            ; 449F 0 208 180 00
-                NOP                            ; 44A0 0 208 180 00
-                JBR     off(00219h).1, flags_b8_2_set ; 44A1 0 208 180 D91906
-                JBR     off(00216h).6, flags_b8_2_set ; 44A4 0 208 180 DE1603
-                JBR     off(00217h).4, altc_condition_check ; 44A7 0 208 180 DC1708
-flags_b8_2_set:     SB      0a0h.5                 ; 44AA 0 208 180 C5A01D
-                RB      09bh.2                 ; 44AD 0 208 180 C59B0A
-                SJ      gio_p1_2_check             ; 44B0 0 208 180 CB17
-altc_condition_check:     JBS     off(00215h).2, gio_p1_2_check ; 44B2 0 208 180 EA1514
-                JBS     off(00212h).5, gio_p1_2_check ; 44B5 0 208 180 ED1211
-                MB      C, 098h.1              ; 44B8 0 208 180 C59829
-                JLT     gio_p1_2_check             ; 44BB 0 208 180 CA0C
-                CMPB    0c1h, #0c5h            ; 44BD 0 208 180 C5C1C0C5
-                JGE     gio_p1_2_check             ; 44C1 0 208 180 CD06
-                CMPB    0c3h, #0a7h            ; 44C3 0 208 180 C5C3C0A7
-                JLT     flags_219_2_store             ; 44C7 0 208 180 CA04
-gio_p1_2_check:     RC                             ; 44C9 0 208 180 95
-                SB      P1.2                   ; 44CA 0 208 180 C5221A
-flags_219_2_store:     MB      off(00219h).3, C       ; 44CD 0 208 180 C4193B
+altc_normal_drive_nop_acc:
+flags_b8_2_set:
+altc_condition_check:
+gio_p1_2_check:
+flags_219_2_store:
+                                                ; 44A1 (skeleton: no O2 heater - 219h.3 stays 0)
                 JBR     off(00227h).1, flags_219_2_store_clear_acc ; 44D0 0 208 180 D9270D
                 JBS     off(00216h).2, flags_219_2_store_clear_acc ; 44D3 0 208 180 EA160A
                 JBS     off(00218h).6, flags_219_2_store_clear_acc ; 44D6 0 208 180 EE1807
@@ -6938,71 +5468,7 @@ flags_219_2_store_clear_carry:     RC                             ; 44F2 0 208 1
 flags_219_2_store_store_carry_p1_bit6:     MB      P1.6, C                ; 44F3 0 208 180 C5223E
                 STB     A, off(002b1h)         ; 44F6 0 208 180 D4B1
                 VCAL    4                      ; 44F8 0 208 180 14
-                JBS     off(0021ah).6, state_21a_7_dispatch ; 44F9 0 208 180 EE1A25
-                NOP                            ; 44FC 0 208 180 00
-                NOP                            ; 44FD 0 208 180 00
-                NOP                            ; 44FE 0 208 180 00
-                CMPB    0adh, #012h            ; 44FF 0 208 180 C5ADC012
-                JGE     state_2fb_reset             ; 4503 0 208 180 CD0F
-                LB      A, 0bfh                ; 4505 0 208 180 F5BF
-                CMPB    A, #030h               ; 4507 0 208 180 C630
-                JGT     state_2fb_reset             ; 4509 0 208 180 C809
-                CMPB    A, #004h               ; 450B 0 208 180 C604
-                JLT     state_2fb_reset             ; 450D 0 208 180 CA05
-                MB      C, P4.6                ; 450F 0 208 180 C52C2E
-                JGE     state_2fb_check             ; 4512 0 208 180 CD06
-state_2fb_reset:     LB      A, #032h               ; 4514 0 208 180 7732
-                STB     A, off(002e7h)         ; 4516 0 208 180 D4E7
-                SJ      state_21a_7_dispatch             ; 4518 0 208 180 CB07
-state_2fb_check:     LB      A, off(002e7h)         ; 451A 0 208 180 F4E7
-                JNE     state_21a_7_dispatch             ; 451C 0 208 180 CE03
-                SB      off(0021ah).6          ; 451E 0 208 180 C41A1E
-state_21a_7_dispatch:     JBS     off(0021ah).7, state_21a_7_dispatch3 ; 4521 0 208 180 EF1A1E
-                JBS     off(00217h).5, state_213_0_check ; 4524 0 208 180 ED1703
-                JBS     off(0021ah).6, state_224_7_check ; 4527 0 208 180 EE1A05
-state_213_0_check:     JBS     off(00213h).0, state_21a_7_set ; 452A 0 208 180 E81312
-                SJ      state_224_7_check_load_imm             ; 452D 0 208 180 CB06
-state_224_7_check:     JBR     off(00223h).6, state_224_7_check_load_imm ; 452F 0 208 180 DE2303
-                JBR     off(0021dh).4, state_224_7_check_load_ram2d7 ; 4532 0 208 180 DC1D06
-state_224_7_check_load_imm:     LB      A, #032h               ; 4535 0 208 180 7732
-                STB     A, off(002d7h)         ; 4537 0 208 180 D4D7
-                SJ      state_21a_7_dispatch3             ; 4539 0 208 180 CB07
-state_224_7_check_load_ram2d7:     LB      A, off(002d7h)         ; 453B 0 208 180 F4D7
-                JNE     state_21a_7_dispatch3             ; 453D 0 208 180 CE03
-state_21a_7_set:     SB      off(0021ah).7          ; 453F 0 208 180 C41A1F
-state_21a_7_dispatch3:     JBS     off(0021ah).7, state_21a_7_dispatch2 ; 4542 0 208 180 EF1A23
-                J       state_21a_7_dispatch3_if_ram21a_bit6_clr             ; 4545 0 208 180 03CE58
-state_21a_7_dispatch3_if_ram215_bit1_set:     JBS     off(00215h).1, altc_p46_check ; 4548 0 208 180 E91505
-                MB      C, 09bh.1              ; 454B 0 208 180 C59B29
-                JGE     state_2de_reset             ; 454E 0 208 180 CD14
-altc_p46_check:     MB      C, P4.6                ; 4550 0 208 180 C52C2E
-                JGE     state_2de_reset             ; 4553 0 208 180 CD0F
-                JBS     off(00218h).0, state_2de_check ; 4555 0 208 180 E81803
-                JBS     off(0021eh).2, state_2de_reset ; 4558 0 208 180 EA1E09
-state_2de_check:     LB      A, off(002d8h)         ; 455B 0 208 180 F4D8
-                JNE     state_21a_7_dispatch2             ; 455D 0 208 180 CE09
-                SB      off(0021ah).7          ; 455F 0 208 180 C41A1F
-                SJ      state_21a_7_dispatch2             ; 4562 0 208 180 CB04
-state_2de_reset:     LB      A, #033h               ; 4564 0 208 180 7733
-                STB     A, off(002d8h)         ; 4566 0 208 180 D4D8
-state_21a_7_dispatch2:     JBS     off(0021ah).7, state_21a_7_dispatch2_load_x1 ; 4568 0 208 180 EF1A27
-                J       state_21a_7_dispatch2_if_ram21a_bit6_clr             ; 456B 0 208 180 03DA58
-state_21a_7_dispatch2_load_ram0bf:     LB      A, 0bfh                ; 456E 0 208 180 F5BF
-                CMPB    A, #0fch               ; 4570 0 208 180 C6FC
-                JGT     state_2df_reset             ; 4572 0 208 180 C811
-                CMPB    A, #004h               ; 4574 0 208 180 C604
-                JLT     state_2df_reset             ; 4576 0 208 180 CA0D
-                JBR     off(00215h).0, state_2df_reset ; 4578 0 208 180 D8150A
-                JBS     off(00218h).0, state_dc_check2 ; 457B 0 208 180 E81803
-                JBS     off(0021eh).2, state_2df_reset ; 457E 0 208 180 EA1E04
-state_dc_check2:     CMPB    A, #030h               ; 4581 0 208 180 C630
-                JGT     state_2df_check             ; 4583 0 208 180 C806
-state_2df_reset:     LB      A, #033h               ; 4585 0 208 180 7733
-                STB     A, off(002d9h)         ; 4587 0 208 180 D4D9
-                SJ      state_21a_7_dispatch2_load_x1             ; 4589 0 208 180 CB07
-state_2df_check:     LB      A, off(002d9h)         ; 458B 0 208 180 F4D9
-                JNE     state_21a_7_dispatch2_load_x1             ; 458D 0 208 180 CE03
-                SB      off(0021ah).7          ; 458F 0 208 180 C41A1F
+; (skeleton: no VTEC oil-pressure switch check at idle / pressure fault latch)
 state_21a_7_dispatch2_load_x1:     MOV     X1, #state_21a_7_dispatch2_tbl          ; 4592 0 208 180 60CC65
                 LB      A, 0c1h                ; 4595 0 208 180 F5C1
                 VCAL    1                      ; 4597 0 208 180 11
@@ -7027,24 +5493,13 @@ state_21a_7_dispatch2_and_ie:     AND     IE, #002a0h            ; 45A9 0 208 18
                 CMPB    0c0h, #028h            ; 45BD 1 208 180 C5C0C028
                 MB      off(00233h).2, C       ; 45C1 1 208 180 C4333A
                 VCAL    4                      ; 45C4 1 208 180 14
-                J       state_21a_7_dispatch2_vcal_4 ; (skeleton: automatic transmission control removed - manual only)
 state_21a_7_dispatch2_vcal_4:     VCAL    4                      ; 47EB 0 208 180 14
-                J       skel_block20_end ; (skeleton: diagnostics block removed)
 skel_block20_end: VCAL    4                      ; 498D 0 208 180 14
-                J       dtc_debounce_init ; (skeleton: diagnostics block removed)
 dtc_debounce_init:     VCAL    4                      ; 49D9 0 208 180 14
-                J       freezeframe_decode_start ; (skeleton: DTC debounce and stored-code storage removed)
 freezeframe_decode_start:     VCAL    4                      ; 4AE2 1 208 180 14
                 J       freezeframe_decode_start_load_ram212             ; 4AE3 1 208 180 03DB5F
 freezeframe_decode_start_add_acc:     ADD     A, #0ffffh             ; 4AE6 1 208 180 86FFFF
                 MB      off(00218h).6, C       ; 4AE9 1 208 180 C4183E
-                L       A, off(00212h)         ; 4AEC 1 208 180 E412
-                AND     A, #0fffdh             ; 4AEE 1 208 180 D6FDFF
-                JNE     freezeframe_flag_22b_4             ; 4AF1 1 208 180 CE07
-                L       A, off(00214h)         ; 4AF3 1 208 180 E414
-                AND     A, #014f5h             ; 4AF5 1 208 180 D6F514
-                JEQ     prep_lowpower_seq             ; 4AF8 1 208 180 C903
-freezeframe_flag_22b_4:     SB      off(00218h).5          ; 4AFA 1 208 180 C4181D
 prep_lowpower_seq:     SB      off(00230h).3          ; 4AFD 1 208 180 C4301B
                 JNE     lowpower_trap_call             ; 4B00 1 208 180 CE2D
                 CAL     ResetWatchDog             ; 4B02 1 208 180 321E52
@@ -7244,7 +5699,7 @@ inj_p2_calc_start:     L       A, off(001b8h)         ; 4C92 1 108 280 E4B8
                 SRLB    A                      ; 4C9D 0 108 280 63
                 SRLB    A                      ; 4C9E 0 108 280 63
                 ORB     A, off(001beh)         ; 4C9F 0 108 280 E7BE
-                J       inj_p2_calc_or197             ; 4CA1 0 108 280 03B14C
+                SJ       inj_p2_calc_or197            ; 4CA1 0 108 280 03B14C
 inj_p2_calc_alt:     LB      A, off(001beh)         ; 4CA4 0 108 280 F4BE
                 SJ      inj_p2_calc_or197             ; 4CA6 0 108 280 CB09
 inj_p2_calc_check114:     L       A, off(001bch)         ; 4CA8 1 108 280 E4BC
@@ -7339,7 +5794,7 @@ crank_a3_gate:     LB      A, off(0012ah)         ; 4D44 0 108 280 F42A
                 JLE     crank_a3_gate_load_dp_2             ; 4D4F 0 108 280 CF17
 crank_a3_gate_load_dp:     MOV     DP, #0035ah            ; 4D51 0 108 280 625A03
                 MB      C, 0a0h.3              ; 4D54 0 108 280 C5A02B
-                J       crank_pswl4_store             ; 4D57 0 108 280 036E4D
+                SJ       crank_pswl4_store            ; 4D57 0 108 280 036E4D
 crank_mul_alt:     MULB                           ; 4D5A 0 108 280 A234
 crank_mul_alt_mulb_acc:     MULB                           ; 4D5C 0 108 280 A234
                 SJ      crank_a2_advance             ; 4D5E 0 108 280 CB30
@@ -7409,7 +5864,7 @@ crank_mul_common2_clear_tcon3_bit2:     RB      TCON3.2                ; 4DD9 1 
 tmr3_reload_store2:     ST      A, TMR3                ; 4DE1 1 108 280 D53E
                 RB      TCON3.3                ; 4DE3 1 108 280 C5430B
                 SB      PSWH.0                 ; 4DE6 1 108 280 A218
-                J       tmr3_reload_clamp_min             ; 4DE8 1 108 280 03F74D
+                SJ       tmr3_reload_clamp_min            ; 4DE8 1 108 280 03F74D
 crank_mul_common2_load_er3:     L       A, er3                 ; 4DEB 1 108 280 37
                 ADD     A, er1                 ; 4DEC 1 108 280 09
                 JGE     tmr3_reload_clamp_check             ; 4DED 1 108 280 CD03
@@ -7418,28 +5873,9 @@ tmr3_reload_clamp_check:     CMP     A, #0001fh             ; 4DF2 1 108 280 C61
                 JGE     tmr3_store_e8             ; 4DF5 1 108 280 CD03
 tmr3_reload_clamp_min:     L       A, #0001fh             ; 4DF7 1 108 280 671F00
 tmr3_store_e8:     ST      A, 0e0h                ; 4DFA 1 108 280 D5E0
-                MOV     DP, #00f00h            ; 4DFC 1 108 280 62000F
-                LB      A, [DP]                ; 4DFF 0 108 280 F2
-                SRLB    A                      ; 4E00 0 108 280 63
-                ROR     off(001d0h)            ; 4E01 0 108 280 B4D0C7
-                SRLB    A                      ; 4E04 0 108 280 63
-                ROR     off(001d0h)            ; 4E05 0 108 280 B4D0C7
-                LB      A, 0d2h                ; 4E08 0 108 280 F5D2
-                JNE     crank_a2_check4             ; 4E0A 0 108 280 CE06
-                CLR     A                      ; 4E0C 1 108 280 F9
-                XCHG    A, off(001d0h)         ; 4E0D 1 108 280 B4D010
-                ST      A, 0f0h                ; 4E10 1 108 280 D5F0
-crank_a2_check4:     LB      A, 0d2h                ; 4E12 0 108 280 F5D2
-                CMPB    A, #001h               ; 4E14 0 108 280 C601
-                JNE     crank_a8_p1_output             ; 4E16 0 108 280 CE04
-                L       A, 0eeh                ; 4E18 1 108 280 E5EE
-                ST      A, off(001ceh)         ; 4E1A 1 108 280 D4CE
-crank_a8_p1_output:     L       A, off(001ceh)         ; 4E1C 1 108 280 E4CE
-                SRL     A                      ; 4E1E 1 108 280 63
-                MB      P1.7, C                ; 4E1F 1 108 280 C5223F
-                SRL     A                      ; 4E22 1 108 280 63
-                MB      P1.3, C                ; 4E23 1 108 280 C5223B
-                ST      A, off(001ceh)         ; 4E26 1 108 280 D4CE
+; (skeleton: knock control unit removed: no knock sample from port A, nothing shifted out on P1.7/P1.3)
+crank_a2_check4:
+crank_a8_p1_output:
                 MOV     DP, #02f00h            ; 4E28 1 108 280 62002F
                 LB      A, P1                  ; 4E2B 0 108 280 F522
                 STB     A, [DP]                ; 4E2D 0 108 280 D2
@@ -7519,14 +5955,14 @@ vcal_2:         CMPCB   A, [X1]                ; 4E9C 0 200 180 90AE
                 JLT     vcal1_bracket_check             ; 4E9E 0 200 180 CA02
                 LCB     A, [X1]                ; 4EA0 0 200 180 90AA
 vcal1_bracket_check:     CMPCB   A, 00002h[X1]          ; 4EA2 0 200 180 90AF0200
-                JGE     vcal1_bracket_check_goto_table_interp_bracket_found             ; 4EA6 0 200 180 CD04
+                JGE     table_interp_bracket_found                                      ; 4EA6 0 200 180 CD04
                 LCB     A, 00002h[X1]          ; 4EA8 0 200 180 90AB0200
 vcal1_bracket_check_goto_table_interp_bracket_found:     SJ      table_interp_bracket_found             ; 4EAC 0 200 180 CBBE
 vcal_3:         CMPCB   A, [X1]                ; 4EAE 0 208 180 90AE
                 JLT     vcal2_bracket_check             ; 4EB0 0 208 180 CA02
                 LCB     A, [X1]                ; 4EB2 0 208 180 90AA
 vcal2_bracket_check:     CMPCB   A, 00003h[X1]          ; 4EB4 0 208 180 90AF0300
-                JGE     vcal2_bracket_check_goto_vcal_common_interp             ; 4EB8 0 208 180 CD04
+                JGE     vcal_common_interp                                      ; 4EB8 0 208 180 CD04
                 LCB     A, 00003h[X1]          ; 4EBA 0 208 180 90AB0300
 vcal2_bracket_check_goto_vcal_common_interp:     SJ      vcal_common_interp             ; 4EBE 0 208 180 CB0B
 vcal_1:         CMPCB   A, 00003h[X1]          ; 4EC0 0 208 180 90AF0300
@@ -7625,19 +6061,6 @@ injtimer_bank_calc1:     MOV     er2, 00000h[X1]        ; 4F51 1 208 180 B000004
 injtimer_bank_calc1_mul:     MUL                            ; 4F5A 1 208 180 9035
                 ST      A, er0                 ; 4F5C 1 208 180 88
                 L       A, 00002h[X1]          ; 4F5D 1 208 180 E00200
-                SJ      injtimer_bank_calc1_sign             ; 4F60 1 208 180 CB10
-; [CG] interp_bracket_delta_scale_2  @0x4F62
-; [CG] VERIFIED: structurally identical to injtimer_bank_calc1, operating on the
-; [CG] upper breakpoint instead of the lower.
-interp_bracket_delta_scale_2:     MOV     er2, 00000h[X1]        ; 4F62 1 208 180 B000004A
-                SUB     A, er2                 ; 4F66 1 208 180 2A
-                JGE     interp_bracket_delta_scale_2_mul_acc             ; 4F67 1 208 180 CD02
-                VCAL    7                      ; 4F69 1 208 180 17
-                SC                             ; 4F6A 1 208 180 85
-interp_bracket_delta_scale_2_mul_acc:     MUL                            ; 4F6B 1 208 180 9035
-                ST      A, er0                 ; 4F6D 1 208 180 88
-                MOV     DP, #00388h            ; 4F6E 1 208 180 628803
-                L       A, [DP]                ; 4F71 1 208 180 E2
 injtimer_bank_calc1_sign:     JGE     injtimer_bank_calc1_add             ; 4F72 1 208 180 CD05
                 SUB     A, er0                 ; 4F74 1 208 180 28
                 ST      A, er0                 ; 4F75 1 208 180 88
@@ -7649,7 +6072,6 @@ injtimer_bank_calc1_add:     ADD     A, er0                 ; 4F79 1 208 180 08
                 L       A, er2                 ; 4F7B 1 208 180 36
                 ADC     A, er1                 ; 4F7C 1 208 180 19
                 RT                             ; 4F7D 1 208 180 01
-                DB  0E2h ; 4F7E
 vcal_5:         MB      C, ACCH.7              ; 4F7F 1 208 180 C5072F
                 JLT     vcal_5_add_acc             ; 4F82 1 208 180 CA08
 vcal_6:         ADD     A, er3                 ; 4F84 1 208 180 0B
@@ -7661,7 +6083,6 @@ vcal_5_add_acc:     ADD     A, er3                 ; 4F8C 1 208 180 0B
                 CLR     A                      ; 4F8F 1 208 180 F9
 vcal4_store:     ST      A, er3                 ; 4F90 1 208 180 8B
                 RT                             ; 4F91 1 208 180 01
-                DB  0E2h ; 4F92
 ; [CG] add_saturate_s16  @0x4F93
 ; [CG] VERIFIED: adds er3 to A with explicit signed 16-bit saturation - clamps to 0x7FFF on
 ; [CG] positive overflow, 0x8000 on negative overflow, checking ACCH.7 and r7.7 sign bits
@@ -7698,7 +6119,7 @@ scale_mul5_div4_return:     RT                             ; 4FCD 1 100 280 01
 vcal_7:         MB      C, PSWH.4              ; 4FCE 0 200 180 A22C
                 JGE     vcal_7_xorb_acc             ; 4FD0 0 200 180 CD07
                 XORB    A, #0ffh               ; 4FD2 0 200 180 F6FF
-                BRK                            ; 4FD4 0 200 180 FF
+                BRK                            ; 4FD4 0 200 180 FF  (word mode: F6 FF FF = XOR A,#0FFFFh; the DB below is ADD A,#1 - keep it)
                 DB  086h,001h,000h,001h ; 4FD5
 vcal_7_xorb_acc:     XORB    A, #0ffh               ; 4FD9 0 200 180 F6FF
                 ADDB    A, #001h               ; 4FDB 0 200 180 8601
@@ -7784,14 +6205,14 @@ table2d_row_calc:     ST      A, er2                 ; 5025 1 200 180 8A
                 MOV     X1, er1                ; 504C 1 200 180 4578
                 XCHG    A, er2                 ; 504E 1 200 180 4610
                 MOV     er0, X2                ; 5050 1 200 180 9148
-                CAL     table2d_mul_combine             ; 5052 1 200 180 326350
+                SCAL     table2d_mul_combine            ; 5052 1 200 180 326350
                 MOV     er2, X1                ; 5055 1 200 180 904A
                 MOV     X1, A                  ; 5057 1 200 180 50
                 L       A, DP                  ; 5058 1 200 180 42
-                CAL     table2d_mul_combine             ; 5059 1 200 180 326350
+                SCAL     table2d_mul_combine            ; 5059 1 200 180 326350
                 L       A, X1                  ; 505C 1 200 180 40
                 MOV     er0, er3               ; 505D 1 200 180 4748
-                CAL     table2d_mul_combine             ; 505F 1 200 180 326350
+                SCAL     table2d_mul_combine            ; 505F 1 200 180 326350
                 RT                             ; 5062 1 200 180 01
 table2d_mul_combine:     SUB     A, er2                 ; 5063 1 200 180 2A
                 MB      PSWL.4, C              ; 5064 1 200 180 A33C
@@ -7816,7 +6237,7 @@ knock_244_helper:     EXTND                          ; 5079 1 200 180 F8
                 ST      A, er2                 ; 507F 1 200 180 8A
                 INC     DP                     ; 5080 1 200 180 72
                 LCB     A, [DP]                ; 5081 1 200 180 92AA
-                CAL     table2d_mul_combine             ; 5083 1 200 180 326350
+                SCAL     table2d_mul_combine            ; 5083 1 200 180 326350
                 LB      A, r4                  ; 5086 0 200 180 7C
                 RT                             ; 5087 0 200 180 01
 ; [CG] map_result_postscale  @0x5088
@@ -7869,7 +6290,6 @@ mul_zero_if_r3_zero_load_r2:     LB      A, r2                  ; 50C0 0 100 280
 tipin_table_diff_calc:     RT                             ; 50CC 1 100 280 01
 idle_stall_helper:     MOV     X2, #00010h            ; 50CD 1 208 180 611000
                 MOV     DP, #01000h            ; 50D0 1 208 180 620010
-                SJ      clamp_range_check             ; 50D3 1 208 180 CB06
 clamp_range_check:     CMP     A, X2                  ; 50DB 1 208 180 91C2
                 JLE     clamp_range_lowside             ; 50DD 1 208 180 CF06
                 CMP     A, DP                  ; 50DF 1 208 180 92C2
@@ -7881,22 +6301,6 @@ clamp_range_store:     ST      A, 00000h[X1]          ; 50E8 1 208 180 D00000
                 L       A, er0                 ; 50EB 1 208 180 34
                 ST      A, 00002h[X1]          ; 50EC 1 208 180 D00200
                 RT                             ; 50EF 1 208 180 01
-ignition_timing_calc_task_sub_load_er2:     MOV     er2, #00023h           ; 50F0 1 208 180 46982300
-                MOV     er3, #003ffh           ; 50F4 1 208 180 4798FF03
-                SJ      clamp_to_35_512_cmp_acc             ; 50F8 1 208 180 CB08
-clamp_to_35_512:     MOV     er2, #00023h           ; 50FA 1 208 180 46982300
-                MOV     er3, #00200h           ; 50FE 1 208 180 47980002
-clamp_to_35_512_cmp_acc:     CMP     A, er2                 ; 5102 1 208 180 4A
-                JLT     load_er0_result             ; 5103 1 208 180 CA05
-                CMP     A, er3                 ; 5105 1 208 180 4B
-                JLE     load_er0_result_store_tbl_x1             ; 5106 1 208 180 CF05
-                MOV     er2, er3               ; 5108 1 208 180 474A
-load_er0_result:     L       A, er2                 ; 510A 1 208 180 36
-                CLR     er0                    ; 510B 1 208 180 4415
-load_er0_result_store_tbl_x1:     ST      A, 00000h[X1]          ; 510D 1 208 180 D00000
-                L       A, er0                 ; 5110 1 208 180 34
-                ST      A, [DP]                ; 5111 1 208 180 D2
-                RT                             ; 5112 1 208 180 01
 sub37_clamp_to_er0:     SUB     A, #00025h             ; 5113 1 208 180 A62500
                 JLT     sub37_clamp_to_er0_load_er0             ; 5116 1 208 180 CA03
                 CMP     A, er0                 ; 5118 1 208 180 48
@@ -7927,7 +6331,6 @@ table_index_add_clamp_er3_return:     RT                             ; 5140 1 20
 ; [CG] limits (gated by off(20Ch).0) rather than fixed presets.
 idle_helper2:     MUL                            ; 5141 1 208 180 9035
                 L       A, er1                 ; 5143 1 208 180 35
-                SJ      mul_then_clamp_x1x2_2_if_ram20c_bit0_clr             ; 5144 1 208 180 CB0A
 mul_then_clamp_x1x2_2_if_ram20c_bit0_clr:     JBR     off(0020ch).0, mul_then_clamp_x1x2_2_xchg_acc ; 5150 1 208 180 D80C0F
                 ADD     A, er3                 ; 5153 1 208 180 0B
                 JLT     idle_helper2_sc_path             ; 5154 1 208 180 CA08
@@ -7959,64 +6362,6 @@ idle_pi_clamp_helper:     CMP     off(0028ch), A         ; 5175 1 208 180 B48CC1
 idle_pi_clamp_return:     RT                             ; 5180 1 208 180 01
 idle_pi_clamp_low:     L       A, off(0028ch)         ; 5181 1 208 180 E48C
                 RT                             ; 5183 1 208 180 01
-; [CG] weighted_sum_2term_trim  @0x5184
-; [CG] VERIFIED: computes two products (r6*A and r7*X1), conditionally accumulates them into
-; [CG] a running total at off(29Ah) gated by PSWL.4, calling clamp_0_to_3ff to bound the
-; [CG] running total. A two-term weighted-blend accumulator.
-weighted_sum_2term_trim:     MOV     X1, A                  ; 5184 1 208 180 50
-                CLRB    r0                     ; 5185 1 208 180 2015
-                MOVB    r1, r6                 ; 5187 1 208 180 2649
-                MUL                            ; 5189 1 208 180 9035
-                MOV     er2, er1               ; 518B 1 208 180 454A
-                L       A, X1                  ; 518D 1 208 180 40
-                MOVB    r1, r7                 ; 518E 1 208 180 2749
-                MUL                            ; 5190 1 208 180 9035
-                L       A, off(0029ah)         ; 5192 1 208 180 E49A
-                MB      C, PSWL.4              ; 5194 1 208 180 A32C
-                JLT     weighted_sum_2term_trim_sub_acc             ; 5196 1 208 180 CA09
-                ADD     A, er1                 ; 5198 1 208 180 09
-                CAL     clamp_0_to_3ff             ; 5199 1 208 180 32AC51
-                ST      A, off(0029ah)         ; 519C 1 208 180 D49A
-                ADD     A, er2                 ; 519E 1 208 180 0A
-                SJ      weighted_sum_2term_trim_call_clamp_0_to_3ff             ; 519F 1 208 180 CB07
-weighted_sum_2term_trim_sub_acc:     SUB     A, er1                 ; 51A1 1 208 180 29
-                CAL     clamp_0_to_3ff             ; 51A2 1 208 180 32AC51
-                ST      A, off(0029ah)         ; 51A5 1 208 180 D49A
-                SUB     A, er2                 ; 51A7 1 208 180 2A
-weighted_sum_2term_trim_call_clamp_0_to_3ff:     CAL     clamp_0_to_3ff             ; 51A8 1 208 180 32AC51
-                RT                             ; 51AB 1 208 180 01
-; [CG] clamp_0_to_3ff  @0x51AC
-; [CG] VERIFIED: clamps A to the range [0, 0x3FF] (1023). Called from
-; [CG] weighted_sum_2term_trim.
-clamp_0_to_3ff:     CLR     er0                    ; 51AC 1 208 180 4415
-                JLE     clamp_0_to_3ff_load_er0             ; 51AE 1 208 180 CF07
-                MOV     er0, #003ffh           ; 51B0 1 208 180 4498FF03
-                CMP     A, er0                 ; 51B4 1 208 180 48
-                JLT     clamp_0_to_3ff_return             ; 51B5 1 208 180 CA01
-clamp_0_to_3ff_load_er0:     L       A, er0                 ; 51B7 1 208 180 34
-clamp_0_to_3ff_return:     RT                             ; 51B8 1 208 180 01
-cfgvariant_set_flags:     SUBB    A, #001h               ; 51B9 0 208 ??? A601
-                MOVB    r0, #008h              ; 51BB 0 208 ??? 9808
-                DIVB                           ; 51BD 0 208 ??? A236
-                MOV     X1, A                  ; 51BF 0 208 ??? 50
-                LB      A, r1                  ; 51C0 0 208 ??? 79
-                SBR     00112h[X1]             ; 51C1 0 208 ??? C0120111
-                SBR     00212h[X1]             ; 51C5 0 208 ??? C0120211
-                SBR     0031ah[X1]             ; 51C9 0 208 ??? C01A0311
-cfgvariant_checksum_calc:     MOV     DP, #0031ah            ; 51CD 0 208 ??? 621A03
-                CLR     er0                    ; 51D0 0 208 ??? 4415
-cfgvariant_checksum_loop:     LB      A, r0                  ; 51D2 0 208 ??? 78
-                ADDB    A, [DP]                ; 51D3 0 208 ??? C282
-                STB     A, r0                  ; 51D5 0 208 ??? 88
-                LB      A, r1                  ; 51D6 0 208 ??? 79
-                XORB    A, [DP]                ; 51D7 0 208 ??? C2F2
-                STB     A, r1                  ; 51D9 0 208 ??? 89
-                INC     DP                     ; 51DA 0 208 ??? 72
-                CMP     DP, #0031eh            ; 51DB 0 208 ??? 92C01E03
-                JNE     cfgvariant_checksum_loop             ; 51DF 0 208 ??? CEF1
-                L       A, er0                 ; 51E1 1 208 ??? 34
-                ST      A, [DP]                ; 51E2 1 208 ??? D2
-                RT                             ; 51E3 1 208 ??? 01
 port_debounce_helper:     MOV     DP, #03f00h            ; 51E4 0 208 180 62003F
                 LB      A, #090h               ; 51E7 0 208 180 7790
                 STB     A, [DP]                ; 51E9 0 208 180 D2
@@ -8085,10 +6430,10 @@ crank_edge_helper:     L       A, off(0011ch)         ; 5259 1 108 280 E41C
 ; [CG] VERIFIED: copies 5 consecutive words from a USP-relative stack frame (0x212-0x21A)
 ; [CG] into fixed RAM locations 0x112-0x11A. A pure register/stack snapshot copier, no
 ; [CG] computation.
-refresh_engine_flags_snapshot:     L       A, (00212h-00280h)[USP] ; 5262 1 108 280 E392
-                ST      A, off(00112h)         ; 5264 1 108 280 D412
-                L       A, (00214h-00280h)[USP] ; 5266 1 108 280 E394
-                ST      A, off(00114h)         ; 5268 1 108 280 D414
+refresh_engine_flags_snapshot:
+; (skeleton: no fault-flag snapshot to copy)
+; (skeleton: no fault-flag snapshot to copy)
+; (skeleton: no fault-flag snapshot to copy)
                 L       A, (00216h-00280h)[USP] ; 526A 1 108 280 E396
                 ST      A, off(00116h)         ; 526C 1 108 280 D416
                 L       A, (00218h-00280h)[USP] ; 526E 1 108 280 E398
@@ -8116,23 +6461,6 @@ timer_or_counter_helper_load_r0:     LB      A, r0                  ; 5289 0 208
                 DECB    r1                     ; 528F 0 208 180 B9
                 JNE     timer_or_counter_helper             ; 5290 0 208 180 CEE5
                 RT                             ; 5292 0 208 180 01
-selftest_regbank_verify:     MOV     X2, A                  ; 5293 1 200 ??? 51
-                SB      off(00230h).7          ; 5294 1 200 ??? C4301F
-                AND     IE, #002a0h            ; 5297 1 200 ??? B51AD0A002
-                RB      PSWH.0                 ; 529C 1 200 ??? A208
-                XCHG    A, 00084h[X1]          ; 529E 1 200 ??? B0840010
-                XCHG    A, 00084h[X1]          ; 52A2 1 200 ??? B0840010
-                ST      A, er3                 ; 52A6 1 200 ??? 8B
-                SB      PSWH.0                 ; 52A7 1 200 ??? A218
-                L       A, 0f2h                ; 52A9 1 200 ??? E5F2
-                ST      A, IE                  ; 52AB 1 200 ??? D51A
-                RB      off(00230h).7          ; 52AD 1 200 ??? C4300F
-                L       A, er3                 ; 52B0 1 200 ??? 37
-                CMP     A, X2                  ; 52B1 1 200 ??? 91C2
-                JEQ     selftest_regbank_verify_return             ; 52B3 1 200 ??? C905
-                MOVB    0ebh, #042h            ; 52B5 1 200 ??? C5EB9842
-                BRK                            ; 52B9 1 200 ??? FF
-selftest_regbank_verify_return:     RT                             ; 52BA 1 200 ??? 01
 idle_helper1:     JBR     off(00230h).3, idle_helper1_alt ; 52BB 1 208 180 DB3016
                 AND     IE, #002a0h            ; 52BE 1 208 180 B51AD0A002
                 RB      PSWH.0                 ; 52C3 1 208 180 A208
@@ -8200,261 +6528,6 @@ dwell_scale_helper:     MOVB    r0, #0bdh              ; 532D 1 200 180 98BD
                 JGE     dwell_scale_return             ; 533D 0 200 180 CD01
 dwell_scale_default:     LB      A, r0                  ; 533F 0 200 180 78
 dwell_scale_return:     RT                             ; 5340 0 200 180 01
-cfgvariant_eval_condition:     CLRB    r0                     ; 5341 0 208 ??? 2015
-                CMPB    r6, #001h              ; 5343 0 208 ??? 26C001
-                JNE     cfgvariant_check_v3             ; 5346 0 208 ??? CE09
-                CMPB    0c2h, #01ah            ; 5348 0 208 ??? C5C2C01A
-                JLT     cfgvariant_result_common             ; 534C 0 208 ??? CA01
-                INCB    r0                     ; 534E 0 208 ??? A8
-cfgvariant_result_common:     SJ      cfgvariant_eval_result             ; 534F 0 208 ??? CB7F
-cfgvariant_check_v3:     CMPB    r6, #003h              ; 5351 0 208 ??? 26C003
-; [H] --- cfgvariant_eval_condition's dispatch body: for each specific variant index (3, 6, 7, 10,
-; [H] 11, 13, 20, 26), checks the sign of that variant's associated sensor/config byte (0xBB,
-; [H] 0x3D4, 0x3A4, 0x3CC, 0x3D2, 0x3CD, 0x3D2 again, 0xD7) and increments r0 if negative --
-; [H] reads as a per-variant "is this variant's associated input plausible/connected" check,
-; [H] feeding cfgvariant_eval_result.
-                JNE     cfgvariant_check_v6             ; 5354 0 208 ??? CE08
-                LB      A, 0a3h                ; 5356 0 208 ??? F5A3
-                SLLB    A                      ; 5358 0 208 ??? 53
-                JGE     cfgvariant_eval_result             ; 5359 0 208 ??? CD75
-                INCB    r0                     ; 535B 0 208 ??? A8
-                SJ      cfgvariant_eval_result             ; 535C 0 208 ??? CB72
-cfgvariant_check_v6:     CMPB    r6, #006h              ; 535E 0 208 ??? 26C006
-                JNE     cfgvariant_check_v7             ; 5361 0 208 ??? CE0A
-                MOV     DP, #003c8h            ; 5363 0 208 ??? 62C803
-                LB      A, [DP]                ; 5366 0 208 ??? F2
-                SLLB    A                      ; 5367 0 208 ??? 53
-                JGE     cfgvariant_eval_result             ; 5368 0 208 ??? CD66
-                INCB    r0                     ; 536A 0 208 ??? A8
-                SJ      cfgvariant_eval_result             ; 536B 0 208 ??? CB63
-cfgvariant_check_v7:     CMPB    r6, #007h              ; 536D 0 208 ??? 26C007
-                JNE     cfgvariant_check_v10             ; 5370 0 208 ??? CE0A
-                MOV     DP, #00392h            ; 5372 0 208 ??? 629203
-                LB      A, [DP]                ; 5375 0 208 ??? F2
-                SLLB    A                      ; 5376 0 208 ??? 53
-                JGE     cfgvariant_eval_result             ; 5377 0 208 ??? CD57
-                INCB    r0                     ; 5379 0 208 ??? A8
-                SJ      cfgvariant_eval_result             ; 537A 0 208 ??? CB54
-cfgvariant_check_v10:     CMPB    r6, #00ah              ; 537C 0 208 ??? 26C00A
-                JNE     cfgvariant_check_v11             ; 537F 0 208 ??? CE0A
-                MOV     DP, #003c0h            ; 5381 0 208 ??? 62C003
-                LB      A, [DP]                ; 5384 0 208 ??? F2
-                SLLB    A                      ; 5385 0 208 ??? 53
-                JGE     cfgvariant_eval_result             ; 5386 0 208 ??? CD48
-                INCB    r0                     ; 5388 0 208 ??? A8
-                SJ      cfgvariant_eval_result             ; 5389 0 208 ??? CB45
-cfgvariant_check_v11:     CMPB    r6, #00bh              ; 538B 0 208 ??? 26C00B
-                JNE     cfgvariant_check_v11_cmp_r6             ; 538E 0 208 ??? CE0A
-                MOV     DP, #003c6h            ; 5390 0 208 ??? 62C603
-                LB      A, [DP]                ; 5393 0 208 ??? F2
-                SLLB    A                      ; 5394 0 208 ??? 53
-                JGE     cfgvariant_eval_result             ; 5395 0 208 ??? CD39
-                INCB    r0                     ; 5397 0 208 ??? A8
-                SJ      cfgvariant_eval_result             ; 5398 0 208 ??? CB36
-cfgvariant_check_v11_cmp_r6:     CMPB    r6, #00ch              ; 539A 0 208 ??? 26C00C
-                JNE     cfgvariant_check_v13             ; 539D 0 208 ??? CE08
-                CMPB    r7, #009h              ; 539F 0 208 ??? 27C009
-                JNE     cfgvariant_check_v13             ; 53A2 0 208 ??? CE03
-                INCB    r0                     ; 53A4 0 208 ??? A8
-                SJ      cfgvariant_eval_result             ; 53A5 0 208 ??? CB29
-cfgvariant_check_v13:     CMPB    r6, #00dh              ; 53A7 0 208 ??? 26C00D
-                JNE     cfgvariant_check_v20             ; 53AA 0 208 ??? CE0A
-                MOV     DP, #003c1h            ; 53AC 0 208 ??? 62C103
-                LB      A, [DP]                ; 53AF 0 208 ??? F2
-                SLLB    A                      ; 53B0 0 208 ??? 53
-                JGE     cfgvariant_eval_result             ; 53B1 0 208 ??? CD1D
-                INCB    r0                     ; 53B3 0 208 ??? A8
-                SJ      cfgvariant_eval_result             ; 53B4 0 208 ??? CB1A
-cfgvariant_check_v20:     CMPB    r6, #014h              ; 53B6 0 208 ??? 26C014
-                JNE     cfgvariant_check_v26             ; 53B9 0 208 ??? CE0A
-                MOV     DP, #003c6h            ; 53BB 0 208 ??? 62C603
-                LB      A, [DP]                ; 53BE 0 208 ??? F2
-                SLLB    A                      ; 53BF 0 208 ??? 53
-                JGE     cfgvariant_eval_result             ; 53C0 0 208 ??? CD0E
-                INCB    r0                     ; 53C2 0 208 ??? A8
-                SJ      cfgvariant_eval_result             ; 53C3 0 208 ??? CB0B
-cfgvariant_check_v26:     CMPB    r6, #01ah              ; 53C5 0 208 ??? 26C01A
-                JNE     cfgvariant_check_v4             ; 53C8 0 208 ??? CE09
-                LB      A, ADCR5H              ; 53CA 0 208 ??? F56B
-                SLLB    A                      ; 53CC 0 208 ??? 53
-                JGE     cfgvariant_eval_result             ; 53CD 0 208 ??? CD01
-                INCB    r0                     ; 53CF 0 208 ??? A8
-cfgvariant_eval_result:     J       cfgvariant_remap_start             ; 53D0 0 208 ??? 037E54
-cfgvariant_check_v4:     CMPB    r6, #004h              ; 53D3 0 208 ??? 26C004
-                JNE     cfgvariant_check_v8             ; 53D6 0 208 ??? CE08
-                CMPB    r7, #021h              ; 53D8 0 208 ??? 27C021
-                JEQ     cfgvariant_eval_result2             ; 53DB 0 208 ??? C928
-                INCB    r0                     ; 53DD 0 208 ??? A8
-                SJ      cfgvariant_eval_result2             ; 53DE 0 208 ??? CB25
-cfgvariant_check_v8:     CMPB    r6, #008h              ; 53E0 0 208 ??? 26C008
-                JNE     cfgvariant_check_v9             ; 53E3 0 208 ??? CE0E
-                CMPB    r7, #022h              ; 53E5 0 208 ??? 27C022
-                JEQ     cfgvariant_eval_result2             ; 53E8 0 208 ??? C91B
-                INCB    r0                     ; 53EA 0 208 ??? A8
-                CMPB    r7, #02ah              ; 53EB 0 208 ??? 27C02A
-                JEQ     cfgvariant_eval_result2             ; 53EE 0 208 ??? C915
-                INCB    r0                     ; 53F0 0 208 ??? A8
-                SJ      cfgvariant_eval_result2             ; 53F1 0 208 ??? CB12
-cfgvariant_check_v9:     CMPB    r6, #009h              ; 53F3 0 208 ??? 26C009
-                JNE     cfgvariant_check_v17             ; 53F6 0 208 ??? CE08
-                CMPB    r7, #023h              ; 53F8 0 208 ??? 27C023
-                JEQ     cfgvariant_eval_result2             ; 53FB 0 208 ??? C908
-                INCB    r0                     ; 53FD 0 208 ??? A8
-                SJ      cfgvariant_eval_result2             ; 53FE 0 208 ??? CB05
-cfgvariant_check_v17:     CMPB    r6, #011h              ; 5400 0 208 ??? 26C011
-                JNE     cfgvariant_check_v14_29             ; 5403 0 208 ??? CE02
-cfgvariant_eval_result2:     SJ      cfgvariant_remap_start             ; 5405 0 208 ??? CB77
-cfgvariant_check_v14_29:     CMPB    r6, #00ch              ; 5407 0 208 ??? 26C00C
-                JNE     cfgvariant_check_v14_29_cmp_r6             ; 540A 0 208 ??? CE0C
-                CMPB    r7, #00ah              ; 540C 0 208 ??? 27C00A
-                JNE     cfgvariant_check_v14_29_cmp_r6             ; 540F 0 208 ??? CE07
-                INCB    r0                     ; 5411 0 208 ??? A8
-                INCB    r0                     ; 5412 0 208 ??? A8
-                SB      off(0021ah).1          ; 5413 0 208 ??? C41A19
-                SJ      cfgvariant_eval_result3             ; 5416 0 208 ??? CB12
-cfgvariant_check_v14_29_cmp_r6:     CMPB    r6, #00eh              ; 5418 0 208 ??? 26C00E
-                JEQ     cfgvariant_eval_result3             ; 541B 0 208 ??? C90D
-                CMPB    r6, #01dh              ; 541D 0 208 ??? 26C01D
-                JNE     cfgvariant_check_v15_16_21             ; 5420 0 208 ??? CE0A
-                L       A, (0ffc7h-0ffffh)[USP] ; 5422 1 208 ??? E3C8
-                CMP     A, #08000h             ; 5424 1 208 ??? C60080
-                JLT     cfgvariant_eval_result3             ; 5427 1 208 ??? CA01
-                INCB    r0                     ; 5429 1 208 ??? A8
-cfgvariant_eval_result3:     SJ      cfgvariant_remap_start             ; 542A 1 208 ??? CB52
-cfgvariant_check_v15_16_21:     CMPB    r6, #00fh              ; 542C 0 208 ??? 26C00F
-                JEQ     cfgvariant_eval_result4             ; 542F 0 208 ??? C91C
-                CMPB    r6, #010h              ; 5431 0 208 ??? 26C010
-                JEQ     cfgvariant_eval_result4             ; 5434 0 208 ??? C917
-                CMPB    r6, #013h              ; 5436 0 208 ??? 26C013
-                JNE     cfgvariant_check_v15_16_21_cmp_r6             ; 5439 0 208 ??? CE08
-                CMPB    r7, #00fh              ; 543B 0 208 ??? 27C00F
-                JEQ     cfgvariant_eval_result4             ; 543E 0 208 ??? C90D
-                INCB    r0                     ; 5440 0 208 ??? A8
-                SJ      cfgvariant_eval_result4             ; 5441 0 208 ??? CB0A
-cfgvariant_check_v15_16_21_cmp_r6:     CMPB    r6, #015h              ; 5443 0 208 ??? 26C015
-                JEQ     cfgvariant_eval_result4             ; 5446 0 208 ??? C905
-                CMPB    r6, #01bh              ; 5448 0 208 ??? 26C01B
-                JNE     cfgvariant_check_v5_16_17             ; 544B 0 208 ??? CE02
-cfgvariant_eval_result4:     SJ      cfgvariant_remap_start             ; 544D 0 208 ??? CB2F
-cfgvariant_check_v5_16_17:     CMPB    r6, #005h              ; 544F 0 208 ??? 26C005
-                JEQ     cfgvariant_remap_start             ; 5452 0 208 ??? C92A
-                CMPB    r6, #016h              ; 5454 0 208 ??? 26C016
-                JEQ     cfgvariant_remap_start             ; 5457 0 208 ??? C925
-                CMPB    r6, #017h              ; 5459 0 208 ??? 26C017
-                JEQ     cfgvariant_remap_start             ; 545C 0 208 ??? C920
-                CMPB    r6, #01eh              ; 545E 0 208 ??? 26C01E
-                JNE     cfgvariant_check_v5_16_17_cmp_r6             ; 5461 0 208 ??? CE07
-                J       cfgvariant_check_v5_16_17_cmp_r7             ; 5463 0 208 ??? 038478
-cfgvariant_check_v5_16_17_incb_r0:     INCB    r0                     ; 5467 0 208 ??? A8
-cfgvariant_check_v5_16_17_goto_cfgvariant_remap_start:     SJ      cfgvariant_remap_start             ; 5468 0 208 ??? CB14
-cfgvariant_check_v5_16_17_cmp_r6:     CMPB    r6, #01fh              ; 546A 0 208 ??? 26C01F
-                JNE     cfgvariant_check_v1f             ; 546D 0 208 ??? CE07
-                J       cfgvariant_check_v5_16_17_cmp_r7_2             ; 546F 0 208 ??? 038F78
-cfgvariant_check_v5_16_17_incb_r0_2:     INCB    r0                     ; 5473 0 208 ??? A8
-cfgvariant_check_v5_16_17_goto_cfgvariant_remap_start_2:     SJ      cfgvariant_remap_start             ; 5474 0 208 ??? CB08
-cfgvariant_check_v1f:     CMPB    r6, #019h              ; 5476 0 208 ??? 26C019
-                JEQ     cfgvariant_remap_start             ; 5479 0 208 ??? C903
-                MOVB    r1, r6                 ; 547B 0 208 ??? 2649
-                RT                             ; 547D 0 208 ??? 01
-; [CG] cfgvariant_remap_start  @0x547E
-; [CG] TRACED: a manual compare-chain mapping an internal state code in r6 (0x19, 0x1A, ...)
-; [CG] to output fault/reason byte constants (0x23, ...) - a switch-case-style translation
-; [CG] table used by the self-test/fault-reporting subsystem.
-cfgvariant_remap_start:     CLR     A                      ; 547E 1 208 ??? F9
-                LB      A, r6                  ; 547F 0 208 ??? 7E
-                CMPB    A, #019h               ; 5480 0 208 ??? C619
-                JNE     cfgvariant_remap_1a             ; 5482 0 208 ??? CE04
-                LB      A, #023h               ; 5484 0 208 ??? 7723
-                SJ      cfgvariant_remap_store             ; 5486 0 208 ??? CB16
-cfgvariant_remap_1a:     CMPB    A, #01ah               ; 5488 0 208 ??? C61A
-                JNE     cfgvariant_remap_1b             ; 548A 0 208 ??? CE04
-                LB      A, #024h               ; 548C 0 208 ??? 7724
-                SJ      cfgvariant_remap_store             ; 548E 0 208 ??? CB0E
-cfgvariant_remap_1b:     CMPB    A, #01bh               ; 5490 0 208 ??? C61B
-                JNE     cfgvariant_remap_1d             ; 5492 0 208 ??? CE04
-                LB      A, #029h               ; 5494 0 208 ??? 7729
-                SJ      cfgvariant_remap_store             ; 5496 0 208 ??? CB06
-cfgvariant_remap_1d:     CMPB    A, #01dh               ; 5498 0 208 ??? C61D
-                JNE     cfgvariant_remap_store             ; 549A 0 208 ??? CE02
-                LB      A, #02bh               ; 549C 0 208 ??? 772B
-cfgvariant_remap_store:     STB     A, r1                  ; 549E 0 208 ??? 89
-                SRLB    A                      ; 549F 0 208 ??? 63
-                MOV     X1, A                  ; 54A0 0 208 ??? 50
-                LB      A, r0                  ; 54A1 0 208 ??? 78
-                JGE     cfgvariant_bit_calc             ; 54A2 0 208 ??? CD02
-                ADDB    A, #004h               ; 54A4 0 208 ??? 8604
-cfgvariant_bit_calc:     SBR     00320h[X1]             ; 54A6 0 208 ??? C0200311
-                RT                             ; 54AA 0 208 ??? 01
-; [CG] cfgvariant_snapshot_capture  @0x54AB
-; [CG] VERIFIED: runs once (gated by RAM 0x340==0), then packs several live state bytes - a
-; [CG] rotated off(21Dh).0 bit, port snapshots at 0xB4/0xAC, and ADC-buffer copies read via
-; [CG] X1=0x3C8/0x3C0 - into a sequential block starting at RAM 0x340. Looks like the
-; [CG] construction of a diagnostic/serial report snapshot.
-cfgvariant_snapshot_capture:     MOV     DP, #00340h            ; 54AB 0 208 ??? 624003
-                LB      A, [DP]                ; 54AE 0 208 ??? F2
-                JNE     cfgvariant_snapshot_return             ; 54AF 0 208 ??? CE53
-                LB      A, r1                  ; 54B1 0 208 ??? 79
-                ROLB    A                      ; 54B2 0 208 ??? 33
-                MB      C, off(0021dh).0       ; 54B3 0 208 ??? C41D28
-                RORB    A                      ; 54B6 0 208 ??? 43
-                STB     A, [DP]                ; 54B7 0 208 ??? D2
-                INC     DP                     ; 54B8 0 208 ??? 72
-                LB      A, 0b4h                ; 54B9 0 208 ??? F5B4
-                STB     A, [DP]                ; 54BB 0 208 ??? D2
-                INC     DP                     ; 54BC 0 208 ??? 72
-                L       A, 0ach                ; 54BD 1 208 ??? E5AC
-                SWAP                           ; 54BF 1 208 ??? 83
-                ST      A, [DP]                ; 54C0 1 208 ??? D2
-                INC     DP                     ; 54C1 1 208 ??? 72
-                INC     DP                     ; 54C2 1 208 ??? 72
-                MOV     X1, #003c8h            ; 54C3 1 208 ??? 60C803
-                LB      A, 00000h[X1]          ; 54C6 0 208 ??? F00000
-                STB     A, [DP]                ; 54C9 0 208 ??? D2
-                INC     DP                     ; 54CA 0 208 ??? 72
-                MOV     X1, #003c0h            ; 54CB 0 208 ??? 60C003
-                LB      A, 00000h[X1]          ; 54CE 0 208 ??? F00000
-                STB     A, [DP]                ; 54D1 0 208 ??? D2
-                INC     DP                     ; 54D2 0 208 ??? 72
-                LB      A, 0a3h                ; 54D3 0 208 ??? F5A3
-                STB     A, [DP]                ; 54D5 0 208 ??? D2
-                INC     DP                     ; 54D6 0 208 ??? 72
-                MOV     X1, #003c1h            ; 54D7 0 208 ??? 60C103
-                LB      A, 00000h[X1]          ; 54DA 0 208 ??? F00000
-                STB     A, [DP]                ; 54DD 0 208 ??? D2
-                INC     DP                     ; 54DE 0 208 ??? 72
-                MOV     X1, #00392h            ; 54DF 0 208 ??? 609203
-                LB      A, 00000h[X1]          ; 54E2 0 208 ??? F00000
-                STB     A, [DP]                ; 54E5 0 208 ??? D2
-                INC     DP                     ; 54E6 0 208 ??? 72
-                LB      A, 0c3h                ; 54E7 0 208 ??? F5C3
-                STB     A, [DP]                ; 54E9 0 208 ??? D2
-                INC     DP                     ; 54EA 0 208 ??? 72
-                MOV     X1, #003d4h            ; 54EB 0 208 ??? 60D403
-                L       A, 00000h[X1]          ; 54EE 1 208 ??? E00000
-                SWAP                           ; 54F1 1 208 ??? 83
-                ST      A, [DP]                ; 54F2 1 208 ??? D2
-                INC     DP                     ; 54F3 1 208 ??? 72
-                INC     DP                     ; 54F4 1 208 ??? 72
-                LB      A, 0c2h                ; 54F5 0 208 ??? F5C2
-                STB     A, [DP]                ; 54F7 0 208 ??? D2
-                INC     DP                     ; 54F8 0 208 ??? 72
-                LB      A, (0ffc8h-0ffffh)[USP] ; 54F9 0 208 ??? F3C9
-                STB     A, [DP]                ; 54FB 0 208 ??? D2
-                INC     DP                     ; 54FC 0 208 ??? 72
-                LB      A, 0cdh                ; 54FD 0 208 ??? F5CD
-                STB     A, [DP]                ; 54FF 0 208 ??? D2
-                INC     DP                     ; 5500 0 208 ??? 72
-                LB      A, off(002f5h)         ; 5501 0 208 ??? F4F5
-                STB     A, [DP]                ; 5503 0 208 ??? D2
-cfgvariant_snapshot_return:     RT                             ; 5504 0 208 ??? 01
-cfgvariant_state_reset:     CLR     A                      ; 5505 1 208 ??? F9
-                MOV     DP, #00354h            ; 5506 1 208 ??? 625403
-cfgvariant_state_clear_loop:     DEC     DP                     ; 5509 1 208 ??? 82
-                DEC     DP                     ; 550A 1 208 ??? 82
-                ST      A, [DP]                ; 550B 1 208 ??? D2
-                CMP     DP, #0031ah            ; 550C 1 208 ??? 92C01A03
-                JGT     cfgvariant_state_clear_loop             ; 5510 1 208 ??? C8F7
-                RT                             ; 5512 1 208 ??? 01
 ; [CG] cfgvariant_ram_init_0x300  @0x5513
 ; [CG] VERIFIED: initializes RAM 0x300-0x31xx with default sentinel values (0x8000 words, a
 ; [CG] 0x7B byte, a 0x332 word). This is exactly the RAM range cfgvariant_checksum2_calc (0x5548)
@@ -8490,21 +6563,6 @@ cfgvariant_ram_init_0x300:     L       A, #08000h             ; 5513 1 208 ??? 6
                 ST      A, [DP]                ; 5542 1 208 ??? D2
                 MOVB    off(002f4h), #0ffh     ; 5543 1 208 ??? C4F498FF
                 RT                             ; 5547 1 208 ??? 01
-cfgvariant_checksum2_calc:     MOV     DP, #00320h            ; 5548 0 208 ??? 622003
-                LB      A, [DP]                ; 554B 0 208 ??? F2
-                ANDB    A, #0f0h               ; 554C 0 208 ??? D6F0
-                STB     A, r0                  ; 554E 0 208 ??? 88
-                STB     A, r1                  ; 554F 0 208 ??? 89
-cfgvariant_checksum2_loop:     INC     DP                     ; 5550 0 208 ??? 72
-                LB      A, r0                  ; 5551 0 208 ??? 78
-                ADDB    A, [DP]                ; 5552 0 208 ??? C282
-                STB     A, r0                  ; 5554 0 208 ??? 88
-                LB      A, r1                  ; 5555 0 208 ??? 79
-                XORB    A, [DP]                ; 5556 0 208 ??? C2F2
-                STB     A, r1                  ; 5558 0 208 ??? 89
-                CMP     DP, #0034fh            ; 5559 0 208 ??? 92C04F03
-                JNE     cfgvariant_checksum2_loop             ; 555D 0 208 ??? CEF1
-                RT                             ; 555F 0 208 ??? 01
 boot_completion_helper:     CLRB    A                      ; 5560 0 208 180 FA
                 LCB     A, boot_completion_helper_tbl            ; 5561 0 208 180 909D0160
                 SLLB    A                      ; 5565 0 208 180 53
@@ -8629,7 +6687,6 @@ boot_flag_gearpreset_alt_store_carry_ram227_bit2:     MB      off(00227h).2, C  
                 SJ      boot_flag_gearpreset_alt_store_carry_ram219_bit4             ; 567C 0 208 180 CB1C
 boot_flag_gearpreset_alt_goto_5953:     J       boot_flag_gearpreset_alt_clear_carry_2             ; 567E 0 208 180 035359
 boot_flag_gearpreset_alt_if_ne_goto_5694:     JNE     boot_flag_gearpreset_alt_load_dp             ; 5682 0 208 180 CE10
-                NOP                            ; 5684 0 208 180 00
                 LCB     A, diag_snapshot_copy_loop_tbl            ; 5685 0 208 180 909D0B60
                 JEQ     boot_flag_gearpreset_alt_store_carry_ram219_bit4             ; 5689 0 208 180 C90F
                 LCB     A, diag_snapshot_copy_loop_tbl_3            ; 568B 0 208 180 909D0E60
@@ -8648,12 +6705,8 @@ boot_flag_3cf_check:     MOV     DP, #003c3h            ; 56A9 0 208 180 62C303
                 XORB    PSWH, #080h            ; 56AF 0 208 180 A2F080
 boot_flag_final:     MOV     DP, #00354h            ; 56B2 0 208 180 625403
                 RB      [DP].1                 ; 56B5 (skeleton: serial always off - stock copied the serial/diag mode into 354h.1 here)
-                NOP                            ; 56B7 0 208 180 00
-                NOP                            ; 56B8 0 208 180 00
-                NOP                            ; 56B9 0 208 180 00
                 RT                             ; 56BA 0 208 180 01
 revlimit_table_select_if_ram217_bit5_set:     JBS     off(00217h).5, revlimit_table_select_load_stk_3 ; 56BB 1 208 180 ED1706
-                JBS     off(00214h).0, revlimit_table_select_goto_3f98 ; 56BE 1 208 180 E81407
                 J       revlimit_table_select_load_stk             ; 56C1 1 208 180 03513F
 revlimit_table_select_load_stk_3:     MOVB    (00189h-00180h)[USP], #00ch ; 56C4 1 208 180 C309980C
 revlimit_table_select_goto_3f98:     J       revlimit_table_select_and_ie             ; 56C8 1 208 180 03983F
@@ -8702,7 +6755,7 @@ idle_vcal5_call3_if_ram21a_bit0_clr:     JBR     off(0021ah).0, idle_vcal5_call3
                 JBR     off(00217h).6, idle_vcal5_call3_if_lt_goto_573e ; 5733 1 208 180 DE1703
                 MB      C, off(00225h).4       ; 5736 1 208 180 C4252C
 idle_vcal5_call3_if_lt_goto_573e:     JLT     idle_vcal5_call3_goto_30c2             ; 5739 1 208 180 CA03
-                J       idle_vcal5_call3_goto_5b4f             ; 573B 1 208 180 036230
+                J       idle_vcal5_call3_load_ram27c           ; 573B 1 208 180 036230
 idle_vcal5_call3_goto_30c2:     J       idle_stall_check2_if_ram217_bit5_clr             ; 573E 1 208 180 03C230
 idle_stall_diff_calc_load_ram284:     L       A, off(00284h)         ; 5741 1 208 180 E484
                 SUB     A, off(00276h)         ; 5743 1 208 180 A776
@@ -8722,24 +6775,13 @@ nmi_poll_p4_1_load_p2:     MOVB    P2, #0ffh              ; 576B 1 208 ??? C5249
                 CLRB    A                      ; 5775 0 208 ??? FA
                 STB     A, ADSCAN              ; 5776 0 208 ??? D558
                 J       nmi_poll_p4_1_store_adsel             ; 5778 0 208 ??? 035800
-                DB  0F9h,07Eh,032h,0B9h,051h,003h,099h,023h ; 577B
 idle_target_correction_done:     XCHGB   A, r4                  ; 578F 0 208 180 2410
                 SUBB    r4, A                  ; 5791 0 208 180 24A1
                 JGT     idle_target_correction_done_clear_acc_2             ; 5793 0 208 180 C803
                 J       idle_target_correction_done_clear_acc             ; 5795 0 208 180 03D82B
 idle_target_correction_done_clear_acc_2:     CLR     A                      ; 5798 1 208 180 F9
                 CAL     injtimer_bank_calc3             ; 5799 1 208 180 32E54E
-                J       to_idle_step_condition_dispatch             ; 579C 1 208 180 03DA2B
-ignition_timing_calc_task_if_ge_goto_57a2:     JGE     ignition_timing_calc_task_cmp_acc_7             ; 579F 0 208 180 CD01
-                CLRB    A                      ; 57A1 0 208 180 FA
-ignition_timing_calc_task_cmp_acc_7:     CMPB    A, r5                  ; 57A2 0 208 180 4D
-                MB      off(0022eh).4, C       ; 57A3 0 208 180 C42E3C
-                J       ignition_timing_calc_task_load_ram0b4             ; 57A6 0 208 180 030532
-ignition_timing_calc_task_if_ge_goto_57ac:     JGE     ignition_timing_calc_task_cmp_acc_8             ; 57A9 0 208 180 CD01
-                CLRB    A                      ; 57AB 0 208 180 FA
-ignition_timing_calc_task_cmp_acc_8:     CMPB    A, r5                  ; 57AC 0 208 180 4D
-                MB      off(0022eh).6, C       ; 57AD 0 208 180 C42E3E
-                J       ignition_timing_calc_task_load_ram0b4_2             ; 57B0 0 208 180 032532
+                J       idle_step_flag_store                        ; 579C 1 208 180 03DA2B
 cfg_selector3_dispatch_cmp_ram280:     CMP     off(00280h), #00700h   ; 5802 0 208 180 B480C00007
                 JGE     cfg_selector3_dispatch_goto_2b5a             ; 5807 0 208 180 CD04
 cfg_selector3_dispatch_cmp_acc:     CMPB    A, r1                  ; 5809 0 208 180 49
@@ -8748,27 +6790,12 @@ cfg_selector3_dispatch_goto_2b5a:     J       idle_ectvs_result1_load_r1        
 overrev_hardcap_compare_load_carry_ram0a0_bit1:     MB      C, 0a0h.1              ; 5810 0 200 180 C5A029
                 JGE     overrev_hardcap_compare_nop_acc             ; 5813 0 200 180 CD03
                 MOV     X1, #overrev_hardcap_compare_tbl          ; 5815 0 200 180 606958
-overrev_hardcap_compare_nop_acc:     NOP                            ; 5818 0 200 180 00
-                NOP                            ; 5819 0 200 180 00
-                NOP                            ; 581A 0 200 180 00
+overrev_hardcap_compare_nop_acc:
                 JBR     off(00223h).4, overrev_hardcap_compare_load_ram236 ; 581B 0 200 180 DC2304
                 ADD     X1, #0002ch            ; 581E 0 200 180 90802C00
 overrev_hardcap_compare_load_ram236:     LB      A, off(00236h)         ; 5822 0 200 180 F436
                 VCAL    0                      ; 5824 0 200 180 10
                 J       knockretard2_store             ; 5825 0 200 180 039D0C
-to_vtec_debounce_store_clear_ram0a0_bit1:     RB      0a0h.1                 ; 5828 0 100 280 C5A009
-                CMPCB   A, [DP]                ; 582B 0 100 280 92AE
-                JLE     to_vtec_debounce_store_goto_10fa             ; 582D 0 100 280 CF0B
-                SB      0a0h.1                 ; 582F 0 100 280 C5A019
-                ADD     DP, #00004h            ; 5832 0 100 280 92800400
-                CMPCB   A, [DP]                ; 5836 0 100 280 92AE
-                JGT     to_vtec_debounce_store_add_dp             ; 5838 0 100 280 C803
-to_vtec_debounce_store_goto_10fa:     J       to_vtec_debounce_store_load_imm             ; 583A 0 100 280 03FA10
-to_vtec_debounce_store_add_dp:     ADD     DP, #00004h            ; 583D 0 100 280 92800400
-                J       to_vtec_debounce_store_incb_r1             ; 5841 0 100 280 03E810
-to_vtec_debounce_store_if_le_goto_583a:     JLE     to_vtec_debounce_store_goto_10fa             ; 5844 0 100 280 CFF4
-                ADD     DP, #00004h            ; 5846 0 100 280 92800400
-                J       to_vtec_debounce_store_incb_r1_2             ; 584A 0 100 280 03F410
 to_vtec_debounce_store_tbl:       DB  04Eh,04Eh,04Eh,04Eh,063h,063h,063h,063h ; 584D
                 DB  077h,077h,077h,077h,08Bh,08Bh,08Bh,08Bh ; 5855
                 DB  0A0h,0A0h,0A0h,0A0h,0B4h,0B4h,0B4h,0B4h ; 585D
@@ -8788,14 +6815,6 @@ dwell_scale_shift_if_ram21d_bit4_clr:     JBR     off(0021dh).4, dwell_scale_shi
                 ADD     DP, #00014h            ; 58C4 0 200 180 92801400
 dwell_scale_shift_call_knock_244_helper:     CAL     knock_244_helper             ; 58C8 0 200 180 327950
                 J       dwell_scale_shift_store_ram249             ; 58CB 0 200 180 03C80E
-state_21a_7_dispatch3_if_ram21a_bit6_clr:     JBR     off(0021ah).6, state_21a_7_dispatch3_goto_state_2de_reset ; 58CE 0 208 180 DE1A06
-                JBS     off(00217h).5, state_21a_7_dispatch3_goto_state_2de_reset ; 58D1 0 208 180 ED1703
-                J       state_21a_7_dispatch3_if_ram215_bit1_set             ; 58D4 0 208 180 034845
-state_21a_7_dispatch3_goto_state_2de_reset:     J       state_2de_reset             ; 58D7 0 208 180 036445
-state_21a_7_dispatch2_if_ram21a_bit6_clr:     JBR     off(0021ah).6, state_21a_7_dispatch2_goto_state_2df_reset ; 58DA 0 208 180 DE1A06
-                JBS     off(00217h).5, state_21a_7_dispatch2_goto_state_2df_reset ; 58DD 0 208 180 ED1703
-                J       state_21a_7_dispatch2_load_ram0bf             ; 58E0 0 208 180 036E45
-state_21a_7_dispatch2_goto_state_2df_reset:     J       state_2df_reset             ; 58E3 0 208 180 038545
 dwell_scale_shift_tbl:       DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h ; 58E6
                 DB  000h,000h,000h,000h,000h,000h,020h,03Ah,063h,07Ah ; 58F0
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h ; 58FA
@@ -8806,7 +6825,7 @@ ve_result_flag_store_if_ge_goto_5914:     JGE     ve_result_flag_store_goto_165a
 ve_result_flag_store_goto_165a:     J       ve_result_flag_store_cmp_acch             ; 5914 0 100 280 035A16
 idle_sub_result_store_store_tbl_x1:     ST      A, 003b4h[X1]          ; 5917 1 100 280 D0B403
                 ST      A, 003d4h[X1]          ; 591A 1 100 280 D0D403
-                J       idle_sub_result_store_goto_1fe6             ; 591D 1 100 280 03E91E
+                J       cylinder_ign_correct_apply_load_imm_2       ; 591D 1 100 280 03E91E
 injtimer_bank_a_calc_if_ram11c_bit5_clr:     JBR     off(0011ch).5, injtimer_bank_a_store ; 5920 1 100 280 DD1C01
                 CLR     A                      ; 5923 1 100 280 F9
 injtimer_bank_a_store:     MOV     DP, #003d4h            ; 5924 1 100 280 62D403
@@ -8900,9 +6919,6 @@ select_dp_3d9_3d6_flag_222_6:     LB      A, [DP]                ; 5A19 0 208 18
                 SUBB    A, #007h               ; 5A1E 0 208 180 A607
                 J       select_dp_3d9_3d6_flag_222_6_if_ge_goto_div_scale_calc1             ; 5A20 0 208 180 03743E
 select_dp_3d9_3d6_flag_222_6_goto_div_scale_default:     J       div_scale_default             ; 5A23 0 208 180 038F3E
-                DB  0C4h,02Ah,02Bh,0D9h,027h,003h,0C4h,026h ; 5A26
-                DB  02Ch,0CAh,003h,003h,080h,02Bh,003h,05Ah ; 5A2E
-                DB  02Bh ; 5A36
 fuelcut_output_flags_load_ram0c4:     LB      A, 0c4h                ; 5A37 0 100 280 F5C4
                 CMPB    A, #082h               ; 5A39 0 100 280 C682
                 JBS     off(00129h).5, tps_hysteresis_reentry ; 5A3B 0 100 280 ED2902
@@ -8924,15 +6940,6 @@ postig_rpm_compare:     CMPB    A, off(0012dh)         ; 5A5E 0 100 280 C72D
                 JGT     postig_rpm_compare_goto_194c             ; 5A60 0 100 280 C803
                 J       postig_rpm_compare_cmp_ram0c1             ; 5A62 0 100 280 030B19
 postig_rpm_compare_goto_194c:     J       ignmap2_result_check_clear_acc             ; 5A65 0 100 280 034C19
-ignition_timing_calc_task_mul_acc_3:     MUL                            ; 5A68 1 208 180 9035
-                SLL     A                      ; 5A6A 1 208 180 53
-                ROL     er1                    ; 5A6B 1 208 180 45B7
-                JGE     ignition_timing_calc_task_load_ram29a             ; 5A6D 1 208 180 CD04
-                MOV     er1, #0ffffh           ; 5A6F 1 208 180 4598FFFF
-ignition_timing_calc_task_load_ram29a:     L       A, off(0029ah)         ; 5A73 1 208 180 E49A
-                J       ignition_timing_calc_task_load_carry_pswl_bit4             ; 5A75 1 208 180 03B934
-                DB  0D5h,0F0h,0D5h,0EEh,0C4h,032h,00Fh,003h ; 5A78
-                DB  0FBh,039h ; 5A80
 nmi_enter_lowpower_seq_load_ram0eb:     LB      A, 0ebh                ; 5A82 0 208 ??? F5EB
                 JNE     nmi_enter_lowpower_seq_brk             ; 5A84 0 208 ??? CE04
                 MOVB    0ebh, #047h            ; 5A86 0 208 ??? C5EB9847
@@ -8945,9 +6952,8 @@ callhelper_table_interp_lookup_load_x1:     MOV     X1, #callhelper_table_interp
                 VCAL    0                      ; 5ACA 0 200 180 10
                 CMPB    A, 0bbh                ; 5ACB 0 200 180 C5BBC2
                 MB      off(00231h).6, C       ; 5ACE 0 200 180 C4313E
-                L       A, off(00212h)         ; 5AD1 1 200 180 E412
-                AND     A, #08074h             ; 5AD3 1 200 180 D67480
-                J       callhelper_table_interp_lookup_if_ne_goto_tipin_gate_fai             ; 5AD6 1 200 180 03A10D
+                CLR     A                      ; 5AD1 (skeleton: fault flags are always clear)
+                J       skel_tipin_after_fault_test
 tipin_gate_pass_load_ram24f:     LB      A, off(0024fh)         ; 5AD9 0 200 180 F44F
                 EXTND                          ; 5ADB 1 200 180 F8
                 LCB     A, tbl_5b2e[ACC]       ; 5ADC 1 200 180 B506AB2E5B
@@ -8995,7 +7001,7 @@ idle_vcal5_call3_load_ram27c:     L       A, off(0027ch)         ; 5B4F 1 208 18
                 JNE     idle_vcal5_call3_goto_30c2_2             ; 5B51 1 208 180 CE07
                 L       A, off(00270h)         ; 5B53 1 208 180 E470
                 JNE     idle_vcal5_call3_goto_30c2_2             ; 5B55 1 208 180 CE03
-                J       idle_vcal5_call3_goto_5f09             ; 5B57 1 208 180 036630
+                J       idle_vcal5_call3_load_ram266           ; 5B57 1 208 180 036630
 idle_vcal5_call3_goto_30c2_2:     J       idle_stall_check2_if_ram217_bit5_clr             ; 5B5A 1 208 180 03C230
 dwell_rpm_gate3_load_r0:     MOVB    r0, off(00173h)        ; 5B5D 0 100 280 C47348
                 CMPB    off(0012dh), #080h     ; 5B60 0 100 280 C42DC080
@@ -9015,8 +7021,8 @@ revlimit_table_select_tbl:       DB  0FFh,070h,0E6h,060h,0CFh,050h,0A1h,040h ; 5
                 DB  06Eh,020h,028h,018h,000h,018h ; 5B88
 revlimit_table_select_tbl_2:       DB  0FFh,070h,0E6h,060h,0CFh,050h,0A1h,040h ; 5B8E
                 DB  06Eh,020h,028h,014h,000h,014h ; 5B96
-postfuel_hyst_lower_calc_call_clamp_diff_15b_1ec:     CAL     clamp_diff_15b_1ec             ; 5B9C 1 100 280 32135C
-                J       cylinder_ign_correct_apply_goto_5c43             ; 5B9F 1 100 280 03E61F
+postfuel_hyst_lower_calc_call_clamp_diff_15b_1ec:     SCAL     clamp_diff_15b_1ec            ; 5B9C 1 100 280 32135C
+                J       cylinder_ign_correct_apply_load_imm_2            ; 5B9F 1 100 280 03E61F
 to_injtimer_sub_common:     LB      A, #040h               ; 5BA2 0 100 280 7740
                 JBS     off(00129h).3, to_injtimer_sub_common_cmp_acc_2 ; 5BA4 0 100 280 EB2902
                 LB      A, #04dh               ; 5BA7 0 100 280 774D
@@ -9028,9 +7034,7 @@ to_injtimer_sub_common_cmp_acc_2:     CMPB    A, off(0012dh)         ; 5BA9 0 10
 to_injtimer_sub_common_cmp_acc_3:     CMPB    A, off(0012ch)         ; 5BB5 0 100 280 C72C
                 MB      off(00129h).4, C       ; 5BB7 0 100 280 C4293C
                 LB      A, off(0015eh)         ; 5BBA 0 100 280 F45E
-                JBS     off(0011dh).4, to_injtimer_sub_common_goto_1c97 ; 5BBC 0 100 280 EC1D03
                 J       to_injtimer_sub_common_load_imm             ; 5BBF 0 100 280 036F1C
-to_injtimer_sub_common_goto_1c97:     J       to_injtimer_sub_common_store_ram153             ; 5BC2 0 100 280 03971C
 to_injtimer_sub_common_store_r7:     STB     A, r7                  ; 5BC5 0 100 280 8F
                 JBS     off(0011dh).0, to_injtimer_sub_common_load_ram12c ; 5BC6 0 100 280 E81D37
                 CMP     off(0014ah), #03000h   ; 5BC9 0 100 280 B44AC00030
@@ -9047,7 +7051,7 @@ to_injtimer_sub_common_if_ram11b_bit1_clr:     JBR     off(0011bh).1, to_injtime
                 LB      A, #004h               ; 5BE7 0 100 280 7704
 to_injtimer_sub_common_cmp_acc_4:     CMPB    A, 0bdh                ; 5BE9 0 100 280 C5BDC2
                 JGE     to_injtimer_sub_common_load_ram1ed             ; 5BEC 0 100 280 CD05
-to_injtimer_sub_common_call_clamp_diff_15b_1ec:     CAL     clamp_diff_15b_1ec             ; 5BEE 0 100 280 32135C
+to_injtimer_sub_common_call_clamp_diff_15b_1ec:     SCAL     clamp_diff_15b_1ec            ; 5BEE 0 100 280 32135C
                 SJ      to_injtimer_sub_common_load_ram12c             ; 5BF1 0 100 280 CB0D
 to_injtimer_sub_common_load_ram1ed:     LB      A, off(001edh)         ; 5BF3 0 100 280 F4ED
                 MOVB    r0, #0fah              ; 5BF5 0 100 280 98FA
@@ -9104,8 +7108,6 @@ to_gio_mode_dispatch_if_ram124_bit5_set:     JBS     off(00124h).5, injector_eff
                 JGE     injector_effective_pw_calc             ; 5C7F 0 100 280 CD02
                 ADDB    A, #001h               ; 5C81 0 100 280 8601
 injector_effective_pw_calc:     J       injector_effective_pw_store             ; 5C83 0 100 280 036D20
-                DB  0D9h,01Bh,007h,0C5h,0BDh,0C0h,020h,003h ; 5C86
-                DB  079h,033h,003h,07Bh,033h ; 5C8E
 tipin_decay_store_store_carry_ram220_bit1:     MB      off(00220h).1, C       ; 5C93 0 200 180 C42039
                 LB      A, #000h               ; 5C96 0 200 180 7700
                 JBS     off(00225h).3, knock244_threshold_check ; 5C98 0 200 180 EB2502
@@ -9121,7 +7123,7 @@ knock244_threshold_check:     CMPB    A, off(00243h)         ; 5C9D 0 200 180 C7
                 MOVB    r1, #006h              ; 5CAE 0 200 180 9906
                 MOVB    r2, #033h              ; 5CB0 0 200 180 9A33
                 MOVB    r3, #00ch              ; 5CB2 0 200 180 9B0C
-dwellbase_gate1:     JBS     off(00212h).6, gate_255_common ; 5CB4 0 200 180 EE1220
+dwellbase_gate1:
                 JBS     off(0021dh).4, gate_255_common ; 5CB7 0 200 180 EC1D1D
                 CMPB    0c1h, #034h            ; 5CBA 0 200 180 C5C1C034
                 JGE     gate_255_common             ; 5CBE 0 200 180 CD17
@@ -9167,8 +7169,7 @@ idle_sub_gate2_if_ram216_bit3_set:     JBS     off(00216h).3, idle_sub_gate2_cmp
                 JBR     off(0021ah).3, idle_sub_gate2_cmp_acc_2 ; 5D15 1 208 180 DB1A11
                 JBR     off(00218h).2, idle_sub_gate2_cmp_acc_2 ; 5D18 1 208 180 DA180E
                 MOV     X1, #00a00h            ; 5D1B 1 208 180 60000A
-                JBR     off(00211h).2, idle_sub_gate2_cmp_acc ; 5D1E 1 208 180 DA1103
-                MOV     X1, #00b00h            ; 5D21 1 208 180 60000B
+                SJ       idle_sub_gate2_cmp_acc ; 5D1E 1 208 180 DA1103
 idle_sub_gate2_cmp_acc:     CMP     A, X1                  ; 5D24 1 208 180 90C2
                 JGE     idle_sub_gate2_cmp_acc_2             ; 5D26 1 208 180 CD01
                 L       A, X1                  ; 5D28 1 208 180 40
@@ -9222,10 +7223,9 @@ idle_mode_gate6_if_ram22b_bit3_clr:     JBR     off(0022bh).3, idle_mode_gate6_g
 idle_mode_gate6_goto_2fba:     J       idle_mode_gate6_if_ram229_bit6_clr             ; 5DDA 0 208 180 03BA2F
 idle_mode_gate6_goto_idle_pi_mul1:     J       idle_pi_mul1             ; 5DDD 0 208 180 03ED2F
 idle_mode_gate6_cmp_ram2dc:     CMPB    off(002dch), #000h     ; 5DE0 1 208 180 C4DCC000
-                JEQ     idle_mode_gate6_goto_59fa             ; 5DE4 1 208 180 C906
+                JEQ     idle_mode_gate6_load_x2               ; 5DE4 1 208 180 C906
                 SB      off(00222h).7          ; 5DE6 1 208 180 C4221F
                 J       idle_mode_gate6_if_ne_goto_5a02             ; 5DE9 1 208 180 03F859
-idle_mode_gate6_goto_59fa:     J       idle_mode_gate6_goto_5def             ; 5DEC 1 208 180 03FA59
 idle_mode_gate6_load_x2:     MOV     X2, A                  ; 5DEF 1 208 180 51
                 LB      A, 0c0h                ; 5DF0 0 208 180 F5C0
                 MOV     X1, #idle_mode_gate6_tbl          ; 5DF2 0 208 180 60FC5D
@@ -9282,8 +7282,7 @@ idle_pid_p0_check:     MB      C, P0.2                ; 5E6C 0 208 180 C5202A
 idle_pid_flag_store:     MOVB    off(00297h), r1        ; 5E71 0 208 180 217C97
 idle_pid_flag_store_goto_idle_pid_flag_clear:     J       idle_pid_flag_clear             ; 5E74 0 208 180 03682C
 idle_ectvs_result1:     JBR     off(00227h).1, idle_ectvs_result1_if_ram22a_bit3_clr ; 5E77 0 208 180 D92705
-                JBR     off(00226h).4, idle_ectvs_result1_goto_2b80 ; 5E7A 0 208 180 DC2617
-                SJ      idle_ectvs_result1_goto_2b5a             ; 5E7D 0 208 180 CB0B
+                J       idle_ectvs_result1_cmp_acc   ; 5E7A 0 208 180 DC2617
 idle_ectvs_result1_if_ram22a_bit3_clr:     JBR     off(0022ah).3, idle_ectvs_result1_if_ram225_bit1_clr ; 5E7F 0 208 180 DB2A0B
                 MOVB    off(002ddh), #014h     ; 5E82 0 208 180 C4DD9814
                 MOVB    off(002deh), #05ah     ; 5E86 0 208 180 C4DE985A
@@ -9306,21 +7305,12 @@ idle_vcal5_call3_load_ram266:     L       A, off(00266h)         ; 5F09 1 208 18
                 JNE     idle_vcal5_call3_goto_30c2_3             ; 5F0B 1 208 180 CE03
                 J       idle_vcal5_call3_cmp_ram0a6             ; 5F0D 1 208 180 036930
 idle_vcal5_call3_goto_30c2_3:     J       idle_stall_check2_if_ram217_bit5_clr             ; 5F10 1 208 180 03C230
-ignition_timing_calc_task_load_ram0bd:     LB      A, 0bdh                ; 5F13 0 208 180 F5BD
-                JBS     off(0021bh).1, ignition_timing_calc_task_cmp_acc_9 ; 5F15 0 208 180 E91B04
-                CMPB    A, #010h               ; 5F18 0 208 180 C610
-                JGT     ignition_timing_calc_task_goto_337b             ; 5F1A 0 208 180 C805
-ignition_timing_calc_task_cmp_acc_9:     CMPB    A, #020h               ; 5F1C 0 208 180 C620
-                J       ignition_timing_calc_task_if_le_goto_337f             ; 5F1E 0 208 180 037933
-ignition_timing_calc_task_goto_337b:     J       ignition_timing_calc_task_load_ram2d2             ; 5F21 0 208 180 037B33
 div_scale_store_load_x1:     MOV     X1, #00004h            ; 5F24 0 208 180 600400
                 JBS     off(00216h).3, div_scale_store_goto_gear_detect_store ; 5F27 0 208 180 EB1605
                 LB      A, #001h               ; 5F2A 0 208 180 7701
                 J       div_scale_store_clear_x1             ; 5F2C 0 208 180 03A03E
 div_scale_store_goto_gear_detect_store:     J       gear_detect_store             ; 5F2F 0 208 180 03D43E
-                DB  0EBh,01Dh,006h,0ECh,01Eh,003h,003h,0D5h ; 5F68
-                DB  03Dh,003h,0E4h,03Dh ; 5F70
-crank_tooth_count_store_load_carry_ram113_bit6:     MB      C, off(00113h).6       ; 5F74 0 108 280 C4132E
+crank_tooth_count_store_load_carry_ram113_bit6:     RC                             ; (skeleton: fault flag always clear)
                 MB      off(00122h).1, C       ; 5F77 0 108 280 C42239
                 J       crank_tooth_count_store_if_ram120_bit2_set             ; 5F7A 0 108 280 03CF03
 vcal3_leanprotect_ratelimit_clear_stk:     RB      (00122h-00180h)[USP].2 ; 5F7D 1 208 180 C3A20A
@@ -9332,31 +7322,25 @@ idle_init_start_clear_stk:     RB      (00122h-00180h)[USP].2 ; 5F89 0 208 180 C
                 J       idle_init_start_load_er0             ; 5F8F 0 208 180 032A28
 coldstart_full_reset_andb_p1:     ANDB    P1, #0fch              ; 5F92 0 208 180 C522D0FC
                 CLR     off(00268h)            ; 5F96 0 208 180 B46815
-                J       coldstart_full_reset_goto_7831             ; 5F99 0 208 180 03E539
+                J       coldstart_full_reset_clear_ram221_bit7     ; 5F99 0 208 180 03E539
 coldstart_full_reset_store_ram0f0:     ST      A, 0f0h                ; 5F9C 1 208 180 D5F0
                 ST      A, 0eeh                ; 5F9E 1 208 180 D5EE
                 ANDB    (0011fh-00180h)[USP], #0f9h ; 5FA0 1 208 180 C39FD0F9
                 ANDB    off(0021fh), #0f9h     ; 5FA4 1 208 180 C41FD0F9
                 RB      off(00232h).7          ; 5FA8 1 208 180 C4320F
                 J       warmrestart_tm3_resync             ; 5FAB 1 208 180 03FB39
-dtc13_baro_latch:     RB      099h.2                 ; 5FAE 0 208 180 C5993A
-                VCAL    4                      ; 5FB1 0 208 180 14
-                J       dcode14_check_if_ram217_bit5_set             ; 5FB2 0 208 180 03523C
+dtc13_baro_latch:
 gear_detect_store_load_stk:     MOV     (0017ah-00180h)[USP], A ; 5FB5 0 208 180 B3FA8A
                 VCAL    4                      ; 5FB8 0 208 180 14
                 J       gear_detect_store_load_x1             ; 5FB9 0 208 180 030B3F
 gear_detect_store_load_stk_2:     MOV     (001eah-00180h)[USP], A ; 5FBC 0 208 180 B36A8A
                 VCAL    4                      ; 5FBF 0 208 180 14
                 J       threshold_bank_223_2             ; 5FC0 0 208 180 03293F
-vss_band_dispatch:     MB      P0.1, C                ; 5FC3 0 208 180 C52039
-                VCAL    4                      ; 5FC6 0 208 180 14
-                J       vss_band_dispatch_load_r2             ; 5FC7 0 208 180 035843
 altc_gio_override_check_vcal_4:     VCAL    4                      ; 5FCA 0 208 180 14
                 JBS     off(00227h).3, altc_gio_override_check_goto_4491 ; 5FCB 0 208 180 EB2703
                 J       altc_gio_override_check_if_ram216_bit3_clr             ; 5FCE 0 208 180 036844
 altc_gio_override_check_goto_4491:     J       altc_normal_drive_nop_acc             ; 5FD1 0 208 180 039144
-freezeframe_decode_start_load_ram212:     L       A, off(00212h)         ; 5FDB 1 208 180 E412
-                ORB     A, off(00214h)         ; 5FDD 1 208 180 E714
+freezeframe_decode_start_load_ram212:                CLR     A                      ; 5FDB (skeleton: fault flags are always clear)
                 J       freezeframe_decode_start_add_acc             ; 5FDF 1 208 180 03E64A
 injector_timer_schedule_load_tm0:     L       A, TM0                 ; 5FE2 1 108 280 E530
                 SUB     A, #00001h             ; 5FE4 1 108 280 A60100
@@ -9448,132 +7432,34 @@ boot_completion_helper_goto_55c5:     J       boot_completion_helper_load_r2    
 crankfuel_timer_wait_loop_sll_er0:     SLL     er0                    ; 76F5 1 100 280 44D7
                 RB      off(00122h).0          ; 76F7 1 100 280 C42208
                 J       crankfuel_timer_wait_loop_if_eq_goto_cylinder_index_adva             ; 76FA 1 100 280 038414
-sensor_check_vcal3_if_ram217_bit5_set:     JBS     off(00217h).5, sensor_check_vcal3_load_ram2be ; 76FD 0 208 180 ED1706
-                JBS     off(00230h).5, sensor_check_vcal3_goto_sensor_check_clear ; 7700 0 208 180 ED3007
-                J       sensor_check_vcal3_cmp_ram236             ; 7703 0 208 180 034A3B
-sensor_check_vcal3_load_ram2be:     MOVB    off(002beh), #064h     ; 7706 0 208 180 C4BE9864
-sensor_check_vcal3_goto_sensor_check_clear:     J       sensor_check_clear             ; 770A 0 208 180 03673B
 prep_lowpower_seq_store_tmr1:     ST      A, TMR1                ; 770D 1 208 180 D536
                 SLL     er0                    ; 770F 1 208 180 44D7
                 DIV                            ; 7711 1 208 180 9037
                 DIV                            ; 7713 1 208 180 9037
                 J       prep_lowpower_seq_load_carry_ram09f_bit1             ; 7715 1 208 180 030E4B
-int_crank_sync_if_ram112_bit7_set:     JBS     off(00112h).7, int_crank_sync_set_ram120_bit4 ; 7718 1 108 280 EF1203
-                J       int_crank_sync_clear_irqh_bit7             ; 771B 1 108 280 030304
-int_crank_sync_set_ram120_bit4:     SB      off(00120h).4          ; 771E 1 108 280 C4201C
-                J       crank_sync_retry_check             ; 7721 1 108 280 032D04
+int_crank_sync_if_ram112_bit7_set:
 crank_cycle_p4_gate_if_ram121_bit1_clr:     JBR     off(00121h).1, crank_cycle_p4_gate_goto_crank_cycle_f4_check ; 7730 0 108 280 D9210F
-                JBS     off(00112h).2, crank_cycle_p4_gate_if_ram118_bit0_set ; 7733 0 108 280 EA1203
-                JBR     off(00112h).4, crank_cycle_p4_gate_goto_crank_cycle_result_common ; 7736 0 108 280 DC1203
-crank_cycle_p4_gate_if_ram118_bit0_set:     JBS     off(00118h).0, crank_cycle_p4_gate_goto_crank_cycle_result_a ; 7739 0 108 280 E81803
-crank_cycle_p4_gate_goto_crank_cycle_result_common:     J       crank_cycle_result_common             ; 773C 0 108 280 03D606
-crank_cycle_p4_gate_goto_crank_cycle_result_a:     J       crank_cycle_result_a             ; 773F 0 108 280 03CF06
+                J       crank_cycle_result_common                          ; (skeleton: fault flags are always clear)
 crank_cycle_p4_gate_goto_crank_cycle_f4_check:     J       crank_cycle_f4_check             ; 7742 0 108 280 03AF06
 idle_target_final_store_call_stub_or_short_helper:     CAL     stub_or_short_helper             ; 7745 1 208 180 326B51
                 VCAL    6                      ; 7748 1 208 180 16
                 CLR     A                      ; 7749 1 208 180 F9
-                JBS     off(00212h).2, idle_target_final_store_load_imm ; 774A 1 208 180 EA1203
-                JBR     off(00212h).4, idle_target_final_store_goto_idle_output_vcal5 ; 774D 1 208 180 DC1203
-idle_target_final_store_load_imm:     L       A, #02000h             ; 7750 1 208 180 670020
-idle_target_final_store_goto_idle_output_vcal5:     J       idle_output_vcal5             ; 7753 1 208 180 034B31
-ignition_timing_calc_task_load_ram2cf:     LB      A, off(002cfh)         ; 7756 0 208 180 F4CF
-                JEQ     ignition_timing_calc_task_set_ram222_bit6             ; 7758 0 208 180 C903
-                J       ignition_timing_calc_task_load_ram29f_2             ; 775A 0 208 180 033935
-ignition_timing_calc_task_set_ram222_bit6:     SB      off(00222h).6          ; 775D 0 208 180 C4221E
-                JEQ     ignition_timing_calc_task_load_dp_2             ; 7760 0 208 180 C903
-                J       ignition_timing_calc_task_load_ram29f             ; 7762 0 208 180 031334
-ignition_timing_calc_task_load_dp_2:     MOV     DP, #00316h            ; 7765 0 208 180 621603
-                JBS     off(0022fh).7, ignition_timing_calc_task_load_dp_ind_2 ; 7768 0 208 180 EF2F03
-                MOV     DP, #00318h            ; 776B 0 208 180 621803
-ignition_timing_calc_task_load_dp_ind_2:     L       A, [DP]                ; 776E 1 208 180 E2
-                ST      A, off(0029ah)         ; 776F 1 208 180 D49A
-                J       ignition_timing_calc_task_if_eq_goto_3475             ; 7771 1 208 180 036B34
-ignition_timing_calc_task_clear_ram22f_bit2_2:     RB      off(0022fh).2          ; 7774 1 208 180 C42F0A
-                RB      off(0022fh).1          ; 7777 1 208 180 C42F09
-                J       ignition_timing_calc_task_store_ram298             ; 777A 1 208 180 03BD77
-ignition_timing_calc_task_load_dp_ind_3:     L       A, [DP]                ; 777D 1 208 180 E2
-                SJ      ignition_timing_calc_task_cmp_acc_10             ; 777E 1 208 180 CB02
-ignition_timing_calc_task_if_lt_goto_7787:     JLT     ignition_timing_calc_task_load_imm_4             ; 7780 1 208 180 CA05
-ignition_timing_calc_task_cmp_acc_10:     CMP     A, #003ffh             ; 7782 1 208 180 C6FF03
-                JLT     ignition_timing_calc_task_goto_34c3             ; 7785 1 208 180 CA03
-ignition_timing_calc_task_load_imm_4:     L       A, #003ffh             ; 7787 1 208 180 67FF03
-ignition_timing_calc_task_goto_34c3:     J       ignition_timing_calc_task_goto_34c9             ; 778A 1 208 180 03C334
-ignition_timing_calc_task_sll_acc:     SLL     A                      ; 778D 1 208 180 53
-                JLT     ignition_timing_calc_task_goto_3558             ; 778E 1 208 180 CA03
-                SLL     A                      ; 7790 1 208 180 53
-                JGE     ignition_timing_calc_task_goto_355b             ; 7791 1 208 180 CD03
-ignition_timing_calc_task_goto_3558:     J       ignition_timing_calc_task_load_imm_2             ; 7793 1 208 180 035835
-ignition_timing_calc_task_goto_355b:     J       ignition_timing_calc_task_load_r1             ; 7796 1 208 180 035B35
-ignition_timing_calc_task_if_ge_goto_779d:     JGE     ignition_timing_calc_task_clear_r0_2             ; 7799 1 208 180 CD02
-                MOVB    r1, #0ffh              ; 779B 1 208 180 99FF
-ignition_timing_calc_task_clear_r0_2:     CLRB    r0                     ; 779D 1 208 180 2015
-                L       A, [DP]                ; 779F 1 208 180 E2
-                J       ignition_timing_calc_task_mul_acc_2             ; 77A0 1 208 180 036435
-ignition_timing_calc_task_sll_acc_2:     SLL     A                      ; 77A3 1 208 180 53
-                L       A, er1                 ; 77A4 1 208 180 35
-                ROL     A                      ; 77A5 1 208 180 33
-                CAL     clamp_0_3ff_simple             ; 77A6 1 208 180 32C777
-                J       ignition_timing_calc_task_if_ram22f_bit2_set             ; 77A9 1 208 180 036935
-ignition_timing_calc_task_cmp_acc_11:     CMP     A, #003ffh             ; 77AC 1 208 180 C6FF03
-                JGE     ignition_timing_calc_task_goto_3590             ; 77AF 1 208 180 CD03
-                J       ignition_timing_calc_task_cmp_acc_5             ; 77B1 1 208 180 038B35
-ignition_timing_calc_task_goto_3590:     J       ignition_timing_calc_task_load_imm_3             ; 77B4 1 208 180 039035
-ignition_timing_calc_task_clear_ram22f_bit1:     RB      off(0022fh).1          ; 77B7 1 208 180 C42F09
-ignition_timing_calc_task_clear_ram222_bit6:     RB      off(00222h).6          ; 77BA 1 208 180 C4220E
-ignition_timing_calc_task_store_ram298:     ST      A, off(00298h)         ; 77BD 1 208 180 D498
-                J       ignition_timing_calc_task_cmp_acc_6             ; 77BF 1 208 180 03A035
-ignition_timing_calc_task_clear_ram22f_bit2_3:     RB      off(0022fh).2          ; 77C2 1 208 180 C42F0A
-                SJ      ignition_timing_calc_task_clear_ram222_bit6             ; 77C5 1 208 180 CBF3
-; [CG] clamp_0_3ff_simple  @0x77C7
-; [CG] VERIFIED: clamps A to [0, 0x3FF] using a simpler direct-compare form than
-; [CG] clamp_0_to_3ff (no register-pair bound source, just two fixed compares).
-clamp_0_3ff_simple:     JLT     clamp_0_3ff_simple_load_imm             ; 77C7 1 208 180 CA05
-                CMP     A, #003ffh             ; 77C9 1 208 180 C6FF03
-                JLT     clamp_0_3ff_simple_return             ; 77CC 1 208 180 CA03
-clamp_0_3ff_simple_load_imm:     L       A, #003ffh             ; 77CE 1 208 180 67FF03
-clamp_0_3ff_simple_return:     RT                             ; 77D1 1 208 180 01
+                J       idle_output_vcal5                              ; (skeleton: fault flags are always clear)
 cfg_selector3_dispatch:     JBS     off(00217h).6, cfg_selector3_dispatch_goto_2b7d ; 77D2 0 208 180 EE170D
                 CMP     off(00280h), #08000h   ; 77D5 0 208 180 B480C00080
                 JGE     cfg_selector3_dispatch_goto_5809             ; 77DA 0 208 180 CD03
-                J       cfg_selector3_dispatch_goto_5802             ; 77DC 0 208 180 036D2B
+                J       cfg_selector3_dispatch_cmp_ram280            ; 77DC 0 208 180 036D2B
 cfg_selector3_dispatch_goto_5809:     J       cfg_selector3_dispatch_cmp_acc             ; 77DF 0 208 180 030958
-cfg_selector3_dispatch_goto_2b7d:     J       cfg_selector3_dispatch_goto_idle_ectvs_result1             ; 77E2 0 208 180 037D2B
-                DB  043h,000h,043h,000h,043h,000h,043h,000h ; 77E5
-                DB  030h,000h,043h,000h,043h,000h,043h,000h ; 77ED
-                DB  043h,000h,043h,000h,030h,000h,043h,000h ; 77F5
-                DB  07Ch,003h,035h,004h,0EAh,003h,09Ch,002h ; 77FD
-                DB  080h,000h,09Ch,002h,07Ch,003h,05Ah,004h ; 7805
-                DB  05Ah,004h,05Ah,004h,080h,000h,05Ah,004h ; 780D
+cfg_selector3_dispatch_goto_2b7d:     J       idle_ectvs_result1                                         ; 77E2 0 208 180 037D2B
 coldstart_full_reset_clear_ram221_bit7:     RB      off(00221h).7          ; 7831 0 208 180 C4210F
                 SB      (0011eh-00180h)[USP].4 ; 7834 0 208 180 C39E1C
                 SB      off(0021eh).4          ; 7837 0 208 180 C41E1C
                 J       coldstart_full_reset_orb_tcon3             ; 783A 0 208 180 03E839
-idle_state_defaults_if_ram219_bit0_clr:     JBR     off(00219h).0, idle_state_defaults_goto_idle_stage_b7_store ; 783D 0 208 180 D81906
-                JBR     off(0021eh).4, idle_state_defaults_goto_426c ; 7840 0 208 180 DC1E06
-                J       idle_state_defaults_load_stk             ; 7843 0 208 180 032A42
-idle_state_defaults_goto_idle_stage_b7_store:     J       idle_stage_b7_store             ; 7846 0 208 180 033C42
-idle_state_defaults_goto_426c:     J       idle_stage_c0_load_clear_ram219_bit0             ; 7849 0 208 180 036C42
-purge_counter_check:     JBR     off(00218h).0, purge_counter_check_cmp_stk ; 784C 0 208 180 D81803
-                JBR     off(0021eh).4, purge_counter_check_goto_purge_result_clear ; 784F 0 208 180 DC1E08
-purge_counter_check_cmp_stk:     CMP     (001b4h-00180h)[USP], #005dch ; 7852 0 208 180 B334C0DC05
-                J       purge_counter_check_if_lt_goto_purge_result_clear             ; 7857 0 208 180 034343
-purge_counter_check_goto_purge_result_clear:     J       purge_result_clear             ; 785A 0 208 180 035443
-crank_tooth_counter_reset_if_ram113_bit0_set:     JBS     off(00113h).0, crank_tooth_counter_reset_clear_ram11d_bit6 ; 786C 1 108 280 E81303
-                J       crank_tooth_counter_reset_clear_ram09f_bit2             ; 786F 1 108 280 036C04
-crank_tooth_counter_reset_clear_ram11d_bit6:     RB      off(0011dh).6          ; 7872 1 108 280 C41D0E
-                J       crank_tooth_seq_check             ; 7875 1 108 280 037104
+crank_tooth_counter_reset_if_ram113_bit0_set:
 tps_hysteresis_reentry_if_ram116_bit3_clr:     JBR     off(00116h).3, tps_hysteresis_reentry_goto_postig_gate_chain2 ; 7878 0 100 280 DB1603
                 JBS     off(00111h).5, tps_hysteresis_reentry_goto_postig_result_default ; 787B 0 100 280 ED1103
 tps_hysteresis_reentry_goto_postig_gate_chain2:     J       postig_gate_chain2             ; 787E 0 100 280 03F218
 tps_hysteresis_reentry_goto_postig_result_default:     J       postig_result_default             ; 7881 0 100 280 032619
-cfgvariant_check_v5_16_17_cmp_r7:     CMPB    r7, #015h              ; 7884 0 208 ??? 27C015
-                JNE     cfgvariant_check_v5_16_17_goto_5468             ; 7887 0 208 ??? CE03
-                J       cfgvariant_check_v5_16_17_incb_r0             ; 7889 0 208 ??? 036754
-cfgvariant_check_v5_16_17_goto_5468:     J       cfgvariant_check_v5_16_17_goto_cfgvariant_remap_start             ; 788C 0 208 ??? 036854
-cfgvariant_check_v5_16_17_cmp_r7_2:     CMPB    r7, #016h              ; 788F 0 208 ??? 27C016
-                JNE     cfgvariant_check_v5_16_17_goto_5474             ; 7892 0 208 ??? CE03
-                J       cfgvariant_check_v5_16_17_incb_r0_2             ; 7894 0 208 ??? 037354
-cfgvariant_check_v5_16_17_goto_5474:     J       cfgvariant_check_v5_16_17_goto_cfgvariant_remap_start_2             ; 7897 0 208 ??? 037454
 overrev_hardcap_compare_cmp_stk:     CMPB    (001cah-00180h)[USP], #003h ; 789A 0 200 180 C34AC003
                 JNE     overrev_hardcap_compare_goto_knockretard2_store             ; 789E 0 200 180 CE0B
                 LB      A, #000h               ; 78A0 0 200 180 7700
@@ -9612,68 +7498,10 @@ skel_ign_service_store2:
 skel_ign_service_hook:
                 J       hook_ign               ; module slot (tail call)
 
-; ================================================================================================
-; Module interface: fixed addresses the feature editor relies on. See roms/p30-skeleton.md.
-;
-; Hook slots: 3 bytes each, RT until a module is installed; installing one writes J <module> over
-; the slot. The module ends with RT (to the hook site) or with J to the next module on the same hook.
-;   hook_init  5F00  once at power-up, before the main loop starts             (main-loop context)
-;   hook_main  5F03  once per main-loop pass                                     (main-loop context)
-;   hook_fuel  5F06  every fuel calculation, the final pulse width is word 146h  (crank interrupt)
-;   hook_ign   5F09  every spark calculation, the final advance is 246h/247h     (main-loop context)
-;   5F0C-5F17  four spare slots
-; Rules for module code: return with RT; leave LRB, USP, SSP and the caller's register bank as found;
-; A and the flags are free; save DP, X1, X2 if you use them. Use your own register bank:
-;   PUSHS LRB / MOV LRB, #nnh ... POPS LRB   (banks in module RAM: 7Bh=3D8h 7Ch=3E0h 7Dh=3E8h 7Eh=3F0h 3Fh=1F8h)
-;
-; RAM for modules (unused by the skeleton):
-;   0FEh-0FFh  tick: word, +1 every 2.048 ms (timer 1), read it, do not write it
-;   1F0h       fuel-cut request: while any bit is set, fuel is cut like the rev limiter (one bit per module)
-;   2FDh       ignition retard request: subtracted from the final advance (floor 0)
-;   0FBh-0FDh, 1F1h-1FFh, 2F7h-2F9h, 2FEh-2FFh, 3D6h-3F9h  free for modules
-; Outputs freed by the skeleton: P1.4 (dash check-engine lamp, 1 = on) and P1.5 (ECU LED).
-; ================================================================================================
-skel_free_start:                               ; everything from here to 5EFFh is free for modules
-                org 05F00h
-hook_init:      RT
-                NOP
-                NOP
-hook_main:      RT
-                NOP
-                NOP
-hook_fuel:      RT
-                NOP
-                NOP
-hook_ign:       RT
-                NOP
-                NOP
-hook_spare1:    RT
-                NOP
-                NOP
-hook_spare2:    RT
-                NOP
-                NOP
-hook_spare3:    RT
-                NOP
-                NOP
-hook_spare4:    RT
-                NOP
-                NOP
-                org 05FE0h
-skel_info:      DB  050h,033h,030h,02Dh,053h,04Bh,045h,04Ch,045h,054h,04Fh,04Eh ; 5FE0 'P30-SKELETON' identifies the base for the feature editor
-skel_version:   DB  001h, 000h             ; 5FEC layout version 1.0
-skel_free_lo:   DW  skel_free_start        ; 5FEE first free byte below the calibration
-skel_free_hi:   DW  05EFFh                 ; 5FF0 last free byte below the calibration
-skel_free2_lo:  DW  0764Ah                 ; 5FF2 free block above the calibration
-skel_free2_hi:  DW  07FFEh                 ; 5FF4 (7FFFh is the checksum byte)
-skel_hooks:     DW  hook_init              ; 5FF6 hook table
-skel_hookcount: DB  8                      ; 5FF8 slots
-skel_reserved:  DB  0FFh, 0FFh, 0FFh, 0FFh, 0FFh, 0FFh ; 5FF9
 ; ------------------------------------------------------------------------------------------------
-; Calibration: kept at its stock P30 addresses (6000h-7640h), so P30 definitions and XDFs still line up.
-; The gap between the end of the code above and here is free space.
+; Calibration: stock P30 values. Tables only the removed functions used are gone and the rest is packed
+; straight after the code, so use the definitions/XDF made for this ROM, not a stock P30 one.
 ; ------------------------------------------------------------------------------------------------
-                org 06000h
 tbl_idle_pi_clamp:       DB  000h ; 6000
 boot_completion_helper_tbl:       DB  0FFh ; 6001
 boot_completion_helper_tbl_2:       DB  0FFh ; 6002
@@ -9725,21 +7553,8 @@ PostFuelDecay3:       DB  0D7h,0A3h,000h,00Ch,000h,002h,040h,000h ; 609F
 PostFuel:       DB  0FFh,000h,090h,0E6h,000h,070h,0CFh,000h ; 60A7
                 DB  058h,0A1h,099h,049h,07Ah,09Ah,039h,040h ; 60AF
                 DB  000h,028h,000h,000h,028h ; 60B7
-o2trim_ect_offset_lookup_tbl:       DB  001h,000h,000h,001h,001h,000h,000h,002h ; 60BC
-                DB  001h,000h,000h,004h ; 60C4
 tbl_revlimit_cold1:       DB  0AEh,028h,0A1h,034h ; 60C8
 tbl_revlimit_cold3:       DB  0B5h,02Eh,0A9h,062h ; 60CC
-o2_trim_step_threshold_tbl:                 DW  00404h           ; 60D0
-CloseLoopRate:       DB  043h,000h,043h,000h,043h,000h,043h,000h ; 60D2
-                DB  030h,000h,043h,000h,043h,000h,043h,000h ; 60DA
-                DB  043h,000h,043h,000h,030h,000h,043h,000h ; 60E2
-CloseLoopGoose:       DB  07Ch,003h,035h,004h,0EAh,003h,09Ch,002h ; 60EA
-                DB  080h,000h,09Ch,002h,07Ch,003h,05Ah,004h ; 60F2
-                DB  05Ah,004h,05Ah,004h,080h,000h,05Ah,004h ; 60FA
-                DB  000h,000h,000h,000h,000h,000h,000h,000h ; 6102
-                DB  000h,000h,000h,000h,000h,000h,000h,000h ; 610A
-                DB  000h,000h,000h,000h,000h,000h,000h,000h ; 6112
-                DB  000h,000h,000h,000h,000h,000h,000h,000h ; 611A
 tbl_closeloop_tps:       DB  0FFh,050h,0E0h,050h,0D0h,0A0h,0C8h,0D0h ; 6122
                 DB  0C0h,0D8h,04Dh,0EAh,040h,0AEh,000h,0AEh ; 612A
 tbl_revlimit_warm1:       DB  0EEh,000h,0A0h,030h ; 6132
@@ -9851,8 +7666,6 @@ GearCustom:       DB  046h,000h,067h,000h,08Eh,000h,0B8h,000h ; 6403
 crank_edge_flag_store_tbl:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh ; 640B
                 DB  0FFh,0FFh,000h,0FFh ; 6413
 crank_edge_flag_store_tbl_2:       DB  0FFh,0FFh,0FFh,0FFh,080h ; 6417
-newval_table3_call_tbl:       DB  0FFh,0FFh,000h,0FFh ; 641C
-newval_table3_call_tbl_2:       DB  0FFh,0FFh,000h,0FFh ; 6420
 vss_band_224_0_check_tbl:       DB  090h,0A0h,00Ch,00Fh,02Dh,02Fh,02Dh,02Fh ; 6424
                 DB  088h,080h,088h,080h,029h,026h ; 642C
 vtec_state_store2_tbl:       DB  0CAh,0CDh,0D5h,0D8h ; 6432
@@ -9862,42 +7675,9 @@ vtec_state_store2_tbl_3:       DB  0FFh,03Fh,0F8h,03Fh,0F0h,03Fh,0E8h,03Fh ; 643
 vtec_state_store2_tbl_4:       DB  0FFh,03Fh,0F8h,03Fh,0F0h,03Fh,0E8h,03Fh ; 6448
                 DB  0DBh,03Fh,0D6h,0AEh,000h,0AEh ; 6450
 revlimit_table_select_tbl_17:       DB  0FFh,000h,000h,000h ; 6456
-ignition_timing_calc_task_tbl:       DB  046h,04Bh,02Bh,036h,082h,087h,05Fh,064h ; 645A
-                DB  09Ch,0A1h,00Fh,011h,010h,012h,044h,049h ; 6462
-                DB  022h,025h,039h,041h,014h,016h,028h,02Dh ; 646A
-                DB  05Fh,064h,07Dh,082h,014h,019h,021h,026h ; 6472
-                DB  04Ah,04Ch,036h,050h,0B3h,0C0h ; 647A
-ignition_timing_calc_task_tbl_2:       DB  0FFh,001h,09Fh,001h,09Bh,013h,06Eh,013h ; 6480
-                DB  05Ah,013h,041h,005h,000h,005h ; 6488
-ignition_timing_calc_task_tbl_3:       DB  0FFh,0FAh,0B0h,0FAh,09Bh,0FAh,082h,0FAh ; 648E
-                DB  080h,09Ch,078h,092h,064h,076h,05Ah,069h ; 6496
-                DB  046h,054h,041h,04Eh,01Eh,040h,000h,040h ; 649E
-ignition_timing_calc_task_tbl_4:       DB  0FFh,0FAh,0B0h,0FAh,08Eh,0FAh,087h,0FAh ; 64A6
-                DB  085h,085h,078h,073h,064h,05Bh,05Ah,04Dh ; 64AE
-                DB  046h,03Dh,041h,038h,01Eh,038h,000h,038h ; 64B6
-ignition_timing_calc_task_tbl_5:       DB  0FFh,0FAh,09Ch,0FAh,09Ah,0B6h,096h,0B6h ; 64BE
-                DB  085h,0A2h,078h,092h,064h,076h,05Ah,069h ; 64C6
-                DB  046h,054h,041h,04Eh,01Eh,040h,000h,040h ; 64CE
-ignition_timing_calc_task_tbl_6:       DB  0FFh,0FAh,0A1h,0FAh,09Fh,0A3h,09Bh,0A3h ; 64D6
-                DB  085h,085h,078h,073h,064h,05Bh,05Ah,04Dh ; 64DE
-                DB  046h,03Dh,041h,038h,01Eh,038h,000h,038h ; 64E6
-ignition_timing_calc_task_tbl_7:       DB  0FFh,014h,0B4h,014h,04Eh,014h,04Ch,003h,000h,003h ; 64EE
-ignition_timing_calc_task_tbl_8:       DB  0FFh,01Bh,0B4h,01Bh,04Eh,01Bh,04Ch,006h,000h,006h ; 64F8
-ignition_timing_calc_task_tbl_9:       DB  0FFh,02Ch,050h,02Ch,03Ch,01Eh,028h,01Eh ; 6502
-                DB  019h,01Eh,014h,01Bh,000h,01Bh ; 650A
-ignition_timing_calc_task_tbl_10:       DB  0FFh,038h,050h,038h,03Ch,030h,028h,030h ; 6510
-                DB  019h,02Bh,014h,02Ah,000h,020h ; 6518
-ignition_timing_calc_task_tbl_11:       DB  0FFh,033h,078h,033h,050h,02Eh,03Ch,01Dh ; 651E
-                DB  028h,01Dh,014h,01Bh,000h,01Bh ; 6526
-ignition_timing_calc_task_tbl_12:       DB  0FFh,03Fh,078h,03Fh,050h,03Ah,03Ch,027h ; 652C
-                DB  028h,025h,014h,01Fh,000h,01Bh ; 6534
+                DB  046h,04Bh              ; (skeleton: the A/T tables are gone; 2 bytes kept, the table above is read a word at a time)
 revlimit_table_select_tbl_18:       DB  0FFh,057h,0CFh,057h,0A1h,051h,06Eh,04Ch ; 653A
                 DB  044h,046h,028h,040h,000h,040h ; 6542
-tps_hysteresis_reentry_tbl:       DB  0FFh,0D2h,0E0h,0D2h,0C0h,0D2h,080h,0D2h ; 6548
-                DB  060h,0DAh,05Ch,0FFh,000h,0FFh,000h,000h ; 6550
-                DB  000h,000h,000h,000h,000h,000h,000h,000h ; 6558
-                DB  000h,000h,000h,000h,000h,000h,000h,000h ; 6560
-                DB  000h,000h,000h,000h,000h,000h ; 6568
 overrev_hardcap_compare_tbl_2:       DB  0FFh,017h,0F8h,017h,0F0h,028h,0E8h,026h ; 656E
                 DB  0E0h,024h,0D8h,024h,0D0h,02Dh,0C8h,031h ; 6576
                 DB  0C0h,02Dh,0B0h,02Dh,0A0h,029h,098h,02Ah ; 657E
@@ -9909,7 +7689,6 @@ overrev_hardcap_compare_tbl_2:       DB  0FFh,017h,0F8h,017h,0F0h,028h,0E8h,026h
                 DB  0A0h,000h,098h,000h,090h,000h,088h,000h ; 65AE
                 DB  080h,000h,070h,000h,060h,000h,050h,000h ; 65B6
                 DB  040h,000h,000h,000h,000h,000h,000h,000h ; 65BE
-tbl_vtec_transition_retard:       DB  000h,000h,011h,055h,077h,0FFh ; 65C6
 state_21a_7_dispatch2_tbl:       DB  0FFh,04Dh,008h,0CFh,04Dh,008h,0BAh,0B7h ; 65CC
                 DB  007h,087h,059h,006h,02Eh,0EEh,002h,028h ; 65D4
                 DB  0EEh,002h,000h,0EEh,002h ; 65DC
@@ -10005,11 +7784,6 @@ tbl_idle_pid_c:       DB  0FFh,090h,006h,0B0h,0E0h,003h,0A0h,020h ; 6820
 tbl_idle_pid_d:       DB  0FFh,000h,007h,0B0h,000h,004h,0A0h,090h ; 6832
                 DB  003h,080h,0C0h,001h,060h,000h,000h,000h ; 683A
                 DB  000h,000h ; 6842
-ZoneCorrectionRowSelect_SetA:       DB  0FFh,080h,006h,0C0h,080h,006h,060h,000h ; 6844
-                DB  008h,030h,000h,00Ah,000h,000h,00Dh ; 684C
-ZoneCorrectionRowSelect_SetB:       DB  0FFh,080h,006h,0C0h,080h,006h,060h,000h ; 6853
-                DB  008h,030h,000h,00Ah,000h,000h,00Dh ; 685B
-ZoneCorrection2DTable:       DB  0FFh,0C0h,0B0h,0C0h,080h,098h,053h,080h,000h,080h ; 6862
 inc_dp_step_tbl:       DB  0FFh,000h,00Eh,0D0h,000h,00Eh,0BAh,000h ; 686C
                 DB  00Eh,094h,000h,00Dh,055h,080h,00Ah,042h ; 6874
                 DB  000h,008h,034h,080h,007h,028h,000h,004h ; 687C
@@ -10055,13 +7829,6 @@ tbl_idle_dc:       DB  0FFh,0FFh,000h,080h,000h,00Ah,000h,080h ; 6988
                 DB  000h,008h,01Eh,085h,080h,006h,01Eh,085h ; 6990
                 DB  000h,003h,085h,07Bh,000h,002h,033h,073h ; 6998
                 DB  000h,001h,028h,05Ch,000h,000h,028h,05Ch ; 69A0
-state_21a_7_dispatch2_tbl_2:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh ; 69A8
-                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh ; 69B0
-                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh ; 69B8
-state_21a_7_dispatch2_tbl_3:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh ; 69BE
-                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh ; 69C8
-                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh ; 69D2
-                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh ; 69DC
 tbl_iat_correct2:       DB  0FFh,0B8h,0ABh,09Ah,055h,05Ch,047h,055h ; 69E6
                 DB  039h,04Dh,02Bh,03Ch,00Bh,010h,000h,010h ; 69EE
 DwellBattery:       DB  0FFh,01Ch,0BCh,02Eh,0A7h,034h,092h,040h ; 69F6
@@ -10092,8 +7859,6 @@ dwell_scale_shift_tbl_3:       DB  000h,000h,000h,000h,000h,000h,000h,000h ; 6A9
                 DB  000h,000h,020h,02Fh,040h,03Dh,03Ah,055h ; 6AA1
                 DB  063h,072h,07Ah,07Ah,000h,000h,000h,000h ; 6AA9
                 DB  000h,000h ; 6AB1
-clamp_result_store_tbl:       DB  024h,000h,020h,039h,04Ah,050h,055h,05Eh ; 6AB3
-                DB  066h,080h,084h,088h,088h,088h ; 6ABB
 flags_pack_sj_tbl:       DB  0FFh,00Ch,090h,00Ch,080h,004h,060h,000h ; 6AC1
                 DB  040h,000h,000h,000h ; 6AC9
 TipinTPS:       DB  0FFh,00Ch,090h,00Ch,080h,004h,060h,000h ; 6ACD
@@ -10109,64 +7874,9 @@ flags_pack_sj_tbl_2:       DB  0FFh,000h,09Ah,00Ch,04Dh,040h,033h,02Ah ; 6B07
                 DB  026h,015h,000h,000h ; 6B0F
 TipinGear:       DB  040h,080h,066h,047h,047h,0BAh,07Ah,028h ; 6B13
 tbl_map_sign:       DB  060h,0F0h,020h,070h ; 6B1B
-ect_simulate_ramp_tbl:       DB  0DFh,0CFh,0A1h,057h,028h ; 6B1F
-tbl_dcode14_lo:       DB  0C2h,000h,0FAh,03Eh,000h,047h ; 6B24
-tbl_dcode14_hi:       DB  0E5h,000h,051h,03Eh,000h,019h ; 6B2A
 vss_threshold_226_3_tbl:       DB  06Bh,0A9h,02Bh,062h ; 6B30
-tbl_knock244_a:       DB  030h,030h,030h,025h,01Bh,01Bh,01Bh,015h,00Ch,00Ch ; 6B34
-                DB  00Ch,00Ch,00Ch,00Ch,00Ch,008h,008h,008h,008h,008h ; 6B3E
-tbl_knock244_b:       DB  030h,030h,030h,030h,030h,02Ch,025h,01Bh ; 6B48
-                DB  01Bh,01Bh,01Bh,01Bh,01Bh,015h ; 6B50
-int_serial_rx_tbl:       DB  00Ch,00Ch,00Ch,00Ch,008h,008h,08Fh,003h ; 6B56
-                DB  08Eh,003h,0D6h,003h,000h,004h,000h,004h ; 6B5E
-                DB  000h,004h,000h,004h,000h,004h,09Ch,003h ; 6B66
-                DB  09Dh,003h,09Eh,003h,09Fh,003h,0A0h,003h ; 6B6E
-                DB  0A1h,003h,0A2h,003h,0A3h,003h,0C8h,003h ; 6B76
-                DB  0C0h,003h,0A3h,000h,0C1h,003h,092h,003h ; 6B7E
-                DB  0C2h,000h,000h,004h,0C3h,000h,093h,003h ; 6B86
-                DB  0C6h,003h,0BFh,000h,0F5h,002h,0C6h,003h ; 6B8E
-                DB  000h,004h,000h,004h,000h,004h,049h,001h ; 6B96
-                DB  000h,004h,005h,003h,000h,004h,091h,003h ; 6B9E
-                DB  090h,003h,05Ch,003h,043h,002h,099h,003h ; 6BA6
-                DB  0CDh,000h,09Ah,003h,0F3h,002h,0F2h,002h ; 6BAE
-                DB  000h,004h,000h,004h,000h,004h,000h,004h ; 6BB6
-                DB  000h,004h,000h,004h,000h,004h,000h,004h ; 6BBE
-                DB  0AAh,001h,0ABh,001h,0A9h,001h,0B2h,001h ; 6BC6
-                DB  0B3h,001h,0B1h,001h,09Bh,003h,000h,004h ; 6BCE
-                DB  000h,004h,000h,004h,000h,004h,020h,003h ; 6BD6
-                DB  021h,003h,022h,003h,023h,003h,024h,003h ; 6BDE
-                DB  025h,003h,026h,003h,027h,003h,028h,003h ; 6BE6
-                DB  029h,003h,02Ah,003h,02Bh,003h,02Ch,003h ; 6BEE
-                DB  02Dh,003h,02Eh,003h,02Fh,003h,030h,003h ; 6BF6
-                DB  031h,003h,032h,003h,033h,003h,034h,003h ; 6BFE
-                DB  035h,003h,036h,003h,037h,003h,038h,003h ; 6C06
-                DB  039h,003h,03Ah,003h,03Bh,003h,03Ch,003h ; 6C0E
-                DB  03Dh,003h,03Eh,003h,03Fh,003h,040h,003h ; 6C16
-                DB  041h,003h,042h,003h,043h,003h,044h,003h ; 6C1E
-                DB  045h,003h,046h,003h,047h,003h,048h,003h ; 6C26
-                DB  049h,003h,04Ah,003h,04Bh,003h,04Ch,003h ; 6C2E
-                DB  04Dh,003h,04Eh,003h,04Fh,003h,000h,004h ; 6C36
-                DB  000h,004h,000h,004h,000h,004h,000h,004h ; 6C3E
-                DB  000h,004h,000h,004h,000h,004h,094h,003h ; 6C46
-                DB  095h,003h,096h,003h,097h,003h,098h,003h ; 6C4E
-                DB  000h,004h,000h,004h,000h,004h,02Dh,02Dh ; 6C56
-                DB  007h,006h,0FFh,0FFh,0FFh,078h,019h,019h ; 6C5E
-                DB  019h,0B3h ; 6C66
-dtc_scan_new_code_tbl:       DB  00Bh,00Fh,00Fh,00Fh,02Dh,02Dh,04Bh,00Fh ; 6C68
-                DB  0FFh,0FFh,0FFh,0FFh,02Dh,02Dh,0FFh,02Dh ; 6C70
-                DB  02Dh,006h,02Dh,00Fh,00Fh,0FFh,0FFh,0FFh ; 6C78
-                DB  0FFh,007h,007h,014h,0FFh,0FFh,0FFh,0FFh ; 6C80
-                DB  0FFh,02Dh,02Dh,007h,006h,0FFh,0FFh,0FFh ; 6C88
-                DB  078h,019h,019h,019h,0FFh,0FFh,0FFh,0FFh ; 6C90
-                DB  0B3h ; 6C98
-cfgvariant_index_lookup_tbl:       DB  00Bh,003h,006h,007h,005h,001h,008h,00Ah ; 6C99
-                DB  00Bh,00Ch,00Ch,00Dh,00Eh,011h,000h,013h ; 6CA1
-                DB  014h,015h,016h,017h,018h,000h,000h,000h ; 6CA9
-                DB  000h,019h,01Ah,01Bh,000h,000h,000h,000h ; 6CB1
-                DB  000h,004h,008h,009h,00Fh,000h,000h,010h ; 6CB9
-                DB  013h,004h,008h,009h,000h,000h,000h,000h ; 6CC1
-                DB  01Dh ; 6CC9
-tbl_diag_snapshot_data1:       DB  000h,092h,007h ; 6CCA
+skel_ram1a9_init_tbl:    DB  02Dh,02Dh,007h,006h,0FFh,0FFh,0FFh,078h ; start-up values for RAM 1A9h-1B5h (stock 6C5C-6C68)
+                DB  019h,019h,019h,0B3h,00Bh
 tbl_diag_snapshot_data2:       DB  0FFh,078h,019h,019h,019h ; 6CCD
 tbl_crank_sync_pattern:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FEh,0FFh,0FFh ; 6CD2
                 DB  0FFh,0FFh,0FFh,0FDh,0FFh,0FFh,0FFh,0FFh ; 6CDA
@@ -10303,18 +8013,6 @@ fueltbl_range_check_tbl:       DB  081h,08Dh,09Ch,01Bh,04Fh,071h,06Eh,07Ch ; 713
                 DB  0C4h,0EBh,0D9h,0ECh,0F6h,0E5h,0F4h,0EAh ; 71C3
                 DB  0F2h,001h,003h,004h,006h,007h,008h,00Ah ; 71CB
                 DB  00Ah,00Bh,00Bh ; 71D3
-fuelmap_base_lookup_tbl_3:       DB  029h,07Ah,096h,0A3h,0AAh,0B2h,0B8h,0C9h,0C3h,0D2h ; 71D6
-                DB  029h,07Ah,096h,0A3h,0AAh,0B2h,0B8h,0C9h,0C3h,0D3h ; 71E0
-                DB  030h,07Fh,099h,0A6h,0ACh,0B2h,0B9h,0C7h,0C6h,0D4h ; 71EA
-                DB  030h,080h,099h,0A7h,0ACh,0B3h,0B9h,0CAh,0C7h,0D6h ; 71F4
-                DB  030h,089h,0A1h,0ABh,0B1h,0B7h,0BDh,0CEh,0C5h,0D2h ; 71FE
-                DB  042h,090h,0A9h,0B4h,0BBh,0BEh,0C3h,0D2h,0CCh,0D7h ; 7208
-                DB  045h,096h,0A9h,0B6h,0BCh,0C0h,0C5h,0D4h,0CFh,0DDh ; 7212
-                DB  042h,093h,0A8h,0B5h,0BCh,0C3h,0C8h,0D8h,0CEh,0DDh ; 721C
-                DB  042h,096h,0ABh,0B8h,0BFh,0C6h,0CCh,0DBh,0D4h,0DFh ; 7226
-                DB  042h,096h,0ABh,0B9h,0C0h,0C4h,0CAh,0DAh,0D0h,0DFh ; 7230
-                DB  03Dh,092h,0A7h,0B5h,0BEh,0C3h,0C9h,0DAh,0D2h,0E1h ; 723A
-                DB  001h,003h,004h,005h,006h,007h,008h,008h,009h,009h ; 7244
 flag_dispatch_21d_212_tbl:       DB  05Ah,05Ah,05Ah,05Ah,047h,03Bh,02Ch,01Dh ; 724E
                 DB  015h,011h,05Ah,05Ah,05Ah,05Ah,049h,03Fh ; 7256
                 DB  034h,024h,01Ch,018h,05Ah,05Ah,05Ah,05Ah ; 725E
@@ -10361,17 +8059,6 @@ mode_flags_pack4_tbl:       DB  05Ah,05Ah,05Ah,05Ah,031h,01Ah,00Ch,000h,000h,000
                 DB  0C4h,0C4h,0C4h,0BAh,0ABh,0A0h,095h,089h,07Eh,07Ah ; 73C0
                 DB  0C4h,0C4h,0C4h,0BAh,0ABh,0A0h,094h,088h,07Dh,079h ; 73CA
                 DB  0C4h,0C4h,0C4h,0BAh,0ABh,0A1h,098h,08Ch,081h,07Dh ; 73D4
-flag_dispatch_21d_212_tbl_2:       DB  05Ah,05Ah,05Ah,05Ah,047h,03Bh,02Ch,01Dh,015h,011h ; 73DE
-                DB  05Ah,05Ah,05Ah,05Ah,049h,03Fh,034h,024h,01Ch,018h ; 73E8
-                DB  05Ah,05Ah,05Ah,05Ah,04Bh,043h,03Bh,02Ch,023h,01Fh ; 73F2
-                DB  05Ah,05Ah,05Ah,05Ah,04Fh,047h,041h,033h,02Ah,026h ; 73FC
-                DB  06Fh,06Fh,06Fh,06Fh,061h,056h,04Dh,041h,039h,035h ; 7406
-                DB  08Ch,08Ch,08Ch,07Bh,069h,060h,059h,04Dh,046h,042h ; 7410
-                DB  097h,097h,097h,081h,06Fh,068h,062h,057h,050h,04Ch ; 741A
-                DB  0A1h,0A1h,0A1h,087h,073h,06Eh,067h,05Eh,055h,051h ; 7424
-                DB  0A9h,0A9h,0A9h,08Ch,077h,071h,06Bh,064h,05Ah,056h ; 742E
-                DB  0ABh,0ABh,0ABh,08Eh,07Ah,074h,06Eh,068h,05Eh,05Ah ; 7438
-                DB  0ACh,0ACh,0ACh,091h,07Eh,078h,072h,06Ch,062h,05Eh ; 7442
 ve_table_result_store_tbl:       DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 744C
                 DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 7456
                 DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 7460
@@ -10392,26 +8079,6 @@ ve_table_result_store_tbl:       DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097
                 DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 74F6
                 DB  08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,09Bh,09Bh,09Bh ; 7500
                 DB  08Eh,08Eh,08Eh,08Eh,097h,097h,097h,09Bh,09Bh,09Bh ; 750A
-ve_result_flag_store_tbl:       DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 7514
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 751E
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 7528
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,093h,093h,093h ; 7532
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,093h,093h,093h ; 753C
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,093h,093h,093h ; 7546
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,093h,093h,093h ; 7550
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,093h,093h,093h ; 755A
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,093h,093h,093h ; 7564
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,093h,093h,093h ; 756E
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 7578
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 7582
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 758C
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 7596
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 75A0
-                DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h ; 75AA
-                DB  08Eh,08Eh,08Eh,097h,097h,097h,097h,09Bh,09Bh,09Bh ; 75B4
-                DB  08Eh,08Eh,08Eh,097h,097h,09Bh,09Bh,09Bh,09Bh,09Eh ; 75BE
-                DB  08Eh,08Eh,08Eh,097h,09Bh,09Bh,09Bh,09Bh,09Eh,09Eh ; 75C8
-                DB  08Eh,08Eh,097h,09Bh,09Bh,09Bh,09Bh,09Bh,09Eh,09Eh ; 75D2
 crank_edge_flag_store_tbl_3:       DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h ; 75DC
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h ; 75E6
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h ; 75F0
@@ -10423,9 +8090,69 @@ crank_edge_flag_store_tbl_3:       DB  000h,000h,000h,000h,000h,000h,000h,000h,0
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h ; 762C
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h ; 7636
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h ; 7640
+skel_free_start:                               ; everything from here to 7EFFh is free for modules
+
+; ================================================================================================
+; Module interface: fixed addresses the feature editor relies on. See roms/p30-skeleton.md.
+;
+; Hook slots (7F00h): 3 bytes each, RT until a module is installed; installing one writes J <module> over
+; the slot. The module ends with RT (to the hook site) or with J to the next module on the same hook.
+;   hook_init  7F00  once at power-up, before the main loop starts             (main-loop context)
+;   hook_main  7F03  once per main-loop pass                                     (main-loop context)
+;   hook_fuel  7F06  every fuel calculation, the final pulse width is word 146h  (crank interrupt)
+;   hook_ign   7F09  every spark calculation, the final advance is 246h/247h     (main-loop context)
+;   7F0C-7F17  four spare slots
+; Rules for module code: return with RT; leave LRB, USP, SSP and the caller's register bank as found;
+; A and the flags are free; save DP, X1, X2 if you use them. Use your own register bank:
+;   PUSHS LRB / MOV LRB, #nnh ... POPS LRB   (banks in module RAM: 7Bh=3D8h 7Ch=3E0h 7Dh=3E8h 7Eh=3F0h 3Fh=1F8h)
+;
+; RAM for modules (unused by the skeleton):
+;   0FEh-0FFh  tick: word, +1 every 2.048 ms (timer 1), read it, do not write it
+;   1F0h       fuel-cut request: while any bit is set, fuel is cut like the rev limiter (one bit per module)
+;   2FDh       ignition retard request: subtracted from the final advance (floor 0)
+;   0FBh-0FDh, 1F1h-1FFh, 2F7h-2F9h, 2FEh-2FFh, 3D6h-3F9h  free for modules
+; Outputs freed by the skeleton: P1.4 (dash check-engine lamp, 1 = on) and P1.5 (ECU LED).
+; ================================================================================================
+; @keep-begin (the hook slots are patched by modules: keep every byte)
+                org 07F00h
+hook_init:      RT
+                NOP
+                NOP
+hook_main:      RT
+                NOP
+                NOP
+hook_fuel:      RT
+                NOP
+                NOP
+hook_ign:       RT
+                NOP
+                NOP
+hook_spare1:    RT
+                NOP
+                NOP
+hook_spare2:    RT
+                NOP
+                NOP
+hook_spare3:    RT
+                NOP
+                NOP
+hook_spare4:    RT
+                NOP
+                NOP
+                org 07FE0h
+skel_info:      DB  050h,033h,030h,02Dh,053h,04Bh,045h,04Ch,045h,054h,04Fh,04Eh ; 7FE0 'P30-SKELETON' identifies the base for the feature editor
+skel_version:   DB  002h, 000h             ; 7FEC layout version 2.0
+skel_free_lo:   DW  skel_free_start        ; 7FEE first free byte (after the calibration)
+skel_free_hi:   DW  07EFFh                 ; 7FF0 last free byte
+skel_free2_lo:  DW  00000h                 ; 7FF2 no second free block in layout 2
+skel_free2_hi:  DW  00000h                 ; 7FF4
+skel_hooks:     DW  hook_init              ; 7FF6 hook table
+skel_hookcount: DB  8                      ; 7FF8 slots
+skel_reserved:  DB  0FFh, 0FFh, 0FFh, 0FFh, 0FFh, 0FFh ; 7FF9
+; @keep-end
 ; ------------------------------------------------------------------------------------------------
 ; Checksum: the 8-bit sum of the whole image must be 0 (the ROM checks it while running, BRK 48h).
 ; This byte, at a fixed address, is what the build (and the feature editor) adjusts.
 ; ------------------------------------------------------------------------------------------------
                 org 07FFFh
-checksum_fix:   DB  0B0h ; CHECKSUM correction
+checksum_fix:   DB  00Ah ; CHECKSUM correction
