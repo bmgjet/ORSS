@@ -3405,11 +3405,8 @@ vcal3_leanprotect_ratelimit_clear_ram09e_bit4:     RB      09eh.4               
                 JNE     vcal3_task_a             ; 26B2 1 208 180 CE01
                 RT                             ; 26B4 1 208 180 01
 vcal3_task_a:     J       battery_voltage_check             ; 26B5 1 208 180 03842A
-vcal3_leanprotect_ratelimit_if_ram227_bit2_set:     JBS     off(00227h).2, vcal3_dispatch_check1 ; 26B8 1 208 180 EA270B
-                JBR     off(00216h).3, vcal3_dispatch_check1 ; 26BB 1 208 180 DB1608
-                RB      09eh.3                 ; 26BE 1 208 180 C59E0B
-                JEQ     vcal3_dispatch_check1             ; 26C1 1 208 180 C903
-                J       ignition_timing_calc_task             ; 26C3 1 208 180 03DB31
+                                                ; 26B8 (skeleton: no A/T lock-up / shift control task - P0.4 stays off)
+vcal3_leanprotect_ratelimit_if_ram227_bit2_set:
 vcal3_dispatch_check1:     RB      off(00231h).1          ; 26C6 1 208 180 C43109
                 JEQ     vcal3_dispatch_check2             ; 26C9 1 208 180 C903
                 J       periodic_decay_task_1             ; 26CB 1 208 180 03B935
@@ -4536,423 +4533,8 @@ idle_gear_target_final:     ST      A, off(0025ah)         ; 31C8 1 208 180 D45A
                 SWAPB                          ; 31D7 0 208 180 83
                 STB     A, off(00228h)         ; 31D8 0 208 180 D428
                 RT                             ; 31DA 0 208 180 01
-ignition_timing_calc_task:     MOVB    r5, 0b9h               ; 31DB 1 208 180 C5B94D
-                LB      A, 0b4h                ; 31DE 0 208 180 F5B4
-                MOV     X1, #ignition_timing_calc_task_tbl_2          ; 31E0 0 208 180 608064
-                VCAL    0                      ; 31E3 0 208 180 10
-                STB     A, r4                  ; 31E4 0 208 180 8C
-                LB      A, 0b4h                ; 31E5 0 208 180 F5B4
-                MOV     X1, #ignition_timing_calc_task_tbl_3          ; 31E7 0 208 180 608E64
-                VCAL    0                      ; 31EA 0 208 180 10
-                STB     A, r3                  ; 31EB 0 208 180 8B
-                LB      A, 0b4h                ; 31EC 0 208 180 F5B4
-                MOV     X1, #ignition_timing_calc_task_tbl_4          ; 31EE 0 208 180 60A664
-                VCAL    0                      ; 31F1 0 208 180 10
-                STB     A, r2                  ; 31F2 0 208 180 8A
-                JBS     off(0022eh).5, ignition_timing_calc_task_cmp_acc ; 31F3 0 208 180 ED2E01
-                LB      A, r3                  ; 31F6 0 208 180 7B
-ignition_timing_calc_task_cmp_acc:     CMPB    A, r5                  ; 31F7 0 208 180 4D
-                MB      off(0022eh).5, C       ; 31F8 0 208 180 C42E3D
-                LB      A, r2                  ; 31FB 0 208 180 7A
-                JBS     off(0022eh).4, ignition_timing_calc_task_subb_acc ; 31FC 0 208 180 EC2E01
-                LB      A, r3                  ; 31FF 0 208 180 7B
-ignition_timing_calc_task_subb_acc:     SUBB    A, r4                  ; 3200 0 208 180 2C
-                J       ignition_timing_calc_task_if_ge_goto_57a2             ; 3201 0 208 180 039F57
-ignition_timing_calc_task_load_ram0b4:     LB      A, 0b4h                ; 3205 0 208 180 F5B4
-                MOV     X1, #ignition_timing_calc_task_tbl_5          ; 3207 0 208 180 60BE64
-                VCAL    0                      ; 320A 0 208 180 10
-                STB     A, r3                  ; 320B 0 208 180 8B
-                LB      A, 0b4h                ; 320C 0 208 180 F5B4
-                MOV     X1, #ignition_timing_calc_task_tbl_6          ; 320E 0 208 180 60D664
-                VCAL    0                      ; 3211 0 208 180 10
-                STB     A, r2                  ; 3212 0 208 180 8A
-                JBS     off(0022eh).7, ignition_timing_calc_task_cmp_acc_2 ; 3213 0 208 180 EF2E01
-                LB      A, r3                  ; 3216 0 208 180 7B
-ignition_timing_calc_task_cmp_acc_2:     CMPB    A, r5                  ; 3217 0 208 180 4D
-                MB      off(0022eh).7, C       ; 3218 0 208 180 C42E3F
-                LB      A, r2                  ; 321B 0 208 180 7A
-                JBS     off(0022eh).6, ignition_timing_calc_task_subb_acc_2 ; 321C 0 208 180 EE2E01
-                LB      A, r3                  ; 321F 0 208 180 7B
-ignition_timing_calc_task_subb_acc_2:     SUBB    A, r4                  ; 3220 0 208 180 2C
-                J       ignition_timing_calc_task_if_ge_goto_57ac             ; 3221 0 208 180 03A957
-ignition_timing_calc_task_load_ram0b4_2:     LB      A, 0b4h                ; 3225 0 208 180 F5B4
-                STB     A, r4                  ; 3227 0 208 180 8C
-                MOV     X1, #ignition_timing_calc_task_tbl_9          ; 3228 0 208 180 600265
-                VCAL    0                      ; 322B 0 208 180 10
-                STB     A, off(0029fh)         ; 322C 0 208 180 D49F
-                LB      A, r4                  ; 322E 0 208 180 7C
-                MOV     X1, #ignition_timing_calc_task_tbl_10          ; 322F 0 208 180 601065
-                VCAL    0                      ; 3232 0 208 180 10
-                STB     A, off(002a0h)         ; 3233 0 208 180 D4A0
-                CMPB    A, r5                  ; 3235 0 208 180 4D
-                XORB    PSWH, #080h            ; 3236 0 208 180 A2F080
-                JGE     ignition_timing_calc_task_store_carry_ram22f_bit3             ; 3239 0 208 180 CD03
-                LB      A, off(0029fh)         ; 323B 0 208 180 F49F
-                CMPB    A, r5                  ; 323D 0 208 180 4D
-ignition_timing_calc_task_store_carry_ram22f_bit3:     MB      off(0022fh).3, C       ; 323E 0 208 180 C42F3B
-                LB      A, r4                  ; 3241 0 208 180 7C
-                MOV     X1, #ignition_timing_calc_task_tbl_11          ; 3242 0 208 180 601E65
-                VCAL    0                      ; 3245 0 208 180 10
-                STB     A, off(002a1h)         ; 3246 0 208 180 D4A1
-                LB      A, r4                  ; 3248 0 208 180 7C
-                MOV     X1, #ignition_timing_calc_task_tbl_12          ; 3249 0 208 180 602C65
-                VCAL    0                      ; 324C 0 208 180 10
-                STB     A, off(002a2h)         ; 324D 0 208 180 D4A2
-                CMPB    A, r5                  ; 324F 0 208 180 4D
-                XORB    PSWH, #080h            ; 3250 0 208 180 A2F080
-                JGE     ignition_timing_calc_task_store_carry_ram22f_bit4             ; 3253 0 208 180 CD03
-                LB      A, off(002a1h)         ; 3255 0 208 180 F4A1
-                CMPB    A, r5                  ; 3257 0 208 180 4D
-ignition_timing_calc_task_store_carry_ram22f_bit4:     MB      off(0022fh).4, C       ; 3258 0 208 180 C42F3C
-                LB      A, 0b4h                ; 325B 0 208 180 F5B4
-                MOV     X1, #ignition_timing_calc_task_tbl_7          ; 325D 0 208 180 60EE64
-                JBS     off(0022eh).3, ignition_timing_calc_task_vcal_0 ; 3260 0 208 180 EB2E03
-                MOV     X1, #ignition_timing_calc_task_tbl_8          ; 3263 0 208 180 60F864
-ignition_timing_calc_task_vcal_0:     VCAL    0                      ; 3266 0 208 180 10
-                MOV     DP, #00311h            ; 3267 0 208 180 621103
-                ADDB    A, [DP]                ; 326A 0 208 180 C282
-                CMPB    A, 0bch                ; 326C 0 208 180 C5BCC2
-                MB      off(0022eh).3, C       ; 326F 0 208 180 C42E3B
-                MOV     DP, #0022ch            ; 3272 0 208 180 622C02
-                MOV     er0, #00800h           ; 3275 0 208 180 44980008
-                MOV     X1, #ignition_timing_calc_task_tbl          ; 3279 0 208 180 605A64
-                MOVB    r2, 0b4h               ; 327C 0 208 180 C5B44A
-                RB      PSWL.4                 ; 327F 0 208 180 A30C
-                CAL     timer_or_counter_helper             ; 3281 0 208 180 327752
-                INC     DP                     ; 3284 0 208 180 72
-                MOV     er0, #00800h           ; 3285 0 208 180 44980008
-                CAL     timer_or_counter_helper             ; 3289 0 208 180 327752
-                INC     DP                     ; 328C 0 208 180 72
-                MOV     er0, #00100h           ; 328D 0 208 180 44980001
-                CAL     timer_or_counter_helper             ; 3291 0 208 180 327752
-                MOVB    r1, #001h              ; 3294 0 208 180 9901
-                MOVB    r2, off(00236h)        ; 3296 0 208 180 C4364A
-                CAL     timer_or_counter_helper             ; 3299 0 208 180 327752
-                MOVB    r1, #001h              ; 329C 0 208 180 9901
-                MOVB    r2, 0b9h               ; 329E 0 208 180 C5B94A
-                CAL     timer_or_counter_helper             ; 32A1 0 208 180 327752
-                LB      A, 0b4h                ; 32A4 0 208 180 F5B4
-                MOVB    r7, #080h              ; 32A6 0 208 180 9F80
-                JBS     off(00211h).5, ignition_timing_calc_task_load_r7 ; 32A8 0 208 180 ED1134
-                JBS     off(00211h).6, ignition_timing_calc_task_if_ram22e_bit2_set ; 32AB 0 208 180 EE1106
-                JBR     off(00211h).7, ignition_timing_calc_task_load_r7 ; 32AE 0 208 180 DF112E
-                JBS     off(0022ch).0, ignition_timing_calc_task_clear_r7 ; 32B1 0 208 180 E82C29
-ignition_timing_calc_task_if_ram22e_bit2_set:     JBS     off(0022eh).2, ignition_timing_calc_task_load_r7 ; 32B4 0 208 180 EA2E28
-                JBR     off(0022fh).6, ignition_timing_calc_task_cmp_acc_3 ; 32B7 0 208 180 DE2F08
-                CMPB    A, #027h               ; 32BA 0 208 180 C627
-                JLT     ignition_timing_calc_task_load_r7             ; 32BC 0 208 180 CA21
-                MOVB    r7, #040h              ; 32BE 0 208 180 9F40
-                SJ      ignition_timing_calc_task_if_ram22c_bit1_clr             ; 32C0 0 208 180 CB12
-ignition_timing_calc_task_cmp_acc_3:     CMPB    A, #010h               ; 32C2 0 208 180 C610
-                JLT     ignition_timing_calc_task_load_r7             ; 32C4 0 208 180 CA19
-                MOVB    r7, #040h              ; 32C6 0 208 180 9F40
-                JBS     off(0022fh).7, ignition_timing_calc_task_if_ram22c_bit1_clr ; 32C8 0 208 180 EF2F09
-                JBS     off(0022eh).3, ignition_timing_calc_task_if_ram22c_bit1_clr ; 32CB 0 208 180 EB2E06
-                CMPB    A, #010h               ; 32CE 0 208 180 C610
-                JGE     ignition_timing_calc_task_clear_r7             ; 32D0 0 208 180 CD0B
-                SJ      ignition_timing_calc_task_load_r7             ; 32D2 0 208 180 CB0B
-ignition_timing_calc_task_if_ram22c_bit1_clr:     JBR     off(0022ch).1, ignition_timing_calc_task_load_r7 ; 32D4 0 208 180 D92C08
-                JBS     off(00211h).6, ignition_timing_calc_task_load_r7 ; 32D7 0 208 180 EE1105
-                JBS     off(0022eh).6, ignition_timing_calc_task_load_r7 ; 32DA 0 208 180 EE2E02
-ignition_timing_calc_task_clear_r7:     CLRB    r7                     ; 32DD 0 208 180 2715
-ignition_timing_calc_task_load_r7:     LB      A, r7                  ; 32DF 0 208 180 7F
-                SLLB    A                      ; 32E0 0 208 180 53
-                MB      off(0022fh).6, C       ; 32E1 0 208 180 C42F3E
-                SLLB    A                      ; 32E4 0 208 180 53
-                MB      off(0022fh).7, C       ; 32E5 0 208 180 C42F3F
-                CLR     A                      ; 32E8 (skeleton: fault flags are always clear)
-                CMPB    0c1h, #03ch            ; 32F5 0 208 180 C5C1C03C
-                JGE     ignition_timing_calc_task_load_ram2ca             ; 32F9 0 208 180 CD16
-                JBR     off(0022eh).1, ignition_timing_calc_task_load_ram2ca ; 32FB 0 208 180 D92E13
-                JBS     off(00211h).7, ignition_timing_calc_task_load_ram2cc_2 ; 32FE 0 208 180 EF111A
-                JBR     off(00211h).6, ignition_timing_calc_task_load_ram2ca ; 3301 0 208 180 DE110D
-                JBR     off(0022fh).0, ignition_timing_calc_task_load_ram2cc ; 3304 0 208 180 D82F04
-                MOVB    off(002c9h), #014h     ; 3307 0 208 180 C4C99814
-ignition_timing_calc_task_load_ram2cc:     LB      A, off(002cch)         ; 330B 0 208 180 F4CC
-                JNE     ignition_timing_calc_task_clear_carry             ; 330D 0 208 180 CE41
-                SJ      ignition_timing_calc_task_load_ram2ca_2             ; 330F 0 208 180 CB04
-ignition_timing_calc_task_load_ram2ca:     MOVB    off(002cah), #002h     ; 3311 0 208 180 C4CA9802
-ignition_timing_calc_task_load_ram2ca_2:     LB      A, off(002cah)         ; 3315 0 208 180 F4CA
-                JEQ     ignition_timing_calc_task_if_ram21b_bit6_set             ; 3317 0 208 180 C90A
-                SJ      ignition_timing_calc_task_clear_carry             ; 3319 0 208 180 CB35
-ignition_timing_calc_task_load_ram2cc_2:     MOVB    off(002cch), #00ch     ; 331B 0 208 180 C4CC980C
-                LB      A, off(002c9h)         ; 331F 0 208 180 F4C9
-                JEQ     ignition_timing_calc_task_load_ram2ca_2             ; 3321 0 208 180 C9F2
-ignition_timing_calc_task_if_ram21b_bit6_set:     JBS     off(0021bh).6, ignition_timing_calc_task_load_ram2cb ; 3323 0 208 180 EE1B0B
-                CMP     0aeh, #00120h          ; 3326 0 208 180 B5AEC02001
-                JLT     ignition_timing_calc_task_load_ram2cb             ; 332B 0 208 180 CA04
-                MOVB    off(002cbh), #014h     ; 332D 0 208 180 C4CB9814
-ignition_timing_calc_task_load_ram2cb:     LB      A, off(002cbh)         ; 3331 0 208 180 F4CB
-                JNE     ignition_timing_calc_task_clear_carry             ; 3333 0 208 180 CE1B
-                JBS     off(0022eh).3, ignition_timing_calc_task_if_ram211_bit6_set ; 3335 0 208 180 EB2E1B
-                JBS     off(0022fh).6, ignition_timing_calc_task_clear_carry ; 3338 0 208 180 EE2F15
-                MB      C, off(0022dh).6       ; 333B 0 208 180 C42D2E
-                JBS     off(0022fh).7, ignition_timing_calc_task_if_ge_goto_3350 ; 333E 0 208 180 EF2F03
-                MB      C, off(0022dh).7       ; 3341 0 208 180 C42D2F
-ignition_timing_calc_task_if_ge_goto_3350:     JGE     ignition_timing_calc_task_clear_carry             ; 3344 0 208 180 CD0A
-                JBS     off(0022eh).0, ignition_timing_calc_task_clear_carry ; 3346 0 208 180 E82E07
-                LB      A, off(002e5h)         ; 3349 0 208 180 F4E5
-                JEQ     ignition_timing_calc_task_clear_carry             ; 334B 0 208 180 C903
-                JBS     off(0021ch).3, ignition_timing_calc_task_if_ram22f_bit0_set ; 334D 0 208 180 EB1C22
-ignition_timing_calc_task_clear_carry:     RC                             ; 3350 0 208 180 95
-                SJ      ignition_timing_calc_task_store_carry_ram22f_bit0             ; 3351 0 208 180 CB31
-ignition_timing_calc_task_if_ram211_bit6_set:     JBS     off(00211h).6, ignition_timing_calc_task_if_ram22c_bit2_set ; 3353 0 208 180 EE110F
-                JBS     off(0022ch).4, ignition_timing_calc_task_if_ram22f_bit0_set ; 3356 0 208 180 EC2C19
-                JBR     off(0022ch).5, ignition_timing_calc_task_load_ram2cd ; 3359 0 208 180 DD2C03
-                JBR     off(0022eh).7, ignition_timing_calc_task_load_ram2cd_2 ; 335C 0 208 180 DF2E0F
-ignition_timing_calc_task_load_ram2cd:     MOVB    off(002cdh), #014h     ; 335F 0 208 180 C4CD9814
-                SJ      ignition_timing_calc_task_load_ram2cd_2             ; 3363 0 208 180 CB09
-ignition_timing_calc_task_if_ram22c_bit2_set:     JBS     off(0022ch).2, ignition_timing_calc_task_if_ram22f_bit0_set ; 3365 0 208 180 EA2C0A
-                JBR     off(0022ch).3, ignition_timing_calc_task_load_ram2cd ; 3368 0 208 180 DB2CF4
-                JBS     off(0022eh).5, ignition_timing_calc_task_load_ram2cd ; 336B 0 208 180 ED2EF1
-ignition_timing_calc_task_load_ram2cd_2:     LB      A, off(002cdh)         ; 336E 0 208 180 F4CD
-                JNE     ignition_timing_calc_task_clear_carry             ; 3370 0 208 180 CEDE
-ignition_timing_calc_task_if_ram22f_bit0_set:     JBS     off(0022fh).0, ignition_timing_calc_task_set_carry ; 3372 0 208 180 E82F0E
-                J       ignition_timing_calc_task_load_ram0bd             ; 3375 0 208 180 03135F
-ignition_timing_calc_task_if_le_goto_337f:     JLE     ignition_timing_calc_task_load_ram2d2_2             ; 3379 0 208 180 CF04
-ignition_timing_calc_task_load_ram2d2:     MOVB    off(002d2h), #002h     ; 337B 0 208 180 C4D29802
-ignition_timing_calc_task_load_ram2d2_2:     LB      A, off(002d2h)         ; 337F 0 208 180 F4D2
-                JNE     ignition_timing_calc_task_clear_carry             ; 3381 0 208 180 CECD
-ignition_timing_calc_task_set_carry:     SC                             ; 3383 0 208 180 85
-ignition_timing_calc_task_store_carry_ram22f_bit0:     MB      off(0022fh).0, C       ; 3384 0 208 180 C42F38
-                MB      P0.4, C                ; 3387 0 208 180 C5203C
-                CMPB    0c0h, #0e1h            ; 338A 0 208 180 C5C0C0E1
-                JGE     ignition_timing_calc_task_load_imm             ; 338E 0 208 180 CD06
-                CMPB    0c1h, #02eh            ; 3390 0 208 180 C5C1C02E
-                JLT     ignition_timing_calc_task_if_ram22d_bit0_set             ; 3394 0 208 180 CA08
-ignition_timing_calc_task_load_imm:     LB      A, #00ch               ; 3396 0 208 180 770C
-                STB     A, off(002b0h)         ; 3398 0 208 180 D4B0
-                STB     A, off(0029eh)         ; 339A 0 208 180 D49E
-                SJ      ignition_timing_calc_task_goto_3595             ; 339C 0 208 180 CB72
-ignition_timing_calc_task_if_ram22d_bit0_set:     JBS     off(0022dh).0, ignition_timing_calc_task_load_ram2b0 ; 339E 0 208 180 E82D06
-                LB      A, off(0029eh)         ; 33A1 0 208 180 F49E
-                STB     A, off(002b0h)         ; 33A3 0 208 180 D4B0
-                SJ      ignition_timing_calc_task_if_ne_goto_3410             ; 33A5 0 208 180 CB04
-ignition_timing_calc_task_load_ram2b0:     LB      A, off(002b0h)         ; 33A7 0 208 180 F4B0
-                STB     A, off(0029eh)         ; 33A9 0 208 180 D49E
-ignition_timing_calc_task_if_ne_goto_3410:     JNE     ignition_timing_calc_task_goto_3595             ; 33AB 0 208 180 CE63
-                JBR     off(0022fh).0, ignition_timing_calc_task_goto_3595 ; 33AD 0 208 180 D82F60
-                JBS     off(0022eh).3, ignition_timing_calc_task_load_carry_ram22e_bit4 ; 33B0 0 208 180 EB2E08
-                JBS     off(0022fh).7, ignition_timing_calc_task_goto_340a ; 33B3 0 208 180 EF2F03
-                JBS     off(0022fh).6, ignition_timing_calc_task_goto_3595 ; 33B6 0 208 180 EE2F57
-ignition_timing_calc_task_goto_340a:     SJ      ignition_timing_calc_task_goto_348c             ; 33B9 0 208 180 CB4F
-ignition_timing_calc_task_load_carry_ram22e_bit4:     MB      C, off(0022eh).4       ; 33BB 0 208 180 C42E2C
-                JBS     off(00211h).6, ignition_timing_calc_task_if_ge_goto_33ca ; 33BE 0 208 180 EE1103
-                MB      C, off(0022eh).6       ; 33C1 0 208 180 C42E2E
-ignition_timing_calc_task_if_ge_goto_33ca:     JGE     ignition_timing_calc_task_load_ram2ce             ; 33C4 0 208 180 CD04
-                MOVB    off(002ceh), #00ah     ; 33C6 0 208 180 C4CE980A
-ignition_timing_calc_task_load_ram2ce:     LB      A, off(002ceh)         ; 33CA 0 208 180 F4CE
-                JNE     ignition_timing_calc_task_goto_3595             ; 33CC 0 208 180 CE42
-                MOV     er1, #00028h           ; 33CE 0 208 180 45982800
-                JBR     off(00211h).6, ignition_timing_calc_task_if_ram22d_bit5_clr ; 33D2 0 208 180 DE1105
-                JBR     off(0022dh).4, ignition_timing_calc_task_goto_3595 ; 33D5 0 208 180 DC2D38
-                SJ      ignition_timing_calc_task_goto_3583             ; 33D8 0 208 180 CB33
-ignition_timing_calc_task_if_ram22d_bit5_clr:     JBR     off(0022dh).5, ignition_timing_calc_task_if_ram22d_bit1_set ; 33DA 0 208 180 DD2D06
-                MOV     er1, #00033h           ; 33DD 0 208 180 45983300
-                SJ      ignition_timing_calc_task_goto_3583             ; 33E1 0 208 180 CB2A
-ignition_timing_calc_task_if_ram22d_bit1_set:     JBS     off(0022dh).1, ignition_timing_calc_task_goto_3583 ; 33E3 0 208 180 E92D27
-                JBS     off(0022fh).7, ignition_timing_calc_task_if_ram22d_bit2_clr ; 33E6 0 208 180 EF2F08
-                JBS     off(0022fh).6, ignition_timing_calc_task_goto_3595 ; 33E9 0 208 180 EE2F24
-                JBR     off(0022dh).3, ignition_timing_calc_task_goto_3595 ; 33EC 0 208 180 DB2D21
-                SJ      ignition_timing_calc_task_load_carry_ram22f_bit3             ; 33EF 0 208 180 CB03
-ignition_timing_calc_task_if_ram22d_bit2_clr:     JBR     off(0022dh).2, ignition_timing_calc_task_goto_3595 ; 33F1 0 208 180 DA2D1C
-ignition_timing_calc_task_load_carry_ram22f_bit3:     MB      C, off(0022fh).3       ; 33F4 0 208 180 C42F2B
-                JBS     off(0022fh).7, ignition_timing_calc_task_if_lt_goto_3403 ; 33F7 0 208 180 EF2F03
-                MB      C, off(0022fh).4       ; 33FA 0 208 180 C42F2C
-ignition_timing_calc_task_if_lt_goto_3403:     JLT     ignition_timing_calc_task_goto_7756             ; 33FD 0 208 180 CA04
-                MOVB    off(002cfh), #00ah     ; 33FF 0 208 180 C4CF980A
-ignition_timing_calc_task_goto_7756:     J       ignition_timing_calc_task_load_ram2cf             ; 3403 0 208 180 035677
                 DB  000h,003h,039h,035h ; 3406
-ignition_timing_calc_task_goto_348c:     J       ignition_timing_calc_task_clear_r0             ; 340A 0 208 180 038C34
-ignition_timing_calc_task_goto_3583:     J       ignition_timing_calc_task_load_ram298             ; 340D 0 208 180 038335
-ignition_timing_calc_task_goto_3595:     J       ignition_timing_calc_task_clear_acc             ; 3410 0 208 180 039535
-ignition_timing_calc_task_load_ram29f:     LB      A, off(0029fh)         ; 3413 0 208 180 F49F
-                MOVB    r0, #060h              ; 3415 0 208 180 9860
-                MOV     er1, #0332eh           ; 3417 0 208 180 45982E33
-                MOVB    r6, #020h              ; 341B 0 208 180 9E20
-                MOVB    r7, #020h              ; 341D 0 208 180 9F20
-                JBS     off(0022fh).7, ignition_timing_calc_task_subb_acc_3 ; 341F 0 208 180 EF2F0C
-                LB      A, off(002a1h)         ; 3422 0 208 180 F4A1
-                MOVB    r0, #060h              ; 3424 0 208 180 9860
-                MOV     er1, #044a1h           ; 3426 0 208 180 4598A144
-                MOVB    r6, #020h              ; 342A 0 208 180 9E20
-                MOVB    r7, #020h              ; 342C 0 208 180 9F20
-ignition_timing_calc_task_subb_acc_3:     SUBB    A, 0b9h                ; 342E 0 208 180 C5B9A2
-                MB      PSWL.4, C              ; 3431 0 208 180 A33C
-                JGE     ignition_timing_calc_task_mulb_acc             ; 3433 0 208 180 CD01
-                VCAL    7                      ; 3435 0 208 180 17
-ignition_timing_calc_task_mulb_acc:     MULB                           ; 3436 0 208 180 A234
-                L       A, ACC                 ; 3438 1 208 180 E506
-                MOVB    r0, #020h              ; 343A 1 208 180 9820
-                NOP                            ; 343C 1 208 180 00
-                NOP                            ; 343D 1 208 180 00
-                NOP                            ; 343E 1 208 180 00
-                NOP                            ; 343F 1 208 180 00
-                MB      C, PSWL.4              ; 3440 1 208 180 A32C
-                JGE     ignition_timing_calc_task_add_acc             ; 3442 1 208 180 CD08
-                XCHG    A, er1                 ; 3444 1 208 180 4510
-                SUB     A, er1                 ; 3446 1 208 180 29
-                JGE     ignition_timing_calc_task_store_er0             ; 3447 1 208 180 CD09
-                CLR     A                      ; 3449 1 208 180 F9
-                SJ      ignition_timing_calc_task_store_er0             ; 344A 1 208 180 CB06
-ignition_timing_calc_task_add_acc:     ADD     A, er1                 ; 344C 1 208 180 09
-                JGE     ignition_timing_calc_task_store_er0             ; 344D 1 208 180 CD03
-                L       A, #0ffffh             ; 344F 1 208 180 67FFFF
-ignition_timing_calc_task_store_er0:     ST      A, er0                 ; 3452 1 208 180 88
-                L       A, 0b6h                ; 3453 1 208 180 E5B6
-                MUL                            ; 3455 1 208 180 9035
-                L       A, er1                 ; 3457 1 208 180 35
-                MOV     DP, #0038ah            ; 3458 1 208 180 628A03
-                ST      A, [DP]                ; 345B 1 208 180 D2
-                SUB     A, 0ach                ; 345C 1 208 180 B5ACA2
-                MB      PSWL.4, C              ; 345F 1 208 180 A33C
-                JGE     ignition_timing_calc_task_load_dp             ; 3461 1 208 180 CD01
-                VCAL    7                      ; 3463 1 208 180 17
-ignition_timing_calc_task_load_dp:     MOV     DP, #0038ch            ; 3464 1 208 180 628C03
-                ST      A, [DP]                ; 3467 1 208 180 D2
-                CAL     weighted_sum_2term_trim             ; 3468 1 208 180 328451
-ignition_timing_calc_task_if_eq_goto_3475:     JEQ     ignition_timing_calc_task_load_x2             ; 346B 1 208 180 C908
-                CMP     A, #00333h             ; 346D 1 208 180 C63303
-                JLT     ignition_timing_calc_task_load_x2             ; 3470 1 208 180 CA03
-                L       A, #00333h             ; 3472 1 208 180 673303
-ignition_timing_calc_task_load_x2:     MOV     X2, A                  ; 3475 1 208 180 51
-                MOV     X1, #00316h            ; 3476 1 208 180 601603
-                JBS     off(0022fh).7, ignition_timing_calc_task_load_er0 ; 3479 1 208 180 EF2F02
-                INC     X1                     ; 347C 1 208 180 70
-                INC     X1                     ; 347D 1 208 180 70
-ignition_timing_calc_task_load_er0:     MOV     er0, #000ffh           ; 347E 1 208 180 4498FF00
-                CAL     interp_bracket_delta_scale_2             ; 3482 1 208 180 32624F
-                CAL     clamp_to_35_512             ; 3485 1 208 180 32FA50
-                L       A, X2                  ; 3488 1 208 180 41
-                J       ignition_timing_calc_task_clear_ram22f_bit2_2             ; 3489 1 208 180 037477
-ignition_timing_calc_task_clear_r0:     CLRB    r0                     ; 348C 0 208 180 2015
-                MOV     DP, #00312h            ; 348E 0 208 180 621203
-                MOVB    r1, #090h              ; 3491 0 208 180 9990
-                MOVB    r2, #040h              ; 3493 0 208 180 9A40
-                JBS     off(0022fh).7, ignition_timing_calc_task_load_dp_ind ; 3495 0 208 180 EF2F06
-                INC     DP                     ; 3498 0 208 180 72
-                INC     DP                     ; 3499 0 208 180 72
-                MOVB    r1, #080h              ; 349A 0 208 180 9980
-                MOVB    r2, #040h              ; 349C 0 208 180 9A40
-ignition_timing_calc_task_load_dp_ind:     L       A, [DP]                ; 349E 1 208 180 E2
-                SUB     A, off(0029ah)         ; 349F 1 208 180 A79A
-                MB      PSWL.4, C              ; 34A1 1 208 180 A33C
-                JGE     ignition_timing_calc_task_cmp_acc_4             ; 34A3 1 208 180 CD03
-                VCAL    7                      ; 34A5 1 208 180 17
-                MOVB    r1, r2                 ; 34A6 1 208 180 2249
-ignition_timing_calc_task_cmp_acc_4:     CMP     A, #00155h             ; 34A8 1 208 180 C65501
-                SB      off(0022fh).1          ; 34AB 1 208 180 C42F19
-                JGE     ignition_timing_calc_task_goto_5a68             ; 34AE 1 208 180 CD05
-                JNE     ignition_timing_calc_task_if_ram22f_bit5_set             ; 34B0 1 208 180 CE19
-                J       ignition_timing_calc_task_load_dp_ind_3             ; 34B2 1 208 180 037D77
-ignition_timing_calc_task_goto_5a68:     J       ignition_timing_calc_task_mul_acc_3             ; 34B5 1 208 180 03685A
-ignition_timing_calc_task_load_carry_pswl_bit4:     MB      C, PSWL.4              ; 34B9 1 208 180 A32C
-                JLT     ignition_timing_calc_task_sub_acc             ; 34BB 1 208 180 CA08
-                ADD     A, er1                 ; 34BD 1 208 180 09
-                J       ignition_timing_calc_task_if_lt_goto_7787             ; 34BE 1 208 180 038077
-ignition_timing_calc_task_sub_acc:     SUB     A, er1                 ; 34C5 1 208 180 29
-                JGE     ignition_timing_calc_task_store_ram29a             ; 34C6 1 208 180 CD01
-                CLR     A                      ; 34C8 1 208 180 F9
-ignition_timing_calc_task_store_ram29a:     ST      A, off(0029ah)         ; 34C9 1 208 180 D49A
-ignition_timing_calc_task_if_ram22f_bit5_set:     JBS     off(0022fh).5, ignition_timing_calc_task_load_ram2d0 ; 34CB 1 208 180 ED2F10
-                CMP     off(0029ch), #00180h   ; 34CE 1 208 180 B49CC08001
-                JLT     ignition_timing_calc_task_load_ram2d0             ; 34D3 1 208 180 CA09
-                LB      A, off(002d0h)         ; 34D5 0 208 180 F4D0
-                JNE     ignition_timing_calc_task_load_ram0b6             ; 34D7 0 208 180 CE09
-                RB      off(0022fh).7          ; 34D9 0 208 180 C42F0F
-                SJ      ignition_timing_calc_task_load_ram0b6             ; 34DC 0 208 180 CB04
-ignition_timing_calc_task_load_ram2d0:     MOVB    off(002d0h), #028h     ; 34DE 1 208 180 C4D09828
-ignition_timing_calc_task_load_ram0b6:     L       A, 0b6h                ; 34E2 1 208 180 E5B6
-                MOV     er0, #034c2h           ; 34E4 1 208 180 4498C234
-                JBS     off(0022fh).7, ignition_timing_calc_task_mul_acc ; 34E8 1 208 180 EF2F04
-                MOV     er0, #04a55h           ; 34EB 1 208 180 4498554A
-ignition_timing_calc_task_mul_acc:     MUL                            ; 34EF 1 208 180 9035
-                L       A, er1                 ; 34F1 1 208 180 35
-                MOV     DP, #0038ah            ; 34F2 1 208 180 628A03
-                ST      A, [DP]                ; 34F5 1 208 180 D2
-                L       A, 0ach                ; 34F6 1 208 180 E5AC
-                SUB     A, er1                 ; 34F8 1 208 180 29
-                MB      off(0022fh).5, C       ; 34F9 1 208 180 C42F3D
-                MB      PSWL.4, C              ; 34FC 1 208 180 A33C
-                JGE     ignition_timing_calc_task_store_ram29c             ; 34FE 1 208 180 CD01
-                VCAL    7                      ; 3500 1 208 180 17
-ignition_timing_calc_task_store_ram29c:     ST      A, off(0029ch)         ; 3501 1 208 180 D49C
-                MOVB    r6, #040h              ; 3503 1 208 180 9E40
-                MOVB    r7, #040h              ; 3505 1 208 180 9F40
-                CAL     weighted_sum_2term_trim             ; 3507 1 208 180 328451
-                MOV     X2, A                  ; 350A 1 208 180 51
-                JEQ     ignition_timing_calc_task_cmp_ram2d1             ; 350B 1 208 180 C904
-                MOVB    off(002d1h), #014h     ; 350D 1 208 180 C4D19814
-ignition_timing_calc_task_cmp_ram2d1:     CMPB    off(002d1h), #000h     ; 3511 1 208 180 C4D1C000
-                JNE     ignition_timing_calc_task_if_ram22c_bit6_clr             ; 3515 1 208 180 CE04
-                CLR     X2                     ; 3517 1 208 180 9115
-                SJ      ignition_timing_calc_task_load_x2_2             ; 3519 1 208 180 CB18
-ignition_timing_calc_task_if_ram22c_bit6_clr:     JBR     off(0022ch).6, ignition_timing_calc_task_load_x2_2 ; 351B 1 208 180 DE2C15
-                JBS     off(0022ch).7, ignition_timing_calc_task_load_x2_2 ; 351E 1 208 180 EF2C12
-                MOV     X1, #00312h            ; 3521 1 208 180 601203
-                JBS     off(0022fh).7, ignition_timing_calc_task_load_er0_2 ; 3524 1 208 180 EF2F02
-                INC     X1                     ; 3527 1 208 180 70
-                INC     X1                     ; 3528 1 208 180 70
-ignition_timing_calc_task_load_er0_2:     MOV     er0, #000ffh           ; 3529 1 208 180 4498FF00
-                CAL     interp_bracket_delta_scale_2             ; 352D 1 208 180 32624F
-                CAL     ignition_timing_calc_task_sub_load_er2             ; 3530 1 208 180 32F050
-ignition_timing_calc_task_load_x2_2:     L       A, X2                  ; 3533 1 208 180 41
-                J       ignition_timing_calc_task_clear_ram22f_bit2_3             ; 3534 1 208 180 03C277
-ignition_timing_calc_task_load_ram29f_2:     LB      A, off(0029fh)         ; 3539 0 208 180 F49F
-                MOVB    r0, #0ffh              ; 353B 0 208 180 98FF
-                MOV     DP, #00316h            ; 353D 0 208 180 621603
-                JBS     off(0022fh).7, ignition_timing_calc_task_subb_acc_4 ; 3540 0 208 180 EF2F06
-                LB      A, off(002a1h)         ; 3543 0 208 180 F4A1
-                MOVB    r0, #0ffh              ; 3545 0 208 180 98FF
-                INC     DP                     ; 3547 0 208 180 72
-                INC     DP                     ; 3548 0 208 180 72
-ignition_timing_calc_task_subb_acc_4:     SUBB    A, 0b9h                ; 3549 0 208 180 C5B9A2
-                JLT     ignition_timing_calc_task_vcal_7             ; 354C 0 208 180 CA02
-                CLRB    r0                     ; 354E 0 208 180 2015
-ignition_timing_calc_task_vcal_7:     VCAL    7                      ; 3550 0 208 180 17
-                MULB                           ; 3551 0 208 180 A234
-                L       A, ACC                 ; 3553 1 208 180 E506
-                J       ignition_timing_calc_task_sll_acc             ; 3555 1 208 180 038D77
-ignition_timing_calc_task_load_imm_2:     L       A, #0ffffh             ; 3558 1 208 180 67FFFF
-ignition_timing_calc_task_load_r1:     MOVB    r1, ACCH               ; 355B 1 208 180 C50749
-                ADDB    r1, #040h              ; 355E 1 208 180 218040
-                J       ignition_timing_calc_task_if_ge_goto_779d             ; 3561 1 208 180 039977
-ignition_timing_calc_task_mul_acc_2:     MUL                            ; 3564 1 208 180 9035
-                J       ignition_timing_calc_task_sll_acc_2             ; 3566 1 208 180 03A377
-ignition_timing_calc_task_if_ram22f_bit2_set:     JBS     off(0022fh).2, ignition_timing_calc_task_store_ram29a_2 ; 3569 1 208 180 EA2F13
-                CMP     A, off(00298h)         ; 356C 1 208 180 C798
-                MB      off(0022fh).2, C       ; 356E 1 208 180 C42F3A
-                JLT     ignition_timing_calc_task_store_ram29a_2             ; 3571 1 208 180 CA0C
-                L       A, off(00298h)         ; 3573 1 208 180 E498
-                ADD     A, #00020h             ; 3575 1 208 180 862000
-                CAL     clamp_0_3ff_simple             ; 3578 1 208 180 32C777
-                SJ      ignition_timing_calc_task_goto_77b7             ; 357B 1 208 180 CB1E
                 DW  to_injtimer_store_0x166       ; 357D CB1C
-ignition_timing_calc_task_store_ram29a_2:     ST      A, off(0029ah)         ; 357F 1 208 180 D49A
-                SJ      ignition_timing_calc_task_goto_77b7             ; 3581 1 208 180 CB18
-ignition_timing_calc_task_load_ram298:     L       A, off(00298h)         ; 3583 1 208 180 E498
-                ADD     A, er1                 ; 3585 1 208 180 09
-                JLT     ignition_timing_calc_task_load_imm_3             ; 3586 1 208 180 CA08
-                J       ignition_timing_calc_task_cmp_acc_11             ; 3588 1 208 180 03AC77
-ignition_timing_calc_task_cmp_acc_5:     CMP     A, #003ffh             ; 358B 1 208 180 C6FF03
-                JLT     ignition_timing_calc_task_clear_ram22f_bit2             ; 358E 1 208 180 CA08
-ignition_timing_calc_task_load_imm_3:     L       A, #003ffh             ; 3590 1 208 180 67FF03
-                SJ      ignition_timing_calc_task_clear_ram22f_bit2             ; 3593 1 208 180 CB03
-ignition_timing_calc_task_clear_acc:     CLR     A                      ; 3595 1 208 180 F9
-                ST      A, off(0029ah)         ; 3596 1 208 180 D49A
-ignition_timing_calc_task_clear_ram22f_bit2:     RB      off(0022fh).2          ; 3598 1 208 180 C42F0A
-ignition_timing_calc_task_goto_77b7:     J       ignition_timing_calc_task_clear_ram22f_bit1             ; 359B 1 208 180 03B777
-ignition_timing_calc_task_cmp_acc_6:     CMP     A, #00023h             ; 35A0 1 208 180 C62300
-                JGE     ignition_timing_calc_task_load_er0_3             ; 35A3 1 208 180 CD01
-                CLR     A                      ; 35A5 1 208 180 F9
-ignition_timing_calc_task_load_er0_3:     MOV     er0, #00064h           ; 35A6 1 208 180 44986400
-                MUL                            ; 35AA 1 208 180 9035
-                MOV     er0, er1               ; 35AC 1 208 180 4548
-                MOV     er2, #003ffh           ; 35AE 1 208 180 4698FF03
-                DIV                            ; 35B2 1 208 180 9037
-                LB      A, ACC                 ; 35B4 0 208 180 F506
-                STB     A, 0dfh                ; 35B6 0 208 180 D5DF
-                RT                             ; 35B8 0 208 180 01
 ; [CG] periodic_decay_task_1  @0x35B9
 ; [CG] TRACED: dispatch target from background_task_scheduler, runs only when the
 ; [CG] divide-by-10 slow tick sets off(231h).1. Calls decrement_timer_array (0x5204) over two
@@ -6792,18 +6374,6 @@ injtimer_bank_calc1_mul:     MUL                            ; 4F5A 1 208 180 903
                 ST      A, er0                 ; 4F5C 1 208 180 88
                 L       A, 00002h[X1]          ; 4F5D 1 208 180 E00200
                 SJ      injtimer_bank_calc1_sign             ; 4F60 1 208 180 CB10
-; [CG] interp_bracket_delta_scale_2  @0x4F62
-; [CG] VERIFIED: structurally identical to injtimer_bank_calc1, operating on the
-; [CG] upper breakpoint instead of the lower.
-interp_bracket_delta_scale_2:     MOV     er2, 00000h[X1]        ; 4F62 1 208 180 B000004A
-                SUB     A, er2                 ; 4F66 1 208 180 2A
-                JGE     interp_bracket_delta_scale_2_mul_acc             ; 4F67 1 208 180 CD02
-                VCAL    7                      ; 4F69 1 208 180 17
-                SC                             ; 4F6A 1 208 180 85
-interp_bracket_delta_scale_2_mul_acc:     MUL                            ; 4F6B 1 208 180 9035
-                ST      A, er0                 ; 4F6D 1 208 180 88
-                MOV     DP, #00388h            ; 4F6E 1 208 180 628803
-                L       A, [DP]                ; 4F71 1 208 180 E2
 injtimer_bank_calc1_sign:     JGE     injtimer_bank_calc1_add             ; 4F72 1 208 180 CD05
                 SUB     A, er0                 ; 4F74 1 208 180 28
                 ST      A, er0                 ; 4F75 1 208 180 88
@@ -7047,22 +6617,6 @@ clamp_range_store:     ST      A, 00000h[X1]          ; 50E8 1 208 180 D00000
                 L       A, er0                 ; 50EB 1 208 180 34
                 ST      A, 00002h[X1]          ; 50EC 1 208 180 D00200
                 RT                             ; 50EF 1 208 180 01
-ignition_timing_calc_task_sub_load_er2:     MOV     er2, #00023h           ; 50F0 1 208 180 46982300
-                MOV     er3, #003ffh           ; 50F4 1 208 180 4798FF03
-                SJ      clamp_to_35_512_cmp_acc             ; 50F8 1 208 180 CB08
-clamp_to_35_512:     MOV     er2, #00023h           ; 50FA 1 208 180 46982300
-                MOV     er3, #00200h           ; 50FE 1 208 180 47980002
-clamp_to_35_512_cmp_acc:     CMP     A, er2                 ; 5102 1 208 180 4A
-                JLT     load_er0_result             ; 5103 1 208 180 CA05
-                CMP     A, er3                 ; 5105 1 208 180 4B
-                JLE     load_er0_result_store_tbl_x1             ; 5106 1 208 180 CF05
-                MOV     er2, er3               ; 5108 1 208 180 474A
-load_er0_result:     L       A, er2                 ; 510A 1 208 180 36
-                CLR     er0                    ; 510B 1 208 180 4415
-load_er0_result_store_tbl_x1:     ST      A, 00000h[X1]          ; 510D 1 208 180 D00000
-                L       A, er0                 ; 5110 1 208 180 34
-                ST      A, [DP]                ; 5111 1 208 180 D2
-                RT                             ; 5112 1 208 180 01
 sub37_clamp_to_er0:     SUB     A, #00025h             ; 5113 1 208 180 A62500
                 JLT     sub37_clamp_to_er0_load_er0             ; 5116 1 208 180 CA03
                 CMP     A, er0                 ; 5118 1 208 180 48
@@ -7125,42 +6679,6 @@ idle_pi_clamp_helper:     CMP     off(0028ch), A         ; 5175 1 208 180 B48CC1
 idle_pi_clamp_return:     RT                             ; 5180 1 208 180 01
 idle_pi_clamp_low:     L       A, off(0028ch)         ; 5181 1 208 180 E48C
                 RT                             ; 5183 1 208 180 01
-; [CG] weighted_sum_2term_trim  @0x5184
-; [CG] VERIFIED: computes two products (r6*A and r7*X1), conditionally accumulates them into
-; [CG] a running total at off(29Ah) gated by PSWL.4, calling clamp_0_to_3ff to bound the
-; [CG] running total. A two-term weighted-blend accumulator.
-weighted_sum_2term_trim:     MOV     X1, A                  ; 5184 1 208 180 50
-                CLRB    r0                     ; 5185 1 208 180 2015
-                MOVB    r1, r6                 ; 5187 1 208 180 2649
-                MUL                            ; 5189 1 208 180 9035
-                MOV     er2, er1               ; 518B 1 208 180 454A
-                L       A, X1                  ; 518D 1 208 180 40
-                MOVB    r1, r7                 ; 518E 1 208 180 2749
-                MUL                            ; 5190 1 208 180 9035
-                L       A, off(0029ah)         ; 5192 1 208 180 E49A
-                MB      C, PSWL.4              ; 5194 1 208 180 A32C
-                JLT     weighted_sum_2term_trim_sub_acc             ; 5196 1 208 180 CA09
-                ADD     A, er1                 ; 5198 1 208 180 09
-                SCAL     clamp_0_to_3ff            ; 5199 1 208 180 32AC51
-                ST      A, off(0029ah)         ; 519C 1 208 180 D49A
-                ADD     A, er2                 ; 519E 1 208 180 0A
-                SJ      weighted_sum_2term_trim_call_clamp_0_to_3ff             ; 519F 1 208 180 CB07
-weighted_sum_2term_trim_sub_acc:     SUB     A, er1                 ; 51A1 1 208 180 29
-                SCAL     clamp_0_to_3ff            ; 51A2 1 208 180 32AC51
-                ST      A, off(0029ah)         ; 51A5 1 208 180 D49A
-                SUB     A, er2                 ; 51A7 1 208 180 2A
-weighted_sum_2term_trim_call_clamp_0_to_3ff:     SCAL     clamp_0_to_3ff            ; 51A8 1 208 180 32AC51
-                RT                             ; 51AB 1 208 180 01
-; [CG] clamp_0_to_3ff  @0x51AC
-; [CG] VERIFIED: clamps A to the range [0, 0x3FF] (1023). Called from
-; [CG] weighted_sum_2term_trim.
-clamp_0_to_3ff:     CLR     er0                    ; 51AC 1 208 180 4415
-                JLE     clamp_0_to_3ff_load_er0             ; 51AE 1 208 180 CF07
-                MOV     er0, #003ffh           ; 51B0 1 208 180 4498FF03
-                CMP     A, er0                 ; 51B4 1 208 180 48
-                JLT     clamp_0_to_3ff_return             ; 51B5 1 208 180 CA01
-clamp_0_to_3ff_load_er0:     L       A, er0                 ; 51B7 1 208 180 34
-clamp_0_to_3ff_return:     RT                             ; 51B8 1 208 180 01
 port_debounce_helper:     MOV     DP, #03f00h            ; 51E4 0 208 180 62003F
                 LB      A, #090h               ; 51E7 0 208 180 7790
                 STB     A, [DP]                ; 51E9 0 208 180 D2
@@ -7586,16 +7104,6 @@ idle_target_correction_done:     XCHGB   A, r4                  ; 578F 0 208 180
 idle_target_correction_done_clear_acc_2:     CLR     A                      ; 5798 1 208 180 F9
                 CAL     injtimer_bank_calc3             ; 5799 1 208 180 32E54E
                 J       idle_step_flag_store                        ; 579C 1 208 180 03DA2B
-ignition_timing_calc_task_if_ge_goto_57a2:     JGE     ignition_timing_calc_task_cmp_acc_7             ; 579F 0 208 180 CD01
-                CLRB    A                      ; 57A1 0 208 180 FA
-ignition_timing_calc_task_cmp_acc_7:     CMPB    A, r5                  ; 57A2 0 208 180 4D
-                MB      off(0022eh).4, C       ; 57A3 0 208 180 C42E3C
-                J       ignition_timing_calc_task_load_ram0b4             ; 57A6 0 208 180 030532
-ignition_timing_calc_task_if_ge_goto_57ac:     JGE     ignition_timing_calc_task_cmp_acc_8             ; 57A9 0 208 180 CD01
-                CLRB    A                      ; 57AB 0 208 180 FA
-ignition_timing_calc_task_cmp_acc_8:     CMPB    A, r5                  ; 57AC 0 208 180 4D
-                MB      off(0022eh).6, C       ; 57AD 0 208 180 C42E3E
-                J       ignition_timing_calc_task_load_ram0b4_2             ; 57B0 0 208 180 032532
 cfg_selector3_dispatch_cmp_ram280:     CMP     off(00280h), #00700h   ; 5802 0 208 180 B480C00007
                 JGE     cfg_selector3_dispatch_goto_2b5a             ; 5807 0 208 180 CD04
 cfg_selector3_dispatch_cmp_acc:     CMPB    A, r1                  ; 5809 0 208 180 49
@@ -7759,13 +7267,6 @@ postig_rpm_compare:     CMPB    A, off(0012dh)         ; 5A5E 0 100 280 C72D
                 JGT     postig_rpm_compare_goto_194c             ; 5A60 0 100 280 C803
                 J       postig_rpm_compare_cmp_ram0c1             ; 5A62 0 100 280 030B19
 postig_rpm_compare_goto_194c:     J       ignmap2_result_check_clear_acc             ; 5A65 0 100 280 034C19
-ignition_timing_calc_task_mul_acc_3:     MUL                            ; 5A68 1 208 180 9035
-                SLL     A                      ; 5A6A 1 208 180 53
-                ROL     er1                    ; 5A6B 1 208 180 45B7
-                JGE     ignition_timing_calc_task_load_ram29a             ; 5A6D 1 208 180 CD04
-                MOV     er1, #0ffffh           ; 5A6F 1 208 180 4598FFFF
-ignition_timing_calc_task_load_ram29a:     L       A, off(0029ah)         ; 5A73 1 208 180 E49A
-                J       ignition_timing_calc_task_load_carry_pswl_bit4             ; 5A75 1 208 180 03B934
                 DB  0D5h,0F0h,0D5h,0EEh,0C4h,032h,00Fh,003h ; 5A78
                 DB  0FBh,039h ; 5A80
 nmi_enter_lowpower_seq_load_ram0eb:     LB      A, 0ebh                ; 5A82 0 208 ??? F5EB
@@ -8137,13 +7638,6 @@ idle_vcal5_call3_load_ram266:     L       A, off(00266h)         ; 5F09 1 208 18
                 JNE     idle_vcal5_call3_goto_30c2_3             ; 5F0B 1 208 180 CE03
                 J       idle_vcal5_call3_cmp_ram0a6             ; 5F0D 1 208 180 036930
 idle_vcal5_call3_goto_30c2_3:     J       idle_stall_check2_if_ram217_bit5_clr             ; 5F10 1 208 180 03C230
-ignition_timing_calc_task_load_ram0bd:     LB      A, 0bdh                ; 5F13 0 208 180 F5BD
-                JBS     off(0021bh).1, ignition_timing_calc_task_cmp_acc_9 ; 5F15 0 208 180 E91B04
-                CMPB    A, #010h               ; 5F18 0 208 180 C610
-                JGT     ignition_timing_calc_task_goto_337b             ; 5F1A 0 208 180 C805
-ignition_timing_calc_task_cmp_acc_9:     CMPB    A, #020h               ; 5F1C 0 208 180 C620
-                J       ignition_timing_calc_task_if_le_goto_337f             ; 5F1E 0 208 180 037933
-ignition_timing_calc_task_goto_337b:     J       ignition_timing_calc_task_load_ram2d2             ; 5F21 0 208 180 037B33
 div_scale_store_load_x1:     MOV     X1, #00004h            ; 5F24 0 208 180 600400
                 JBS     off(00216h).3, div_scale_store_goto_gear_detect_store ; 5F27 0 208 180 EB1605
                 LB      A, #001h               ; 5F2A 0 208 180 7701
@@ -8289,62 +7783,6 @@ idle_target_final_store_call_stub_or_short_helper:     CAL     stub_or_short_hel
                 VCAL    6                      ; 7748 1 208 180 16
                 CLR     A                      ; 7749 1 208 180 F9
                 J       idle_output_vcal5                              ; (skeleton: fault flags are always clear)
-ignition_timing_calc_task_load_ram2cf:     LB      A, off(002cfh)         ; 7756 0 208 180 F4CF
-                JEQ     ignition_timing_calc_task_set_ram222_bit6             ; 7758 0 208 180 C903
-                J       ignition_timing_calc_task_load_ram29f_2             ; 775A 0 208 180 033935
-ignition_timing_calc_task_set_ram222_bit6:     SB      off(00222h).6          ; 775D 0 208 180 C4221E
-                JEQ     ignition_timing_calc_task_load_dp_2             ; 7760 0 208 180 C903
-                J       ignition_timing_calc_task_load_ram29f             ; 7762 0 208 180 031334
-ignition_timing_calc_task_load_dp_2:     MOV     DP, #00316h            ; 7765 0 208 180 621603
-                JBS     off(0022fh).7, ignition_timing_calc_task_load_dp_ind_2 ; 7768 0 208 180 EF2F03
-                MOV     DP, #00318h            ; 776B 0 208 180 621803
-ignition_timing_calc_task_load_dp_ind_2:     L       A, [DP]                ; 776E 1 208 180 E2
-                ST      A, off(0029ah)         ; 776F 1 208 180 D49A
-                J       ignition_timing_calc_task_if_eq_goto_3475             ; 7771 1 208 180 036B34
-ignition_timing_calc_task_clear_ram22f_bit2_2:     RB      off(0022fh).2          ; 7774 1 208 180 C42F0A
-                RB      off(0022fh).1          ; 7777 1 208 180 C42F09
-                SJ       ignition_timing_calc_task_store_ram298            ; 777A 1 208 180 03BD77
-ignition_timing_calc_task_load_dp_ind_3:     L       A, [DP]                ; 777D 1 208 180 E2
-                SJ      ignition_timing_calc_task_cmp_acc_10             ; 777E 1 208 180 CB02
-ignition_timing_calc_task_if_lt_goto_7787:     JLT     ignition_timing_calc_task_load_imm_4             ; 7780 1 208 180 CA05
-ignition_timing_calc_task_cmp_acc_10:     CMP     A, #003ffh             ; 7782 1 208 180 C6FF03
-                JLT     ignition_timing_calc_task_goto_34c3             ; 7785 1 208 180 CA03
-ignition_timing_calc_task_load_imm_4:     L       A, #003ffh             ; 7787 1 208 180 67FF03
-ignition_timing_calc_task_goto_34c3:     J       ignition_timing_calc_task_store_ram29a          ; 778A 1 208 180 03C334
-ignition_timing_calc_task_sll_acc:     SLL     A                      ; 778D 1 208 180 53
-                JLT     ignition_timing_calc_task_goto_3558             ; 778E 1 208 180 CA03
-                SLL     A                      ; 7790 1 208 180 53
-                JGE     ignition_timing_calc_task_goto_355b             ; 7791 1 208 180 CD03
-ignition_timing_calc_task_goto_3558:     J       ignition_timing_calc_task_load_imm_2             ; 7793 1 208 180 035835
-ignition_timing_calc_task_goto_355b:     J       ignition_timing_calc_task_load_r1             ; 7796 1 208 180 035B35
-ignition_timing_calc_task_if_ge_goto_779d:     JGE     ignition_timing_calc_task_clear_r0_2             ; 7799 1 208 180 CD02
-                MOVB    r1, #0ffh              ; 779B 1 208 180 99FF
-ignition_timing_calc_task_clear_r0_2:     CLRB    r0                     ; 779D 1 208 180 2015
-                L       A, [DP]                ; 779F 1 208 180 E2
-                J       ignition_timing_calc_task_mul_acc_2             ; 77A0 1 208 180 036435
-ignition_timing_calc_task_sll_acc_2:     SLL     A                      ; 77A3 1 208 180 53
-                L       A, er1                 ; 77A4 1 208 180 35
-                ROL     A                      ; 77A5 1 208 180 33
-                SCAL     clamp_0_3ff_simple            ; 77A6 1 208 180 32C777
-                J       ignition_timing_calc_task_if_ram22f_bit2_set             ; 77A9 1 208 180 036935
-ignition_timing_calc_task_cmp_acc_11:     CMP     A, #003ffh             ; 77AC 1 208 180 C6FF03
-                JGE     ignition_timing_calc_task_goto_3590             ; 77AF 1 208 180 CD03
-                J       ignition_timing_calc_task_cmp_acc_5             ; 77B1 1 208 180 038B35
-ignition_timing_calc_task_goto_3590:     J       ignition_timing_calc_task_load_imm_3             ; 77B4 1 208 180 039035
-ignition_timing_calc_task_clear_ram22f_bit1:     RB      off(0022fh).1          ; 77B7 1 208 180 C42F09
-ignition_timing_calc_task_clear_ram222_bit6:     RB      off(00222h).6          ; 77BA 1 208 180 C4220E
-ignition_timing_calc_task_store_ram298:     ST      A, off(00298h)         ; 77BD 1 208 180 D498
-                J       ignition_timing_calc_task_cmp_acc_6             ; 77BF 1 208 180 03A035
-ignition_timing_calc_task_clear_ram22f_bit2_3:     RB      off(0022fh).2          ; 77C2 1 208 180 C42F0A
-                SJ      ignition_timing_calc_task_clear_ram222_bit6             ; 77C5 1 208 180 CBF3
-; [CG] clamp_0_3ff_simple  @0x77C7
-; [CG] VERIFIED: clamps A to [0, 0x3FF] using a simpler direct-compare form than
-; [CG] clamp_0_to_3ff (no register-pair bound source, just two fixed compares).
-clamp_0_3ff_simple:     JLT     clamp_0_3ff_simple_load_imm             ; 77C7 1 208 180 CA05
-                CMP     A, #003ffh             ; 77C9 1 208 180 C6FF03
-                JLT     clamp_0_3ff_simple_return             ; 77CC 1 208 180 CA03
-clamp_0_3ff_simple_load_imm:     L       A, #003ffh             ; 77CE 1 208 180 67FF03
-clamp_0_3ff_simple_return:     RT                             ; 77D1 1 208 180 01
 cfg_selector3_dispatch:     JBS     off(00217h).6, cfg_selector3_dispatch_goto_2b7d ; 77D2 0 208 180 EE170D
                 CMP     off(00280h), #08000h   ; 77D5 0 208 180 B480C00080
                 JGE     cfg_selector3_dispatch_goto_5809             ; 77DA 0 208 180 CD03
@@ -9148,4 +8586,4 @@ skel_reserved:  DB  0FFh, 0FFh, 0FFh, 0FFh, 0FFh, 0FFh ; 7FF9
 ; This byte, at a fixed address, is what the build (and the feature editor) adjusts.
 ; ------------------------------------------------------------------------------------------------
                 org 07FFFh
-checksum_fix:   DB  05Bh ; CHECKSUM correction
+checksum_fix:   DB  014h ; CHECKSUM correction
