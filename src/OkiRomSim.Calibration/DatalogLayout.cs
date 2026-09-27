@@ -93,7 +93,7 @@ public sealed class DetectedProtocol : DatalogProtocol
 public static class DatalogLayout
 {
     /// The ROM's own serial port, for probing it.
-    sealed class SimLink : IByteLink
+    public sealed class SimLink : IByteLink
     {
         readonly Simulator _sim;
         readonly Queue<byte> _rx = new();
@@ -123,12 +123,12 @@ public static class DatalogLayout
         }
         public void Discard() { Run(0.002); _rx.Clear(); }
         public void Wait(int ms) => Run(ms / 1000.0);
-        public void SetBaud(int baud) { if (!_sim.Bus.KLineEcho) _byteCycles = (uint)(Bus.CpuHz * 10 / (ulong)Math.Max(300, baud)); }
-        // the stock tester link runs at 9600 on a K-line; the chipped protocols at 38400 on two wires
-        public void SetKLine(bool on)
+        public void SetBaud(int baud) { if (!_sim.Bus.SerialEcho) _byteCycles = (uint)(Bus.CpuHz * 10 / (ulong)Math.Max(300, baud)); }
+        // the stock tester link runs at 9600 on one wire; the chipped protocols at 38400 on two wires
+        public void SetEcho(bool on)
         {
             _byteCycles = (uint)(Bus.CpuHz * 10 / (on ? 9600UL : 38400UL));
-            _sim.Bus.KLineEcho = on; _sim.Bus.KLineByteCycles = _byteCycles;
+            _sim.Bus.SerialEcho = on; _sim.Bus.EchoByteCycles = _byteCycles;
         }
     }
 

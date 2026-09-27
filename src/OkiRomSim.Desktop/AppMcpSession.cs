@@ -10,7 +10,7 @@ using OkiRomSim.Mcp;
 
 namespace OkiRomSim.Desktop;
 
-/// The ROM open in the app, for MCP agents on the in-app server: their edits go through the same paths as the user's (undo, emulator upload) and the app shows them as they happen.
+/// The ROM open in the app, for MCP clients on the in-app server: their edits go through the same paths as the user's (undo, emulator upload) and the app shows them as they happen.
 public sealed class AppMcpSession : IMcpSession
 {
     readonly SimHost _host;

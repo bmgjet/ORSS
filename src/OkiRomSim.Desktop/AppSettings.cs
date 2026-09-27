@@ -23,7 +23,11 @@ public sealed class AppSettings
     public int SpeedIndex { get; set; } = 2;
     public string Package { get; set; } = "Sdip64";
     public string? LastFile { get; set; }
+    /// The files opened lately, newest first (File > Recent): ten at most.
+    public List<string> RecentFiles { get; set; } = [];
     public bool ReopenLastFile { get; set; } = true;
+    /// After a ROM is created or opened, ask whether to run Detect on it.
+    public bool AskDetectOnOpen { get; set; } = true;
 
     // appearance
     public double UiScale { get; set; } = 1.0;
@@ -44,17 +48,28 @@ public sealed class AppSettings
     public string TrailColour { get; set; } = "#00FF00";
     public string HitCodeColour { get; set; } = "#3CC85A";
     public string HitDataColour { get; set; } = "#468CFF";
+    /// The Table view stretched to fill its panel.
+    public bool TableStretch { get; set; }
+    /// Touch screen mode: big buttons to change the table's cells instead of the keys, bigger controls to hit with a finger, for a tablet or a touch screen laptop.
+    public bool TouchMode { get; set; }
 
     /// Zoom of each panel (Ctrl + mouse wheel over it): "Source", "Pinout", "Inputs", "Right", "Calibration", "Datalog", "Trace", ... -> scale.
     public Dictionary<string, double> PanelZoom { get; set; } = [];
     /// Tuner mode: the calibration editor as the main page with datalogging beside it.
     public bool TunerMode { get; set; }
+    /// The view the app opens in: "simulator", "tuner", or "last" (whichever was used last). Set by the welcome screen.
+    public string StartIn { get; set; } = "last";
+    /// The welcome screen (what the app is for: Simulator or Tuner) has been answered. Settings > General can ask again.
+    public bool FirstRunDone { get; set; }
+    /// Low performance mode (Settings > General): null until set, when it follows the machine (on for 2 cores or 4 GB).
+    public bool? LowPerformance { get; set; }
 
     // simulation
     public bool FastBoot { get; set; } = true;
     public bool LiveTrace { get; set; } = true;
     public bool FollowReads { get; set; } = true;
-    public double TrailSeconds { get; set; } = 1.0;
+    /// How long a cell the program read stays lit on the map (the lime trail behind the live trace).
+    public double TrailSeconds { get; set; } = 2.0;
     /// Processor profile the app starts with (a built-in name); projects carry their own.
     public string Processor { get; set; } = "MSM66207";
 
@@ -64,6 +79,10 @@ public sealed class AppSettings
     /// "auto" or a protocol name (see DatalogProtocol.All).
     public string DatalogProtocol { get; set; } = "auto";
     public int DatalogIntervalMs { get; set; } = 0;
+    /// The channels the channel stream (skeleton ROM datalog) asks for: DatalogChannels keys, set in Datalog > Channels….
+    public List<string> DatalogStreamChannels { get; set; } = [.. OkiRomSim.Calibration.DatalogChannels.Defaults];
+    /// The calibration list's favourites, by ROM file name: "item:Name" and "page:key".
+    public Dictionary<string, List<string>> Favourites { get; set; } = [];
     public bool DatalogDrivesSimulator { get; set; } = true;
     /// Readings from somewhere other than the ECU: an HTTP endpoint or a JSON file, polled in the background and offered to the gauges as `name.key` channels.
     public List<ExternalFeedSettings> ExternalFeeds { get; set; } = [];
@@ -78,6 +97,16 @@ public sealed class AppSettings
     public string AnalogCurves { get; set; } = "";
     /// Frames kept in memory while logging. Each frame holds its raw bytes and every channel, so this is the app's biggest single use of memory: 50,000 frames is about an hour.
     public int DatalogKeepFrames { get; set; } = 50_000;
+    /// Smooth the datalog values (Datalogging > Smooth values): spikes dropped, the good readings blended.
+    public bool DatalogSmooth { get; set; }
+    /// Readings looked at together when smoothing (3-15).
+    public int DatalogSmoothFrames { get; set; } = 3;
+    /// A reading further than this percent from the middle of the others is a spike (each channel also has a floor).
+    public double DatalogSmoothSpikePercent { get; set; } = 25;
+    /// Blend the good readings (average them); off: the newest good one.
+    public bool DatalogSmoothBlend { get; set; } = true;
+    /// Channels left as they come, comma separated.
+    public string DatalogSmoothSkip { get; set; } = "o2_v";
     /// Wideband controller on its own serial port: "none", "AEM", "Zeitronix", "TechEdge", "PLX", "Spartan", "Innovate".
     public string WidebandType { get; set; } = "none";
     public string WidebandPort { get; set; } = "";
@@ -99,6 +128,9 @@ public sealed class AppSettings
     public int SerialRetries { get; set; } = 3;
     /// Raise DTR and RTS when the port is opened. Most OBD1 cables do not care; a few take their power from these lines.
     public bool SerialDtrRts { get; set; }
+    /// A lost link (datalog, emulator) is tried again this many times, this far apart, before it is called not connected.
+    public int ReconnectAttempts { get; set; } = 10;
+    public int ReconnectDelayMs { get; set; } = 1000;
 
     // hit trace and the ROM emulator
     /// Which emulator is in the ROM socket: "Ostrich", "Demon", "ROMulator", "PGMFI RTP", "CobraRTP", "ECU-Tamer", "Moates1" or "auto".
@@ -110,6 +142,17 @@ public sealed class AppSettings
     public bool HitSkipRepeats { get; set; } = true;
     public bool HitColourSource { get; set; } = true;
     public bool EmulatorAutoUpload { get; set; }
+    /// Demon onboard logging (Datalogging > Demon onboard logging): what it asks the ECU, every how many it keeps, when.
+    public string OnboardProtocol { get; set; } = "";
+    public int OnboardSkip { get; set; }
+    public int OnboardTrigger { get; set; }
+    public int OnboardAbove { get; set; }
+    public bool OnboardCompress { get; set; }
+
+    /// The table editing keys: action -> "Key|Key" (TableKeys).
+    public Dictionary<string, string> TableHotKeys { get; set; } = TableKeys.Defaults();
+    /// Sizes of the panels split by dividers you can drag (the Datalog page...): name -> GridLength strings, "|"-separated.
+    public Dictionary<string, string> PanelSizes { get; set; } = [];
 
     // hot keys: action -> gesture ("F5", "Ctrl+B", "Shift+F11")
     public Dictionary<string, string> HotKeys { get; set; } = DefaultHotKeys();
@@ -123,6 +166,7 @@ public sealed class AppSettings
         ["Step out"] = "Shift+F11",
         ["Reset"] = "Ctrl+R",
         ["Build"] = "Ctrl+B",
+        ["Patch live"] = "Ctrl+Shift+B",
         ["Toggle breakpoint"] = "F9",
         ["Open"] = "Ctrl+O",
         ["Save"] = "Ctrl+S",
@@ -130,10 +174,21 @@ public sealed class AppSettings
         ["Expand lower tabs"] = "Ctrl+E",
         ["Settings"] = "Ctrl+OemComma",
         ["Tuner mode"] = "Ctrl+T",
-        ["Compare"] = "Ctrl+Shift+C",
+        ["Compare"] = "Ctrl+Shift+M",
     };
 
-    // MCP server (for LLM agents)
+    // plugins
+    /// The plugin .dlls picked in Settings > Plugins, and whether each is switched on.
+    public List<PluginSetting> Plugins { get; set; } = [];
+    /// Each plugin's own settings: plugin name -> key -> value.
+    public Dictionary<string, Dictionary<string, string>> PluginSettings { get; set; } = [];
+
+    /// Where updates for the program and its templates come from (Settings > Updates). Where updates come from: always the author's website (fixed, so an update can only ever come from there).
+    [System.Text.Json.Serialization.JsonIgnore] public string UpdateSite => Updater.DefaultSite;
+    /// Ask the site at start-up whether anything is newer, and say so on the status line (nothing is downloaded).
+    public bool CheckUpdatesAtStart { get; set; } = true;
+
+    // MCP server (for MCP clients)
     public bool McpEnabled { get; set; }
     public int McpPort { get; set; } = 8765;
     public bool McpRemote { get; set; }
@@ -193,6 +248,15 @@ public sealed class AppSettings
             {
                 var s = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath), Json) ?? new AppSettings();
                 foreach (var (k, v) in DefaultHotKeys()) s.HotKeys.TryAdd(k, v);
+                foreach (var (k, v) in TableKeys.Defaults()) s.TableHotKeys.TryAdd(k, v);
+                // Compare started on Ctrl+Shift+C, which copying a whole table now uses
+                if (s.HotKeys.TryGetValue("Compare", out var cmp) && cmp == "Ctrl+Shift+C" && s.TableHotKeys.GetValueOrDefault("Copy table", "").Contains("Ctrl+Shift+C"))
+                    s.HotKeys["Compare"] = "Ctrl+Shift+M";
+                // the keypad's + and - joined Page Up / Down (one hand on the keypad while the other drives the dyno)
+                foreach (var (id, was) in new[] { ("Up one step", "PageUp|OemCloseBrackets"), ("Down one step", "PageDown|OemOpenBrackets") })
+                    if (s.TableHotKeys.GetValueOrDefault(id) == was) s.TableHotKeys[id] = TableKeys.Defaults()[id];
+                // the trail was 1 s before it went to 2 s: a setting still at the old default moves with it
+                if (Math.Abs(s.TrailSeconds - 1.0) < 1e-9) s.TrailSeconds = 2.0;
                 return s;
             }
         }

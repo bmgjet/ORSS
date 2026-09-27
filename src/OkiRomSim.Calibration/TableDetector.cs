@@ -194,6 +194,10 @@ public static class TableDetector
                 m.Item.ColAxis?.Count = m.Item.Cols;
             }
         }
+        // two "maps" whose cells overlap cannot both be maps: the lookup was a 1-D table read the same way; neither is kept
+        var bad = maps.Where(a => maps.Any(o => o.Key != a.Key && a.Key < o.Key + Math.Max(1, o.Value.Item.Span) && o.Key < a.Key + Math.Max(1, a.Value.Item.Span)))
+                      .Select(kv => kv.Key).ToList();
+        foreach (var k in bad) maps.Remove(k);
         Structural(maps, rowRamOf);
         found.AddRange(maps.Values);
         return found;
@@ -221,6 +225,21 @@ public static class TableDetector
             {
                 i.Category = "Ignition"; i.Formula = "ign_advance";
             }
+        }
+        // names from what the lookup code says each map is: FuelLow, IgnitionHigh... (a second one of a kind: "2"), and its axes'
+        var used = new HashSet<string>(maps.Values.Where(m => !Generic(m.Item)).Select(m => m.Item.Name), StringComparer.OrdinalIgnoreCase);
+        foreach (var (_, f) in maps.OrderBy(kv => kv.Key))
+        {
+            var i = f.Item;
+            if (!Generic(i) || i.Category is not ("Fuel" or "Ignition" or "VE")) continue;
+            bool hi = i.Description.Contains("high-cam rpm");
+            string baseName = i.Category + (hi ? "High" : "Low"), name = baseName;
+            for (int k = 2; used.Contains(name); k++) name = baseName + k;
+            used.Add(name);
+            i.Name = name;
+            if (i.RowAxis is { } ra2 && (ra2.Name == null || ra2.Name.StartsWith("rpm_axis_"))) ra2.Name = hi ? "RpmScalerHigh" : "RpmScalerLow";
+            if (i.ColAxis is { } ca2 && (ca2.Name == null || ca2.Name.StartsWith("load_axis_")))
+                ca2.Name = "MapScaler" + (i.Category == "Ignition" ? "" : i.Category);
         }
     }
 

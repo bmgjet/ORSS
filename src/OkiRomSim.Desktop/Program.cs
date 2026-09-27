@@ -11,8 +11,11 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
-        // `OkiRomSimStudio --mcp [--root DIR]... [--read-only]` runs the MCP server over stdio for a local LLM agent instead of opening the window (same tools as okirom-mcp).
+        // `OkiRomSimStudio --mcp [--root DIR]... [--read-only]` runs the MCP server over stdio for a local MCP client instead of opening the window (same tools as okirom-mcp).
         if (args.Contains("--mcp")) return RunMcp(args);
+        if (Array.IndexOf(args, "--selftest-live") is int st and >= 0 && st + 1 < args.Length) return SelfTest.Live(args[st + 1]);
+        if (Array.IndexOf(args, "--selftest-smooth") >= 0) return SelfTest.Smooth();
+        if (Array.IndexOf(args, "--selftest-project") is int sp and >= 0 && sp + 1 < args.Length) return SelfTest.Project(args[sp + 1]);
         // Errors on background threads are logged (Debug page and %TEMP%) rather than lost.
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {

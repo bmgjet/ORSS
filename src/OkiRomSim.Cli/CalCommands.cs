@@ -41,6 +41,8 @@ public static class CalCommands
         public required DefinitionSet Defs;
         public AssemblyResult? Asm;
         public string Path = "";
+        /// The byte that keeps the image's sum at 0 (RomChecksum), found when it was loaded; re-balanced before a write.
+        public int? ChecksumAt;
     }
 
     static string? Opt(List<string> a, string name)
@@ -100,6 +102,7 @@ public static class CalCommands
         t.Defs.MergeBuiltinFormulas();
         if (t.Defs.Symbols.Count == 0 && t.Asm == null)
             Console.WriteLine("note: no symbols found (pass --defs, or keep the .sym file next to the .bin)");
+        t.ChecksumAt = RomChecksum.Site(t.Rom, t.Asm);
         return t;
     }
 
@@ -298,6 +301,7 @@ public static class CalCommands
                         File.Copy(dest, dest + ".bak", overwrite: true);
                         Console.WriteLine($"  backup: {dest}.bak");
                     }
+                    if (t.ChecksumAt is int at) RomChecksum.Balance(t.Rom, at);
                     File.WriteAllBytes(dest, t.Rom);
                     Console.WriteLine($"  wrote {dest}");
                     return 0;

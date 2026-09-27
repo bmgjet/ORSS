@@ -80,10 +80,24 @@ public sealed class Grammar
     }
 
     /// Try to match the operand tokens (everything after the mnemonic, ending in End) against a rule. On success returns the parsed expressions keyed by yacc position ($n, the mnemonic is $1).
-    public static Dictionary<int, Expr>? Match(Rule r, List<Token> toks, int start)
+    public static Dictionary<int, Expr>? Match(Rule r, List<Token> toks, int start) => Match(r, toks, start, null);
+
+    /// As Match, with the expressions already parsed on this line (by token position: the expression and where it ended, or null when none parses there) shared between the rules tried, so each is parsed once however many rules are tried.
+    public static Dictionary<int, Expr>? Match(Rule r, List<Token> toks, int start, Dictionary<int, (Expr? E, int End)>? parsed)
     {
         int pos = start;
-        var exprs = new Dictionary<int, Expr>();
+        // the terminals first: most rules fail on one of them, and that costs nothing to find out
+        {
+            int q = start;
+            for (int k = 0; k < r.Symbols.Length; k++)
+            {
+                var sym = r.Symbols[k];
+                if (sym == "expr") break;
+                if (!IsTerminal(toks[q], sym)) return null;
+                q++;
+            }
+        }
+        Dictionary<int, Expr>? exprs = null;
         for (int k = 0; k < r.Symbols.Length; k++)
         {
             var sym = r.Symbols[k];
@@ -91,13 +105,34 @@ public sealed class Grammar
             if (sym == "expr")
             {
                 if (!ExprParser.StartsExpr(t)) return null;
-                try { exprs[k + 2] = ExprParser.Parse(toks, ref pos); }
-                catch (AsmException) { return null; }
+                (Expr? E, int End) got;
+                if (parsed == null || !parsed.TryGetValue(pos, out got))
+                {
+                    int q = pos;
+                    try { got = (ExprParser.Parse(toks, ref q), q); }
+                    catch (AsmException) { got = (null, pos); }
+                    parsed?.Add(pos, got);
+                }
+                if (got.E == null) return null;
+                (exprs ??= [])[k + 2] = got.E;
+                pos = got.End;
                 continue;
             }
-            if (t.Kind == Tk.End || t.Terminal != sym) return null;
+            if (!IsTerminal(t, sym)) return null;
             pos++;
         }
-        return toks[pos].Kind == Tk.End ? exprs : null;
+        return toks[pos].Kind == Tk.End ? exprs ?? [] : null;
     }
+
+    /// Whether a token is this grammar terminal ("R_A", "OFFSET", "DOT3", "','", "Number"...), without building its name.
+    static bool IsTerminal(Token t, string sym) => t.Kind switch
+    {
+        Tk.End => false,
+        Tk.Register or Tk.Dot or Tk.Keyword or Tk.Mnemonic => t.Text == sym,
+        Tk.Punct => sym.Length == t.Text.Length + 2 && sym[0] == '\'' && sym[^1] == '\'' && string.CompareOrdinal(sym, 1, t.Text, 0, t.Text.Length) == 0,
+        _ => sym == KindName(t.Kind),
+    };
+
+    static readonly string[] KindNames = Enum.GetNames<Tk>();
+    static string KindName(Tk k) => KindNames[(int)k];
 }

@@ -239,6 +239,8 @@ public sealed class ItemDef
     public string? Origin { get; set; }
     /// Which row of a feature page this definition fills, as a stable key ("gpo1.rpm.min"). A ROM's labels are whatever its author called them (and a disassembled stock ROM has none worth the name), so a feature page laid out the way the established tuning software does it cannot find its settings by name alone: it is told once, here, and the answer travels with the definitions - exported, imported and saved with a project like everything else.
     public string? Slot { get; set; }
+    /// Shown and edited as text rather than numbers: "watermark" = 16 characters stored scrambled with a check word after them (WatermarkCodec), "ascii" = plain characters.
+    public string? Text { get; set; }
 
     /// One definition can fill several rows (the same byte shown on two pages): Slot then holds them separated by ';'.
     public bool HasSlot(string slot) => Slot != null && Slot.Split(';').Any(x => x.Equals(slot, StringComparison.OrdinalIgnoreCase));
@@ -261,6 +263,9 @@ public sealed class ItemDef
     /// Raw value written when a flag is switched on (off writes OffRaw).
     public double OnRaw { get; set; } = 0xFF;
     public double OffRaw { get; set; }
+
+    /// The factory setting, as raw values (one per cell): what the source says (or a "default=" in its annotation). Reset to default on a feature page puts it back; null when it is not known (a ROM with no source).
+    public double[]? Default { get; set; }
 
     /// Bytes from one cell of a row to the next; 0 = packed. Honda (x, y) tables keep the axis between the values, so a byte-x / word-y table steps 3 bytes a cell and a byte / byte one steps 2.
     public int ColStride { get; set; }
@@ -292,6 +297,20 @@ public sealed class ItemDef
     [JsonIgnore]
     public int ElementSize => Type switch { CellType.U16 or CellType.S16 or CellType.U16BE or CellType.S16BE => 2, _ => 1 };
     [JsonIgnore] public int ByteLength => Count * ElementSize;
+
+    /// A table that can be read as one: every axis it runs along (the rpm, the temperature...) converts to real units, or it has no axis and its own values do (a list of breakpoints). A run of raw bytes with no axis, or an axis whose scaling is not known, is not - Show only valid hides those, unless a feature page uses it. Single values, switches and tables of one cell always are.
+    [JsonIgnore]
+    public bool HasLookup
+    {
+        get
+        {
+            if (!IsTable || Count <= 1 || Flag || Text != null || !string.IsNullOrEmpty(Slot)) return true;
+            static bool Scaled(string? f) => f is { Length: > 0 } && !f.Equals("raw", StringComparison.OrdinalIgnoreCase) && !f.Equals("x", StringComparison.OrdinalIgnoreCase);
+            static bool Known(AxisDef? a) => a != null && (a.Values is { Length: > 0 } || Scaled(a.Formula));
+            if ((Rows <= 1 || Known(RowAxis)) && (Cols <= 1 || Known(ColAxis))) return true;
+            return Scaled(Formula) && (Rows <= 1 || RowAxis == null) && (Cols <= 1 || ColAxis == null);
+        }
+    }
 }
 
 public sealed class DefinitionSet
@@ -303,6 +322,8 @@ public sealed class DefinitionSet
     public List<ItemDef> Items { get; set; } = [];
     /// name -> address, for plain label lookups (from the assembler .sym output).
     public Dictionary<string, int> Symbols { get; set; } = [];
+    /// The ROM's code and data labels (not its RAM names), kept in a definitions file saved beside a .bin so that opening the .bin again names its disassembly as the source did.
+    public Dictionary<string, int>? Labels { get; set; }
 
     public static readonly JsonSerializerOptions Json = new()
     {
@@ -323,15 +344,68 @@ public sealed class DefinitionSet
     }
     public void Save(string path) => File.WriteAllText(path, JsonSerializer.Serialize(this, Json));
 
+    /// A saved set (a project's) laid over the definitions a source ROM's annotations give now. The source wins for everything it annotates: a table that moved when modules were added is where the build put it, and a module added since brings its settings (and their page bindings) with it; one taken out takes them away. What the saved set adds is kept: definitions made by hand or by Detect, formulas of its own, and the page rows bound by hand.
+    public static DefinitionSet MergeSaved(DefinitionSet fresh, DefinitionSet saved)
+    {
+        static bool Annotated(string? origin) => origin != null && System.Text.RegularExpressions.Regex.IsMatch(origin, @"\.(asm|inc|s)\:\d+$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        var byName = fresh.Items.GroupBy(i => i.Name, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        var annotatedSlots = fresh.Items.Where(i => Annotated(i.Origin))
+            .SelectMany(i => (i.Slot ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var boundByHand = new List<(string Slot, ItemDef Item)>();
+        foreach (var s in saved.Items)
+        {
+            byName.TryGetValue(s.Name, out var f);
+            var slots = s.Slot;
+            if (f == null)
+            {
+                if (Annotated(s.Origin)) continue;          // gone from the source
+                s.Slot = null;                                // its bindings are put back below
+                fresh.Items.Add(s);
+                f = s;
+            }
+            // a slot the saved set binds that no annotation gives: bound by hand (or guessed), kept
+            foreach (var slot in (slots ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                if (!annotatedSlots.Contains(slot)) boundByHand.Add((slot, f));
+        }
+        foreach (var (slot, item) in boundByHand)
+        {
+            foreach (var i in fresh.Items) if (i != item) i.RemoveSlots(x => x.Equals(slot, StringComparison.OrdinalIgnoreCase));
+            item.AddSlot(slot);
+        }
+        foreach (var f in saved.Formulas)
+            if (!fresh.Formulas.Any(x => x.Name.Equals(f.Name, StringComparison.OrdinalIgnoreCase))) fresh.Formulas.Add(f);
+        fresh.Items.Sort((x, y) => x.Address.CompareTo(y.Address));
+        FormulaNames.Normalize(fresh);
+        return fresh;
+    }
+
     public FormulaDef Formula(string? name)
     {
         if (name == null) return Builtin.Raw;
+        // "x" is the raw value (definitions saved before an inline "formula=x" was read as one)
+        if (name.Equals("x", StringComparison.OrdinalIgnoreCase) && !Formulas.Any(f => f.Name.Equals("x", StringComparison.OrdinalIgnoreCase))) return Builtin.Raw;
         var f = Formulas.FirstOrDefault(f => string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase))
                 ?? Builtin.All.FirstOrDefault(f => string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase));
-        return f ?? throw new KeyNotFoundException($"unknown formula '{name}'");
+        if (f != null) return f;
+        // saved under a name it no longer has
+        if (FormulaNames.Renamed(name) is { } now) return Formula(now);
+        // a definition that came from another ROM without its formula: the shipped ROM sources have it
+        if (DefinitionBuilder.KnownFormula(name) is { } known) { lock (Formulas) if (!Formulas.Contains(known)) Formulas.Add(known); return known; }
+        return FormulaMissing(name);
+    }
+
+    /// A formula nobody has: the raw value, said once in the log - better than a setting that cannot be read at all.
+    static readonly HashSet<string> MissingSaid = new(StringComparer.OrdinalIgnoreCase);
+    static FormulaDef FormulaMissing(string name)
+    {
+        lock (MissingSaid)
+            if (MissingSaid.Add(name)) OkiRomSim.Core.AppLog.Warn("definitions", $"formula '{name}' is not known: shown as the raw value");
+        return Builtin.Raw;
     }
     public void MergeBuiltinFormulas()
     {
+        FormulaNames.Normalize(this);
         foreach (var b in Builtin.All)
             if (!Formulas.Any(f => string.Equals(f.Name, b.Name, StringComparison.OrdinalIgnoreCase)))
                 Formulas.Add(b);
@@ -345,6 +419,16 @@ public sealed class DefinitionSet
     {
         address = 0;
         var t = text.Trim();
+        // "label+1", "label-2": an offset from a label (the values of an (input, value) pair table start one byte in)
+        if (System.Text.RegularExpressions.Regex.Match(t, @"^(.+?)\s*([+-])\s*(\d+|0x[0-9a-fA-F]+|[0-9a-fA-F]+h)$") is { Success: true } off
+            && TryResolve(off.Groups[1].Value, out var baseAddr))
+        {
+            var o = off.Groups[3].Value;
+            int n = o.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? Convert.ToInt32(o[2..], 16)
+                  : o.EndsWith('h') || o.EndsWith('H') ? Convert.ToInt32(o[..^1], 16) : int.Parse(o, CultureInfo.InvariantCulture);
+            address = off.Groups[2].Value == "+" ? baseAddr + n : baseAddr - n;
+            return true;
+        }
         if (Find(t) is { } item) { address = item.Address; return true; }
         if (Symbols.TryGetValue(t, out address)) return true;
         foreach (var (k, v) in Symbols)
@@ -465,22 +549,22 @@ public static class Builtin
                     "0xFE and 0xFF are the ROM's saturation markers, not readings",
         },
         // ---- the scalings the HTS 1.15 pages use (HTS-master Rom.cs), by what they convert
-        new FormulaDef { Name = "honda_temp_c", Expr = "hondatemp(x)", Unit = "°C", Decimals = 0, Notes = "ECT / IAT byte through the Honda thermistor curve (HTS method_191 / method_230)" },
-        new FormulaDef { Name = "hts_tps_pct", Expr = "(x - 25) / 2.04", Inverse = "x * 2.04 + 25", Unit = "%", Decimals = 0, Notes = "TPS byte as HTS shows it (method_198 / method_228)" },
-        new FormulaDef { Name = "hts_trim_word", Expr = "x * 100 / 32768 - 100", Inverse = "(x + 100) * 32768 / 100", Unit = "%", Decimals = 1, Notes = "word trim, 8000h = 0% (method_203 / method_231, divisor 32768)" },
-        new FormulaDef { Name = "hts_trim_128", Expr = "x * 100 / 128 - 100", Inverse = "(x + 100) * 128 / 100", Unit = "%", Decimals = 1, Notes = "byte trim, 80h = 0% (method_205, divisor 128)" },
-        new FormulaDef { Name = "hts_trim_64", Expr = "x * 100 / 64 - 100", Inverse = "(x + 100) * 64 / 100", Unit = "%", Decimals = 1, Notes = "byte trim, 40h = 0% (method_205, divisor 64)" },
-        new FormulaDef { Name = "hts_signed_trim", Expr = "(x - 128) * 100 / 128", Inverse = "x * 128 / 100 + 128", Unit = "%", Decimals = 1, Notes = "byte trim centred on 80h" },
-        new FormulaDef { Name = "hts_half_step", Expr = "(x - 128) * 0.5", Inverse = "x / 0.5 + 128", Unit = "", Decimals = 1, Notes = "method_190 / method_222" },
-        new FormulaDef { Name = "hts_duty_half", Expr = "x / 2", Inverse = "x * 2", Unit = "%", Decimals = 1, Notes = "solenoid duty, 2 per % (method_207 / method_211)" },
-        new FormulaDef { Name = "hts_x10_ms", Expr = "x * 10", Inverse = "x / 10", Unit = "ms", Decimals = 0, Notes = "10 ms steps" },
-        new FormulaDef { Name = "hts_x01_s", Expr = "x * 0.1", Inverse = "x / 0.1", Unit = "s", Decimals = 1, Notes = "0.1 s steps" },
-        new FormulaDef { Name = "hts_quarter", Expr = "x / 4", Inverse = "x * 4", Unit = "", Decimals = 2, Notes = "quarter steps (method_223)" },
-        new FormulaDef { Name = "hts_quarter_deg", Expr = "x / 4", Inverse = "x * 4", Unit = "°", Decimals = 2, Notes = "0.25 degree steps" },
-        new FormulaDef { Name = "hts_eighth", Expr = "x / 8", Inverse = "x * 8", Unit = "", Decimals = 2, Notes = "eighth steps" },
-        new FormulaDef { Name = "hts_batt_v", Expr = "x * 26 / 270", Inverse = "x * 270 / 26", Unit = "V", Decimals = 2, Notes = "battery through the ECU divider (method_208)" },
-        new FormulaDef { Name = "hts_dwell_batt_v", Expr = "x * 0.052 + 6.26", Inverse = "(x - 6.26) / 0.052", Unit = "V", Decimals = 2, Notes = "dwell battery axis" },
-        new FormulaDef { Name = "hts_x16", Expr = "x * 16", Inverse = "x / 16", Unit = "", Decimals = 0, Notes = "16 per step" },
+        new FormulaDef { Name = "honda_temp_c", Expr = "hondatemp(x)", Unit = "°C", Decimals = 0, Notes = "coolant / intake air byte through the Honda thermistor curve" },
+        new FormulaDef { Name = "tps_pct", Expr = "(x - 25) / 2.04", Inverse = "x * 2.04 + 25", Unit = "%", Decimals = 0, Notes = "throttle byte as a percentage (19h closed, E5h wide open)" },
+        new FormulaDef { Name = "trim_word_pct", Expr = "x * 100 / 32768 - 100", Inverse = "(x + 100) * 32768 / 100", Unit = "%", Decimals = 1, Notes = "word trim, 8000h = 0 %" },
+        new FormulaDef { Name = "trim_byte_pct", Expr = "x * 100 / 128 - 100", Inverse = "(x + 100) * 128 / 100", Unit = "%", Decimals = 1, Notes = "byte trim, 80h = 0 %" },
+        new FormulaDef { Name = "trim_byte_64_pct", Expr = "x * 100 / 64 - 100", Inverse = "(x + 100) * 64 / 100", Unit = "%", Decimals = 1, Notes = "byte trim, 40h = 0 %" },
+        new FormulaDef { Name = "trim_signed_pct", Expr = "(x - 128) * 100 / 128", Inverse = "x * 128 / 100 + 128", Unit = "%", Decimals = 1, Notes = "byte trim centred on 80h" },
+        new FormulaDef { Name = "half_step_signed", Expr = "(x - 128) * 0.5", Inverse = "x / 0.5 + 128", Unit = "", Decimals = 1, Notes = "half steps centred on 80h" },
+        new FormulaDef { Name = "duty_half_pct", Expr = "x / 2", Inverse = "x * 2", Unit = "%", Decimals = 1, Notes = "solenoid duty, 2 counts per %" },
+        new FormulaDef { Name = "time_10ms", Expr = "x * 10", Inverse = "x / 10", Unit = "ms", Decimals = 0, Notes = "10 ms steps" },
+        new FormulaDef { Name = "time_tenth_s", Expr = "x * 0.1", Inverse = "x / 0.1", Unit = "s", Decimals = 1, Notes = "0.1 s steps" },
+        new FormulaDef { Name = "quarter", Expr = "x / 4", Inverse = "x * 4", Unit = "", Decimals = 2, Notes = "quarter steps" },
+        new FormulaDef { Name = "degrees_quarter", Expr = "x / 4", Inverse = "x * 4", Unit = "°", Decimals = 2, Notes = "0.25 degree steps" },
+        new FormulaDef { Name = "eighth", Expr = "x / 8", Inverse = "x * 8", Unit = "", Decimals = 2, Notes = "eighth steps" },
+        new FormulaDef { Name = "battery_v", Expr = "x * 26 / 270", Inverse = "x * 270 / 26", Unit = "V", Decimals = 2, Notes = "battery voltage through the ECU divider" },
+        new FormulaDef { Name = "dwell_battery_v", Expr = "x * 0.052 + 6.26", Inverse = "(x - 6.26) / 0.052", Unit = "V", Decimals = 2, Notes = "dwell battery axis" },
+        new FormulaDef { Name = "times_16", Expr = "x * 16", Inverse = "x / 16", Unit = "", Decimals = 0, Notes = "16 per step" },
         new FormulaDef
         {
             Name = "percent255", Expr = "x * 100 / 255", Inverse = "x * 255 / 100", Unit = "%", Decimals = 1,
@@ -499,7 +583,7 @@ public static class Builtin
         new FormulaDef
         {
             Name = "speed_kmh_byte", Expr = "x", Unit = "km/h", Decimals = 0,
-            Notes = "road speed byte in km/h (HTS method_197 / method_233 show and store it as is)",
+            Notes = "road speed byte, in km/h",
         },
         new FormulaDef
         {
@@ -515,6 +599,11 @@ public static class Builtin
         {
             Name = "ms_per_count", Expr = "x / 1000", Inverse = "x * 1000", Unit = "ms", Decimals = 3,
             Notes = "PLACEHOLDER for injector timing in microsecond counts - confirm the tick rate with xref",
+        },
+        new FormulaDef
+        {
+            Name = "inj_ms_word", Expr = "x * 3.2 / 1000", Inverse = "x * 1000 / 3.2", Unit = "ms", Decimals = 2,
+            Notes = "the injector time word the ROM builds (146h on P30): 3.2 us timer ticks, as the datalog reads it",
         },
     ];
 }

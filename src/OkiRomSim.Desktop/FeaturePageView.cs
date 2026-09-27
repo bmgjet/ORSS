@@ -17,11 +17,20 @@ public sealed class FeaturePageView : UserControl
     readonly Action<string> _status;
     readonly Action<ItemDef> _openTable;
 
-    public FeaturePageView(SimHost host, CalPage page, Action<string> status, Action<ItemDef> openTable)
+    /// What plugins add to the bottom of a page: (page key or "*", build).
+    public static readonly List<(string Key, Func<CalPage, Control?> Build)> Extensions = [];
+
+    /// Show only valid: the rows this ROM has nothing for (no definition bound) are left off, and a box left empty goes.
+    readonly bool _validOnly;
+
+    public FeaturePageView(SimHost host, CalPage page, Action<string> status, Action<ItemDef> openTable, bool validOnly = false)
     {
-        _host = host; _page = page; _status = status; _openTable = openTable;
+        _host = host; _page = page; _status = status; _openTable = openTable; _validOnly = validOnly;
         Build();
     }
+
+    /// A row this ROM has something for: one of its slots is bound.
+    bool Valid(PageRow row) => Slots(row).Any(x => CalPage.Bound(_host.Defs(), x.Slot) is { HasLookup: true });
 
     /// Rebuild the page (a binding changed, or a value was written from elsewhere).
     public void Refresh() => Build();
@@ -49,7 +58,7 @@ public sealed class FeaturePageView : UserControl
             _status(detected + (n == 0
                 ? (_host.Defs().Items.Count == 0 ? "this ROM has no definitions yet - build it, then run Detect in the calibration editor"
                                                  : "nothing more to bind on this page")
-                : HtsLayout.Version(rom) == 115 ? $"{n} row(s) bound from the HTS 1.15 layout" : $"{n} row(s) bound by name"));
+                : HtsLayout.Identify(rom) is { Layout: not HtsLayout.Family.None } fam ? $"{n} row(s) bound from the {fam.Name} layout" : $"{n} row(s) bound by name"));
             Build();
         }, "An HTS 1.15 / HTS120 ROM: bind every row from the HTS address layout. Any other ROM: bind the empty rows whose definition names match. Rows bound by hand on a non-HTS ROM are left alone."));
         head.Children.Add(Btn("Clear every binding", () =>
@@ -64,10 +73,27 @@ public sealed class FeaturePageView : UserControl
             _status($"{n} binding(s) cleared on this page");
             Build();
         }, "Forget which definition each row on this page points at (the ROM values are not touched)."));
+        head.Children.Add(Btn("Reset page to defaults", ResetPage,
+            "Put every setting on this page back to its factory value (what the ROM's source says). Tables opened from here are left as they are."));
         root.Children.Add(head);
 
+        int hidden = 0;
         foreach (var group in _page.Groups)
-            root.Children.Add(group.Conditions ? Conditions(group) : Plain(group));
+        {
+            var rows = _validOnly ? group.Rows.Where(Valid).ToList() : [.. group.Rows];
+            hidden += group.Rows.Length - rows.Count;
+            if (rows.Count == 0) continue;
+            root.Children.Add(group.Conditions ? Conditions(group, rows) : Plain(group, rows));
+        }
+        foreach (var (key, build) in Extensions.Where(x => x.Key == "*" || x.Key.Equals(_page.Key, StringComparison.OrdinalIgnoreCase)))
+            try { if (build(_page) is { } extra) root.Children.Add(extra); }
+            catch (Exception ex) { AppLog.Error("plugins", "a page section failed", ex); }
+        if (hidden > 0)
+            root.Children.Add(new TextBlock
+            {
+                Text = $"{hidden} row(s) this ROM has nothing for are hidden - untick Show only valid to see them (and bind them by hand).",
+                FontSize = 11, Opacity = 0.65, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 6),
+            });
 
         Content = new ScrollViewer { Content = root };
     }
@@ -89,15 +115,15 @@ public sealed class FeaturePageView : UserControl
         },
     };
 
-    Control Plain(PageGroup group)
+    Control Plain(PageGroup group, IReadOnlyList<PageRow> rows)
     {
         var body = new StackPanel { Margin = new Thickness(10, 6, 8, 8) };
-        foreach (var row in group.Rows) body.Children.Add(Row(row));
+        foreach (var row in rows) body.Children.Add(Row(row));
         return Box(group.Title, body);
     }
 
     /// The conditions grid: Minimum and Maximum down two columns, one row per quantity, exactly as the established tuning software draws it.
-    Control Conditions(PageGroup group)
+    Control Conditions(PageGroup group, IReadOnlyList<PageRow> rows)
     {
         var grid = new Grid
         {
@@ -110,7 +136,7 @@ public sealed class FeaturePageView : UserControl
         Cell(Head("Maximum"), 0, 2);
 
         int line = 1;
-        foreach (var row in group.Rows)
+        foreach (var row in rows)
         {
             grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
             Cell(new TextBlock
@@ -125,9 +151,10 @@ public sealed class FeaturePageView : UserControl
             else Cell(Editor(row, row.Slot), line, 1);
             Cell(new TextBlock
             {
-                Text = row.Unit, FontSize = 11, Opacity = 0.8, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0),
+                Text = UnitOf(row, row.Kind == RowKind.MinMax ? row.Slot + ".min" : row.Slot), FontSize = 11, Opacity = 0.8, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0),
             }, line, 3);
             var binds = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
+            binds.Children.Add(ResetButton(row));
             foreach (var (slot, _) in Slots(row)) binds.Children.Add(Bind(slot, row));
             Cell(binds, line, 4);
             if (row.Tip.Length > 0) ToolTip.SetTip(grid.Children[^1], row.Tip);
@@ -142,7 +169,8 @@ public sealed class FeaturePageView : UserControl
     };
 
     static IEnumerable<(string Slot, string Which)> Slots(PageRow row) =>
-        row.Kind == RowKind.MinMax ? [(row.Slot + ".min", "min"), (row.Slot + ".max", "max")] : [(row.Slot, "")];
+        row.Kind == RowKind.MinMax ? [(row.Slot + ".min", "min"), (row.Slot + ".max", "max")]
+        : row.Kind == RowKind.Force ? [(row.Slot + ".on", "on"), (row.Slot + ".off", "off")] : [(row.Slot, "")];
 
     // ------------------------------------------------------------------ one row
 
@@ -153,18 +181,31 @@ public sealed class FeaturePageView : UserControl
         Grid.SetColumn(label, 0); g.Children.Add(label);
         var editor = Editor(row, row.Slot);
         Grid.SetColumn(editor, 1); g.Children.Add(editor);
-        var unit = new TextBlock { Text = row.Unit, FontSize = 11, Opacity = 0.8, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) };
+        var unit = new TextBlock { Text = UnitOf(row, row.Slot), FontSize = 11, Opacity = 0.8, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) };
         Grid.SetColumn(unit, 2); g.Children.Add(unit);
-        var bind = Bind(row.Slot, row);
+        Control bind = Bind(row.Kind == RowKind.Force ? row.Slot + ".on" : row.Slot, row);
+        bind = row.Kind == RowKind.Force
+            ? new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Children = { ResetButton(row), bind, Bind(row.Slot + ".off", row) } }
+            : new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Children = { ResetButton(row), bind } };
         Grid.SetColumn(bind, 3); g.Children.Add(bind);
         if (row.Tip.Length > 0) ToolTip.SetTip(g, row.Tip);
         return g;
     }
 
-    /// The editor for one slot: a number box, a tick box, a choice, or a button that opens the table.
+    /// The unit beside a row: the page's own, else the unit of the setting's formula.
+    string UnitOf(PageRow row, string slot)
+    {
+        if (row.Unit.Length > 0 || row.Kind is RowKind.Switch or RowKind.Choice or RowKind.Text) return row.Unit;
+        var defs = _host.Defs();
+        if (CalPage.Bound(defs, slot) is not { } item) return "";
+        try { return defs.Formula(item.Formula).Unit; } catch { return ""; }
+    }
+
+    /// The editor for one slot: a number box, a tick box, a choice, a text, or a button that opens the table.
     Control Editor(PageRow row, string slot)
     {
         var defs = _host.Defs();
+        if (row.Kind == RowKind.Force) return ForceEditor(row);
         var item = CalPage.Bound(defs, slot);
         if (item == null)
             return new TextBlock
@@ -174,6 +215,8 @@ public sealed class FeaturePageView : UserControl
             };
         switch (row.Kind)
         {
+            case RowKind.Text:
+                return TextEditor(item);
             case RowKind.Table:
                 {
                     var b = Btn($"{item.Name}  ({item.Rows}×{item.Cols})", () => _openTable(item),
@@ -251,11 +294,82 @@ public sealed class FeaturePageView : UserControl
         }
     }
 
-    static Control Broken(ItemDef item) => new TextBlock
+    /// A setting forced on or off in software, or left to the ECU: one choice over the two bits.
+    Control ForceEditor(PageRow row)
     {
-        Text = "cannot read " + item.Name, Foreground = Brushes.OrangeRed, FontSize = 11,
-        VerticalAlignment = VerticalAlignment.Center, Width = 130,
-    };
+        var defs = _host.Defs();
+        var on = CalPage.Bound(defs, row.Slot + ".on");
+        var off = CalPage.Bound(defs, row.Slot + ".off");
+        if (on == null || off == null) return new TextBlock { Text = "—", Opacity = 0.5, VerticalAlignment = VerticalAlignment.Center, Width = 220 };
+        double rOn, rOff;
+        try { rOn = _host.ReadItem(on)[0].Raw; rOff = _host.ReadItem(off)[0].Raw; } catch { return Broken(on); }
+        string[] options = ["As the ECU decides (option bytes / board)", "Forced on", "Forced off"];
+        int at = rOn != 0 ? 1 : rOff != 0 ? 2 : 0;
+        var box = new ComboBox { ItemsSource = options, Width = 260, SelectedIndex = at };
+        box.SelectionChanged += (_, _) =>
+        {
+            if (box.SelectedIndex < 0) return;
+            Write(on, box.SelectedIndex == 1 ? 1 : 0, raw: true, options[box.SelectedIndex]);
+            Write(off, box.SelectedIndex == 2 ? 1 : 0, raw: true, options[box.SelectedIndex]);
+        };
+        ToolTip.SetTip(box, Describe(on));
+        return box;
+    }
+
+    /// A text setting: typed in, written on Enter or on leaving the box. The watermark is stored scrambled, with its check word.
+    Control TextEditor(ItemDef it)
+    {
+        if (it.Text == "password") return RomPasswordUi.Editor(_host, it, () => TopLevel.GetTopLevel(this) as Window, _status);
+        if (it.Text == "watermark") return RomPasswordUi.WatermarkEditor(_host, it, () => TopLevel.GetTopLevel(this) as Window, _status);
+        bool wm = it.Text == "watermark";
+        int len = wm ? WatermarkCodec.Length : it.Count;
+        var box = new TextBox { Width = 190, MaxLength = len, FontFamily = MainWindow.MonoFont, VerticalAlignment = VerticalAlignment.Center };
+        var state = new TextBlock { FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0) };
+        void Show()
+        {
+            var bytes = _host.RomBytes(it.Address, it.Count);
+            if (wm)
+            {
+                var (text, intact) = WatermarkCodec.Decode(bytes);
+                box.Text = text;
+                state.Text = intact ? "intact" : "modified";
+                state.Foreground = intact ? null : Brushes.OrangeRed;
+            }
+            else box.Text = new string([.. bytes.Select(b => b is >= 0x20 and <= 0x7E ? (char)b : ' ')]).TrimEnd();
+        }
+        void Save()
+        {
+            var text = box.Text ?? "";
+            byte[] bytes = wm ? WatermarkCodec.Encode(text) : [.. text.PadRight(len).Take(len).Select(ch => ch is >= ' ' and <= '~' ? (byte)ch : (byte)'?')];
+            if (_host.RomBytes(it.Address, bytes.Length).AsSpan().SequenceEqual(bytes)) { Show(); return; }
+            try
+            {
+                _host.WriteCells(it, [.. bytes.Select((b, i) => (i, (double)b))], true, $"\"{text}\"");
+                _status($"{_page.Name}: {it.Name} = \"{text}\" - patched in the running ROM");
+                AppLog.Action("calibration", $"{_page.Name}: {it.Name} = \"{text}\"");
+            }
+            catch (Exception ex) { _status(ex.Message); }
+            Show();
+        }
+        box.LostFocus += (_, _) => Save();
+        box.KeyDown += (_, e) => { if (e.Key == Avalonia.Input.Key.Enter) Save(); };
+        ToolTip.SetTip(box, Describe(it) + $"\nUp to {len} characters; Enter or leaving the box writes it.");
+        Show();
+        return new StackPanel { Orientation = Orientation.Horizontal, Children = { box, state } };
+    }
+
+    Control Broken(ItemDef item)
+    {
+        string why;
+        try { _host.ReadItem(item); _host.Defs().Formula(item.Formula); why = ""; } catch (Exception ex) { why = ex.Message; }
+        var t = new TextBlock
+        {
+            Text = "cannot read " + item.Name, Foreground = Brushes.OrangeRed, FontSize = 11,
+            VerticalAlignment = VerticalAlignment.Center, Width = 130, TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        ToolTip.SetTip(t, $"{item.Name} at {item.Address:X4}: {why}\nIts definition needs fixing (the formula, the type or the address) - edit it in the calibration list.");
+        return t;
+    }
 
     string Describe(ItemDef item)
     {
@@ -265,6 +379,62 @@ public sealed class FeaturePageView : UserControl
                (unit.Length > 0 ? $"  [{unit}]" : "") +
                (item.Description.Length > 0 ? "\n" + item.Description : "") +
                "\nChanges the running ROM at once.";
+    }
+
+    /// The settings a row writes (every slot of it, every copy of each) that have a factory value.
+    List<ItemDef> WithDefaults(PageRow row)
+    {
+        var defs = _host.Defs();
+        return [.. Slots(row).SelectMany(x => CalPage.BoundAll(defs, x.Slot)).Where(i => i.Default is { Length: > 0 } && !(i.IsTable && i.Count > 1)).Distinct()];
+    }
+
+    bool AtDefault(ItemDef item)
+    {
+        try
+        {
+            var now = _host.ReadItem(item);
+            return item.Default!.Length >= now.Length && now.Select((c, k) => c.Raw == item.Default[k]).All(x => x);
+        }
+        catch { return false; }
+    }
+
+    /// "↺" beside a row: put its factory value back. Greyed out when it is at the factory value already, hidden when there is none.
+    Control ResetButton(PageRow row)
+    {
+        var items = WithDefaults(row);
+        var b = new Button { Content = "↺", Padding = new Thickness(6, 0), MinWidth = 0, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, IsVisible = items.Count > 0 };
+        if (items.Count == 0) return b;
+        var defs = _host.Defs();
+        string Shown(ItemDef i)
+        {
+            try { var f = defs.Formula(i.Formula); return string.Join(", ", i.Default!.Take(i.Count).Select(r => f.ToValue(r).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))) + (f.Unit.Length > 0 ? " " + f.Unit : ""); }
+            catch { return string.Join(", ", i.Default!.Take(i.Count)); }
+        }
+        b.IsEnabled = !items.All(AtDefault);
+        ToolTip.SetTip(b, "Reset to default: " + string.Join("; ", items.Select(i => $"{i.Name} = {Shown(i)}")) + (b.IsEnabled ? "" : " (it is at the default now)"));
+        b.Click += (_, _) => { ResetItems(items); Build(); };
+        return b;
+    }
+
+    void ResetItems(IEnumerable<ItemDef> items)
+    {
+        foreach (var it in items)
+            try
+            {
+                _host.WriteCells(it, [.. it.Default!.Take(it.Count).Select((r, k) => (k, r))], true, "reset to default");
+                AppLog.Action("calibration", $"{_page.Name}: {it.Name} reset to default");
+            }
+            catch (Exception ex) { _status(ex.Message); AppLog.Error("calibration", "reset to default failed", ex); return; }
+        _status($"{_page.Name}: put back to the factory value");
+    }
+
+    void ResetPage()
+    {
+        var items = _page.Groups.SelectMany(g => g.Rows).SelectMany(WithDefaults).Distinct().ToList();
+        if (items.Count == 0) { _status("nothing on this page has a known factory value (a ROM opened without its source)"); return; }
+        ResetItems(items);
+        _status($"{_page.Name}: {items.Count} setting(s) put back to their factory values");
+        Build();
     }
 
     void Write(ItemDef item, double value, bool raw, string what)
@@ -287,7 +457,7 @@ public sealed class FeaturePageView : UserControl
         var defs = _host.Defs();
         bool wantTable = row.Kind == RowKind.Table;
         var candidates = defs.Items
-            .Where(i => (i.IsTable && i.Count > 1) == wantTable)
+            .Where(i => row.Kind == RowKind.Text ? i.Text != null : (i.IsTable && i.Count > 1) == wantTable)
             .OrderBy(i => i.Name, StringComparer.OrdinalIgnoreCase).ToList();
         var bound = CalPage.BoundAll(defs, slot);
         string Show(ItemDef i) => $"{i.Name}  @{i.Address:X4}";

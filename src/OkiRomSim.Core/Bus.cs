@@ -180,8 +180,12 @@ public sealed class Bus
     public bool VtecSolenoidActive => Is66911 ? (Ppi.Read(2) & 0xC0) != 0xC0 : IsOutput(1, 0) && Latch(1, 0);
     public bool InjectorOpen(int n) => Is66911 ? P66911.InjectorOpen(n) : IsOutput(2, n) && !Latch(2, n);
 
-    // Injector pulse width. P2.0-P2.3 only select the injector: the ROM pulls the line low, sets TMR0 = TM0 + pulse width in the same routine, and raises the line again within ~50 us. The injection event ends at that timer-0 compare match, so the pulse is measured from the select edge to the next TM0 match.
-    readonly ulong?[] _injSelectedAt = new ulong?[4];
+    // Injector pulse width. P2.0-P2.3 only select the injector: the ROM pulls the line low to open it and every
+    // timer-0 compare match closes one, the one opened longest ago (int_timer_0 sets TMR0 for the next close in
+    // opening order). At light load a pulse ends before the next one starts; at high load it outlasts the gap
+    // between injections, and the ROM pulls the still-open injector's line again beside the new one and lets it
+    // go at once - a re-select of an open injector, not a new pulse.
+    readonly List<(int Inj, ulong At)> _injOpen = [];
     /// Last measured pulse width per injector, microseconds.
     public readonly uint[] InjectorPulseUs = new uint[4];
     /// Injection events per injector since reset.
@@ -190,9 +194,14 @@ public sealed class Bus
     public readonly ulong[] InjectorLastEventAt = new ulong[4];
     /// Most recent pulse width on any injector, microseconds.
     public uint InjectorPulseWidthUs;
-    /// Timer-3 compare matches (coil firings) since reset, and when the last one was.
+    /// Sparks since reset, and when the last one was. Timer 3 drives the coil: a compare match armed by TCON3 bit 3 switches it off, one armed by bit 2 alone toggles it (at idle the ROM leaves bit 2 armed and times both edges with it; higher up it starts the dwell with bit 2 and ends it with bit 3). Switching the coil off fires the plug. A match with neither armed (the ROM's spark cut) or one that leaves the coil off fires nothing. The igniter lets the coil go without a spark once it has been on for longer than any dwell (CoilTimeoutUs); that also puts the toggling back in step after a stray match (a compare the ROM left behind wrapping round).
     public long IgnitionEvents;
     public ulong LastIgnitionAt;
+    /// Dwell (coil on time) before the last spark, microseconds.
+    public uint LastDwellUs;
+    bool _coilOn;
+    ulong _coilOnAt;
+    const uint CoilTimeoutUs = 20000;
     public float IacvDutyCyclePct;
 
     /// Oil pressure is available to the VTEC spool: the pressure switch (D6) then closes while the solenoid is open, pulling bit 1 of the 4700h switch buffer low (SwitchLatchPins) - what code 22 checks.
@@ -248,10 +257,10 @@ public sealed class Bus
 
     // Serial datalogging UART buffers
     public System.Collections.Generic.List<byte> SerialRxQueue = [];
-    /// The serial line is a single-wire K-line (the stock tester protocol): every byte sent is received back.
-    public bool KLineEcho;
+    /// The serial line is a single wire (the stock tester protocol): every byte sent is received back.
+    public bool SerialEcho;
     /// Machine cycles one byte takes on that line (10 bits at its baud rate).
-    public uint KLineByteCycles = (uint)(CpuHz * 10 / 9600);
+    public uint EchoByteCycles = (uint)(CpuHz * 10 / 9600);
     public System.Collections.Generic.List<byte> SerialTxQueue = [];
 
     /// The MSM66911's peripherals, used instead of the ones in this class when the active profile asks for them. Always constructed (it is a few hundred bytes) so nothing has to be null-checked.
@@ -283,8 +292,8 @@ public sealed class Bus
     {
         Array.Clear(Ram);
         ElapsedCycles = 0; NowCycles = 0;
-        Array.Clear(_injSelectedAt); Array.Clear(InjectorPulseUs); Array.Clear(InjectorEvents); Array.Clear(InjectorLastEventAt);
-        InjectorPulseWidthUs = 0; IgnitionEvents = 0; LastIgnitionAt = 0; IacvDutyCyclePct = 0;
+        _injOpen.Clear(); Array.Clear(InjectorPulseUs); Array.Clear(InjectorEvents); Array.Clear(InjectorLastEventAt);
+        InjectorPulseWidthUs = 0; IgnitionEvents = 0; LastIgnitionAt = 0; LastDwellUs = 0; _coilOn = false; _coilOnAt = 0; IacvDutyCyclePct = 0;
         Array.Clear(PwmOut); Array.Clear(TimerAccum);
         AdcCyclesRemaining = null; SerialTxCyclesRemaining = null;
         WatchdogCyclesRemaining = 0; WatchdogTripped = false; _wdtSequence = 0;
@@ -362,8 +371,36 @@ public sealed class Bus
     /// Cycle count of the CPU, kept current by the simulator so reads can be time-stamped.
     public ulong NowCycles;
 
+    /// Instructions that walk through the ROM rather than look something up in it - the background ROM sum reads a few words each main-loop pass and passes over every table every few seconds. Their reads are left out of the counts and the log, or each map would light up as the sum went by. An instruction becomes one after SweepRun reads in a row, each starting where the last ended; a table lookup starts again from its axis each call and never gets near.
+    public readonly bool[] SweepPc = new bool[0x10000];
+    /// Reads left out as sweeps.
+    public long SweepReads;
+    const int SweepRun = 256;
+    readonly ushort[] _runNext = new ushort[0x10000];
+    readonly ushort[] _runLen = new ushort[0x10000];
+
     public void NoteRomRead(ushort addr, int len)
     {
+        int pc = CurrentPc, a0 = addr & (RomSize - 1);
+        if (SweepPc[pc]) { SweepReads++; return; }
+        if (_runNext[pc] == a0 && _runLen[pc] != 0)
+        {
+            if (++_runLen[pc] >= SweepRun)
+            {
+                // a sweep: take back the reads it made getting here
+                SweepPc[pc] = true;
+                for (int k = 0; k < SweepRun * len; k++)
+                {
+                    int b = (a0 - 1 - k) & (RomSize - 1);
+                    if (RomReadCount[b] > 0) RomReadCount[b]--;
+                    if (RomReadCount[b] == 0) RomReadAt[b] = 0;
+                }
+                SweepReads += SweepRun;
+                return;
+            }
+        }
+        else _runLen[pc] = 1;
+        _runNext[pc] = (ushort)((a0 + len) & (RomSize - 1));
         for (int i = 0; i < len; i++)
         {
             int a = (addr + i) & (RomSize - 1);
@@ -545,8 +582,8 @@ public sealed class Bus
         {
             SerialTxQueue.Add(val);
             if (SerialTxQueue.Count > 8192) SerialTxQueue.RemoveRange(0, SerialTxQueue.Count - 4096);
-            // a K-line is one wire: what the ECU sends comes straight back into its own receiver, and the stock Honda tester protocol sends each byte of its answer on the echo of the one before
-            if (KLineEcho) QueueSerialRx([val], KLineByteCycles);
+            // a one-wire link: what the ECU sends comes straight back into its own receiver, and the stock Honda tester protocol sends each byte of its answer on the echo of the one before
+            if (SerialEcho) QueueSerialRx([val], EchoByteCycles);
             // The byte is in flight; TickTimers raises the transmit-complete interrupt when it lands.
             SerialTxCyclesRemaining = SerialByteCycles;
         }
@@ -568,35 +605,25 @@ public sealed class Bus
         for (int n = 0; n < 4; n++)
         {
             if (!IsOutput(2, n)) continue;
-            if (Pins.JustFell(2, n)) _injSelectedAt[n] = ElapsedCycles;
-            else if (Pins.JustRose(2, n) && _injSelectedAt[n] is ulong at)
+            if (Pins.JustFell(2, n) && !_injOpen.Exists(o => o.Inj == n))
             {
-                // At higher load the ROM selects two injectors on one edge and releases one straight away; that partner never injects. At light load the single selected line is also released early but that one is the real event.
-                for (int m = 0; m < 4; m++)
-                    if (m != n && _injSelectedAt[m] == at && InjectorOpen(m)) { _injSelectedAt[n] = null; break; }
+                // a new injection: whatever is still open the ROM has just pulled low again beside it, so an open
+                // event whose line is not low closed without a match of its own (a cut, a reset) and must not
+                // take the next one
+                _injOpen.RemoveAll(o => !InjectorOpen(o.Inj));
+                _injOpen.Add((n, ElapsedCycles));
             }
         }
     }
 
-    /// A TM0 match ends one injection event. If any selected line is still held low, the event is the oldest held one: int_timer_0 chains close events in firing order, so when pulses overlap (longer than a TDC interval) the earliest select closes first. If no line is held (light load: the ROM releases the select line at once), the event belongs to the newest select and anything older is a leftover partner.
+    /// A TM0 match closes the injector opened longest ago.
     void EndInjectorPulses()
     {
-        int pick = -1;
-        for (int n = 0; n < 4; n++)
-            if (_injSelectedAt[n] is ulong t && InjectorOpen(n) && (pick < 0 || t < _injSelectedAt[pick]!.Value)) pick = n;
-        if (pick < 0)
-        {
-            for (int n = 0; n < 4; n++)
-                if (_injSelectedAt[n] is ulong t && (pick < 0 || t > _injSelectedAt[pick]!.Value)) pick = n;
-            if (pick < 0) return;
-            ulong newest = _injSelectedAt[pick]!.Value;
-            for (int n = 0; n < 4; n++)
-                if (n != pick && _injSelectedAt[n] is ulong t && t < newest) _injSelectedAt[n] = null;
-        }
-        ulong start = _injSelectedAt[pick]!.Value;
-        _injSelectedAt[pick] = null;
+        _injOpen.RemoveAll(o => ElapsedCycles - o.At > CpuHz / 2);   // stale (engine stopped): not a pulse
+        if (_injOpen.Count == 0) return;
+        var (pick, start) = _injOpen[0];
+        _injOpen.RemoveAt(0);
         ulong cycles = ElapsedCycles - start;
-        if (cycles > CpuHz / 2) return;   // stale select (engine stopped), not a pulse
         InjectorPulseUs[pick] = InjectorPulseWidthUs = (uint)(cycles / CyclesPerUs);
         InjectorEvents[pick]++;
         InjectorLastEventAt[pick] = start;
@@ -741,7 +768,7 @@ public sealed class Bus
 
         while (_rxIncoming.Count > 0 && _rxIncoming.Peek().At <= ElapsedCycles)
         {
-            // one receive buffer, as on the chip: a byte the ROM never read (the echo of its own transmission on a K-line, which the tester protocol ignores) is overwritten by the next one rather than held back and read later in place of it
+            // one receive buffer, as on the chip: a byte the ROM never read (the echo of its own transmission on the one-wire link, which the tester protocol ignores) is overwritten by the next one rather than held back and read later in place of it
             SerialRxQueue.Clear();
             SerialRxQueue.Add(_rxIncoming.Dequeue().B);
             irqFlags |= (ushort)(1 << IrqSerialRx);
@@ -820,8 +847,20 @@ public sealed class Bus
             // TMR2 holds the CKP capture (see CaptureTm2), so timer 2 has no compare event of its own; its interrupt comes from the capture.
             if (matched && i != 2) irqFlags |= (ushort)(1 << irqBit);
             if (matched && i == 0) EndInjectorPulses();
-            // Igniter feedback: each timer-3 compare fires the coil, and the igniter's confirmation pulse comes back on TRNS1. The ROMs test "RB TRNSIT.1" once per TDC and log code 15 (ignition output) when it has not latched.
-            if (matched && i == 3) { Ram[SfrTrns] |= 0x02; IgnitionEvents++; LastIgnitionAt = ElapsedCycles; }
+            // Igniter feedback: each timer-3 compare drives the coil, and the igniter's confirmation pulse comes back on TRNS1. The ROMs test "RB TRNSIT.1" once per TDC and log code 15 (ignition output) when it has not latched.
+            if (matched && i == 3)
+            {
+                Ram[SfrTrns] |= 0x02;
+                byte t3 = Ram[SfrTcon3];
+                if (_coilOn && (ElapsedCycles - _coilOnAt) / CyclesPerUs > CoilTimeoutUs) _coilOn = false;
+                if ((t3 & 0x0C) != 0 && _coilOn)
+                {
+                    _coilOn = false;
+                    IgnitionEvents++; LastIgnitionAt = ElapsedCycles;
+                    LastDwellUs = (uint)((ElapsedCycles - _coilOnAt) / CyclesPerUs);
+                }
+                else if ((t3 & 0x0C) == 0x04) { _coilOn = true; _coilOnAt = ElapsedCycles; }
+            }
             // Every timer also raises a counter-overflow interrupt on the even bit just below its event bit.
             if (overflow) irqFlags |= (ushort)(1 << (irqBit - 1));
         }

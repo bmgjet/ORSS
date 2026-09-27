@@ -35,16 +35,23 @@ endif
 if XP == XP_CODE
 ; once per main-loop pass
 shiftlight_main:
+                CLRB    A                      ; byte mode: the main loop can call in either
                 LCB     A, shiftlight_enable
+                CMPB    A, #000h
                 JEQ     shiftlight_release
                 LCB     A, shiftlight_gearbased
+                CMPB    A, #000h
                 JNE     shiftlight_by_gear
                 CLR     A
                 LC      A, shiftlight_rpm
                 SJ      shiftlight_compare
 shiftlight_by_gear:
                 CLR     A
+if defined(FEAT_GEAR)
+                LB      A, off(MOD_GEAR)       ; gear from gear detection, 0 when it is not known
+else
                 LB      A, off(0024fh)         ; gear, 0 when it is not known
+endif
                 L       A, ACC
                 SLL     A
                 LC      A, shiftlight_rpm[ACC] ; the gear table follows the single rpm word
@@ -69,6 +76,7 @@ shiftlight_release:
                 RB      [DP].4
                 POPS    A
                 MOV     DP, A
+                RB      P1.4                   ; lamp off: the skeleton copied the forced level into the latch
                 RT
 endif
 

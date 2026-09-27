@@ -48,8 +48,20 @@ public sealed class AssemblerOptions
     public bool WarnTruncation { get; set; } = true;
     /// Virtual file system hook (the IDE assembles unsaved editor buffers).
     public Func<string, string?>? ReadFile { get; set; }
-    /// Sandbox for include / incbin (the MCP server confines agents to their workspace): a file this refuses is an error rather than being read.
+    /// Sandbox for include / incbin (the MCP server confines clients to their workspace): a file this refuses is an error rather than being read.
     public Func<string, bool>? AllowFile { get; set; }
+    /// Files kept lexed between assemblies (a skeleton built many times over with different features): a file whose text has not changed is not split or lexed again. Safe to share between assemblies running at the same time.
+    public SourceCache? Cache { get; set; }
+}
+
+/// One source line, lexed.
+public sealed record LexedLine(List<Token> Toks, string? Error);
+
+/// Source files kept lexed between assemblies (see AssemblerOptions.Cache).
+public sealed class SourceCache
+{
+    internal readonly System.Collections.Concurrent.ConcurrentDictionary<string, (string Text, string[] Lines, LexedLine?[] Lexed)> Files = new(StringComparer.OrdinalIgnoreCase);
+    public void Clear() => Files.Clear();
 }
 
 public sealed class AssemblyResult
@@ -63,6 +75,8 @@ public sealed class AssemblyResult
     public Dictionary<string, ModuleUsage> Modules { get; } = [];
     public List<string> Files { get; } = [];
     public bool Success => Diagnostics.All(d => d.Severity != Severity.Error);
+    /// Where a "checksum" directive put the byte that makes the 8-bit sum of the image 0, if the source has one.
+    public int? ChecksumAddress { get; set; }
     public int UsedBytes => Used.Count(u => u);
 
     public IEnumerable<(int Start, int End)> FreeRegions(int minSize = 16)
@@ -134,7 +148,14 @@ public sealed class OkiAssembler
     }
 
     // ------------------------------------------------------------------ state
-    sealed class Src { public required string Path; public required string[] Lines; }
+    sealed class Src
+    {
+        public required string Path; public required string[] Lines;
+        /// Each line's tokens and lexer error, once lexed: the same in both passes (and, with a SourceCache, in every build of the file).
+        public LexedLine?[]? Lexed;
+    }
+    /// The expressions parsed on the instruction line being assembled, shared by the rules tried on it.
+    readonly Dictionary<int, (Expr? E, int End)> _parsed = [];
     sealed class CondFrame { public bool Active; public bool Taken; public bool ParentActive; public bool SeenElse; public int Line; public string File = ""; }
 
     readonly Dictionary<string, long> _syms = new(StringComparer.Ordinal);
@@ -145,12 +166,15 @@ public sealed class OkiAssembler
     bool _final;
     long _pc;
     int _romSize;
+    bool _overflowReported;
+    bool _checkFailed;   // an error/assert directive fired this pass: it explains an overlap better than the overlap does
+    readonly List<(int Addr, string File, int Line, string Owner)> _overlaps = [];
     string _module = "(main)";
     readonly Stack<string> _moduleStack = new();
     readonly HashSet<(string, int, string)> _diagSeen = [];
     int[] _owner = []; // line id that wrote each byte (final pass), for overlap detection
     long _checksumAt = -1; // where a "checksum" directive put its byte (final pass)
-    readonly List<string> _ownerDesc = [];
+    readonly List<(string File, int Line)> _ownerDesc = [];   // who wrote each run of bytes, named only when two overlap
 
     public AssemblyResult AssembleFile(string path)
     {
@@ -173,6 +197,9 @@ public sealed class OkiAssembler
         if (rootText != null) _files[root] = new Src { Path = root, Lines = SplitLines(rootText) };
         for (int pass = 1; pass <= 2; pass++)
         {
+            _overflowReported = false;
+            _checkFailed = false;
+            _overlaps.Clear();
             _final = pass == 2;
             _pc = 0;
             _module = "(main)";
@@ -181,7 +208,7 @@ public sealed class OkiAssembler
             if (_final)
             {
                 _owner = new int[_romSize];
-                _ownerDesc.Clear(); _ownerDesc.Add("");
+                _ownerDesc.Clear(); _ownerDesc.Add(("", 0));
                 // keep label values from pass 1 for forward references, but reset SFR/defines
             }
             foreach (var (k, v) in Sfrs) SetSym(k, v, SymbolKind.Sfr, null, 0, silent: true);
@@ -195,6 +222,7 @@ public sealed class OkiAssembler
                 Report(Severity.Error, c.File, c.Line, 0, "'if' without matching 'endif'");
             }
             if (_moduleStack.Count > 0) Report(Severity.Error, root, 0, 0, $"module '{_module}' not closed with endmodule");
+            if (_final) ReportOverlaps();
             if (_res.Diagnostics.Any(d => d.Severity == Severity.Error) && !_final) break;
         }
         // "checksum": the byte that makes the 8-bit sum of the whole image 0, filled in once everything else is final
@@ -203,6 +231,7 @@ public sealed class OkiAssembler
             int sum = 0;
             foreach (var b in _res.Image) sum += b;
             _res.Image[_checksumAt] = (byte)(_res.Image[_checksumAt] - sum);
+            _res.ChecksumAddress = (int)_checksumAt;
         }
         foreach (var (k, info) in _symInfo) _res.Symbols[k] = info with { Value = _syms[k] };
         return _res;
@@ -221,7 +250,17 @@ public sealed class OkiAssembler
             if (!File.Exists(path)) return null;
             text = File.ReadAllText(path, Encoding.Latin1);
         }
-        s = new Src { Path = path, Lines = SplitLines(text) };
+        if (_opt.Cache is { } cache)
+        {
+            if (!cache.Files.TryGetValue(path, out var hit) || !string.Equals(hit.Text, text, StringComparison.Ordinal))
+            {
+                var lines = SplitLines(text);
+                hit = (text, lines, new LexedLine?[lines.Length]);
+                cache.Files[path] = hit;
+            }
+            s = new Src { Path = path, Lines = hit.Lines, Lexed = hit.Lexed };
+        }
+        else s = new Src { Path = path, Lines = SplitLines(text) };
         _files[path] = s;
         if (!_res.Files.Contains(path)) _res.Files.Add(path);
         return s;
@@ -273,7 +312,15 @@ public sealed class OkiAssembler
         int at = text.IndexOf(";@", StringComparison.Ordinal);
         if (at >= 0 && _final && Active(conds))
             _res.Annotations.Add(new Annotation((int)_pc, text[(at + 2)..].Trim(), src.Path, line));
-        var toks = Lexer.Tokenize(text, out var lexErr);
+        src.Lexed ??= new LexedLine?[src.Lines.Length];
+        List<Token> toks; string? lexErr;
+        bool mine = line - 1 < src.Lexed.Length && ReferenceEquals(text, src.Lines[line - 1]);
+        if (mine && src.Lexed[line - 1] is { } done) (toks, lexErr) = (done.Toks, done.Error);
+        else
+        {
+            toks = Lexer.Tokenize(text, out lexErr);
+            if (mine) src.Lexed[line - 1] = new LexedLine(toks, lexErr);
+        }
         if (lexErr != null)
         {
             if (Active(conds)) Report(Severity.Error, src.Path, line, 0, lexErr);
@@ -521,7 +568,7 @@ public sealed class OkiAssembler
                     var e = ExprParser.Parse(toks, ref q, true);
                     string msg = "assertion failed";
                     if (toks[q].Kind == Tk.Punct && toks[q].Text == "," && toks[q + 1].Kind == Tk.String) msg = toks[q + 1].Text;
-                    if (_final && Eval(e, src.Path, line, out _) == 0) Report(Severity.Error, src.Path, line, 0, msg);
+                    if (_final && Eval(e, src.Path, line, out _) == 0) { Report(Severity.Error, src.Path, line, 0, msg); _checkFailed = true; }
                     return;
                 }
             case "error":
@@ -529,6 +576,14 @@ public sealed class OkiAssembler
             case "message":
                 {
                     string msg = toks[q].Kind == Tk.String ? toks[q].Text : d;
+                    // error "text {} more", expr: the value goes where {} is
+                    if (toks[q].Kind == Tk.String && toks[q + 1].Kind == Tk.Punct && toks[q + 1].Text == ",")
+                    {
+                        q += 2;
+                        long v = Eval(ExprParser.Parse(toks, ref q, true), src.Path, line, out _);
+                        msg = msg.Contains("{}") ? msg.Replace("{}", v.ToString()) : $"{msg} {v}";
+                    }
+                    if (_final && d == "error") _checkFailed = true;
                     if (_final) Report(d == "error" ? Severity.Error : d == "warning" ? Severity.Warning : Severity.Info, src.Path, line, 0, msg);
                     return;
                 }
@@ -609,9 +664,10 @@ public sealed class OkiAssembler
         }
         Rule? rule = null;
         Dictionary<int, Expr>? exprs = null;
+        _parsed.Clear();
         foreach (var r in Grammar.Instance.RulesFor(mn))
         {
-            exprs = Grammar.Match(r, toks, p + 1);
+            exprs = Grammar.Match(r, toks, p + 1, _parsed);
             if (exprs != null) { rule = r; break; }
         }
         if (rule == null || exprs == null)
@@ -655,20 +711,19 @@ public sealed class OkiAssembler
         {
             if (_pc + bytes.Length > _romSize)
             {
-                Report(Severity.Error, file, line, 0, $"code exceeds ROM size ({_romSize} bytes) at {_pc:X4}h");
+                // once: everything after the first line past the end would say the same
+                if (!_overflowReported)
+                    Report(Severity.Error, file, line, 0, $"the ROM is full: code and tables run past the end of the {_romSize} bytes from here ({_pc:X4}h) - leave something out");
+                _overflowReported = true;
                 _pc += bytes.Length;
                 return;
             }
-            _ownerDesc.Add($"{Path.GetFileName(file)}:{line}");
+            _ownerDesc.Add((file, line));
             int id = _ownerDesc.Count - 1;
             for (int i = 0; i < bytes.Length; i++)
             {
                 int a = (int)_pc + i;
-                if (_res.Used[a])
-                {
-                    Report(Severity.Error, file, line, 0, $"overlaps address {a:X4}h already written by {_ownerDesc[_owner[a]]}");
-                    break;
-                }
+                if (_res.Used[a]) { var (of, ol) = _ownerDesc[_owner[a]]; _overlaps.Add((a, file, line, of.Length == 0 ? "" : $"{Path.GetFileName(of)}:{ol}")); }
             }
             for (int i = 0; i < bytes.Length; i++)
             {
@@ -682,6 +737,25 @@ public sealed class OkiAssembler
             mu.Add((int)_pc, bytes.Length);
         }
         _pc += bytes.Length;
+    }
+
+    // one error per run of bytes written twice, not one per line or per byte
+    void ReportOverlaps()
+    {
+        if (_overlaps.Count == 0 || _checkFailed) return;
+        var list = _overlaps.OrderBy(o => o.Addr).ToList();
+        int i = 0;
+        while (i < list.Count)
+        {
+            int j = i;
+            while (j + 1 < list.Count && list[j + 1].Addr <= list[j].Addr + 1) j++;
+            var o = list[i];
+            int n = list[j].Addr - o.Addr + 1;
+            Report(Severity.Error, o.File, o.Line, 0, n == 1
+                ? $"address {o.Addr:X4}h is written twice (also by {o.Owner})"
+                : $"{n} bytes ({o.Addr:X4}h-{list[j].Addr:X4}h) are written twice (also by {o.Owner}): the code before them is {n} bytes too big for its space");
+            i = j + 1;
+        }
     }
 
     void Report(Severity s, string file, int line, int col, string msg)

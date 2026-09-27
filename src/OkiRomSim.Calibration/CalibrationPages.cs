@@ -14,6 +14,10 @@ public enum RowKind
     MinMax,
     /// A map, opened in the normal table editor.
     Table,
+    /// A short text (a name, the watermark).
+    Text,
+    /// A setting forced on or off in software, or left to the ECU: two bits, `<slot>.on` and `<slot>.off`, shown as one choice.
+    Force,
 }
 
 /// One row of a feature page: what it is called, what it is in, and the stable key that says which definition of the ROM fills it.
@@ -44,6 +48,7 @@ public sealed record CalPage(string Key, string Name, string Category, string Bl
         foreach (var g in Groups)
             foreach (var r in g.Rows)
                 if (r.Kind == RowKind.MinMax) { yield return r.Slot + ".min"; yield return r.Slot + ".max"; }
+                else if (r.Kind == RowKind.Force) { yield return r.Slot + ".on"; yield return r.Slot + ".off"; }
                 else yield return r.Slot;
     }
 
@@ -113,8 +118,14 @@ public sealed record CalPage(string Key, string Name, string Category, string Bl
                 : []),
         ]);
 
-    /// The pages the editor offers: the three general-purpose outputs, then every other feature the established tuning software gives a page of its own (HtsPages).
-    public static IReadOnlyList<CalPage> All() => [Gpo(1), Gpo(2), Gpo(3), .. HtsPages.All()];
+    /// The pages the editor offers: the general-purpose outputs, then every other feature the established tuning software gives a page of its own (HtsPages).
+    public static IReadOnlyList<CalPage> All() => [Gpo(1), Gpo(2), Gpo(3), Gpo(4), .. HtsPages.All(), .. ModulePages.All(), .. Extra];
+
+    /// Pages added by plugins.
+    public static readonly List<CalPage> Extra = [];
+
+    /// The pages for one ROM (<see cref="ModulePages.ForRom"/>): the same, with every setting its feature modules add on a page.
+    public static List<CalPage> ForRom(DefinitionSet defs) => ModulePages.ForRom(defs);
 
     /// The definition bound to a slot, or null.
     public static ItemDef? Bound(DefinitionSet defs, string slot) =>
@@ -129,6 +140,7 @@ public sealed record CalPage(string Key, string Name, string Category, string Bl
     {
         int n = HtsLayout.Apply(defs, rom);
         foreach (var page in All()) n += GuessBindings(defs, page);
+        CalibrationDetector.ShareScaling(defs);
         return n;
     }
 
@@ -150,8 +162,8 @@ public sealed record CalPage(string Key, string Name, string Category, string Bl
     }
 
     static IEnumerable<(string Slot, string Extra)> Halves(PageRow row) =>
-        row.Kind == RowKind.MinMax
-            ? [(row.Slot + ".min", "min"), (row.Slot + ".max", "max")]
+        row.Kind == RowKind.MinMax ? [(row.Slot + ".min", "min"), (row.Slot + ".max", "max")]
+        : row.Kind == RowKind.Force ? [(row.Slot + ".on", "on"), (row.Slot + ".off", "off")]
             : [(row.Slot, "")];
 
     static ItemDef? Guess(DefinitionSet defs, string[] words, string extra, RowKind kind)

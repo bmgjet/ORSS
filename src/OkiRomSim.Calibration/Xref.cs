@@ -34,12 +34,32 @@ public static class DefinitionBuilder
             var item = Parse(a.Text, defs, a.Address);
             if (item == null) continue;
             item.Origin = $"{Path.GetFileName(a.File)}:{a.Line}";
+            // the factory setting is what the source says it is
+            if (item.Default == null && item.Count <= 512)
+                try { item.Default = [.. RomData.Read(defs, asm.Image, item).Select(c => c.Raw)]; } catch { }
             if (item.Name.Length == 0)
                 item.Name = defs.Symbols.FirstOrDefault(kv => kv.Value == item.Address).Key ?? $"item_{item.Address:X4}";
             defs.Items.Add(item);
         }
         defs.Items.Sort((x, y) => x.Address.CompareTo(y.Address));
+        IndexAxes(defs);
         return defs;
+    }
+
+    /// Headers for the lists kept one value per gear or per cylinder that have no axis of their own: 1, 2, 3... with "gear" or "cyl" over them, rather than bare cell numbers.
+    public static int IndexAxes(DefinitionSet defs)
+    {
+        int n = 0;
+        foreach (var i in defs.Items.Where(i => i.IsTable && i.Rows == 1 && i.Cols > 1 && i.ColAxis == null && i.Text == null))
+        {
+            string? unit = Regex.IsMatch(i.Name, "(?i)gear|shiftlight") && i.Cols is >= 4 and <= 6 ? "gear"
+                         : Regex.IsMatch(i.Name, "(?i)cyl") && i.Cols == 4 ? "cyl"
+                         : null;
+            if (unit == null) continue;
+            i.ColAxis = new AxisDef { Name = unit, Count = i.Cols, Values = [.. Enumerable.Range(1, i.Cols).Select(x => (double)x)], Unit = unit };
+            n++;
+        }
+        return n;
     }
 
     /// Parse one annotation body (everything after ";@").
@@ -88,7 +108,15 @@ public static class DefinitionBuilder
         item.RowAxis = ParseAxis(kv, defs, "rows", item.Rows);
         item.ColAxis = ParseAxis(kv, defs, "cols", item.Cols);
         item.Slot = Get("slot");
+        item.Text = Get("text");
         item.Stride = GetInt("stride") ?? 0;
+        if (Get("default") is { } dflt)
+        {
+            var raws = dflt.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(x => x.EndsWith('h') && int.TryParse(x[..^1], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var hx) ? hx
+                           : double.TryParse(x, NumberStyles.Any, CultureInfo.InvariantCulture, out var d) ? d : double.NaN).ToArray();
+            if (raws.Length > 0 && !raws.Any(double.IsNaN)) item.Default = raws;
+        }
         item.ColStride = GetInt("colstride", "cstride") ?? 0;
         if (Get("colscale") is { } cs && defs.TryResolve(cs, out var csa)) item.ColumnScaleAddress = csa;
         if (Get("flag") is { } fl)
@@ -100,16 +128,71 @@ public static class DefinitionBuilder
         return item;
     }
 
+    /// Where the formulas of other ROMs are found (the shipped ROM sources: Templates and Templates/References), for a definition that came from one of them without its formula (a table Detect placed from a known ROM, saved before the formula travelled with it). Set by the app at start.
+    public static readonly List<string> FormulaSources = [];
+    static Dictionary<string, FormulaDef>? _library;
+    static readonly object LibraryGate = new();
+
+    /// A formula by name from the shipped ROM sources' annotations (an inline one, named the way Inline names it), or null.
+    public static FormulaDef? KnownFormula(string name)
+    {
+        lock (LibraryGate)
+        {
+            if (_library == null)
+            {
+                _library = new(StringComparer.OrdinalIgnoreCase);
+                var scratch = new DefinitionSet();
+                foreach (var dir in FormulaSources.Where(Directory.Exists).Distinct(StringComparer.OrdinalIgnoreCase))
+                    foreach (var file in Directory.EnumerateFiles(dir, "*.asm", SearchOption.AllDirectories))
+                        try
+                        {
+                            foreach (var line in File.ReadLines(file))
+                            {
+                                int at = line.IndexOf(";@", StringComparison.Ordinal);
+                                if (at < 0 || !line.Contains("formula", StringComparison.OrdinalIgnoreCase)) continue;
+                                var kv = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                                foreach (Match m in KeyValue.Matches(line[(at + 2)..])) kv[m.Groups[1].Value] = m.Groups[2].Value.Trim('"');
+                                if (!kv.TryGetValue("formula", out var expr)) continue;
+                                int? dec = kv.TryGetValue("decimals", out var d) && int.TryParse(d, out var di) ? di : null;
+                                double? step = kv.TryGetValue("step", out var st) && double.TryParse(st, NumberStyles.Any, CultureInfo.InvariantCulture, out var sd) ? sd : null;
+                                Inline(scratch, expr, kv.GetValueOrDefault("inverse"), kv.GetValueOrDefault("unit"), dec, step, Path.GetFileName(file));
+                            }
+                        }
+                        catch { }
+                foreach (var f in scratch.Formulas) _library.TryAdd(f.Name, f);
+                // and under the hash names they were saved with before they were named by what they are
+                foreach (var f in scratch.Formulas.ToList())
+                {
+                    uint h = 2166136261;
+                    foreach (char ch in f.Expr + "|" + f.Inverse + "|" + f.Unit) h = (h ^ ch) * 16777619;
+                    _library.TryAdd("inline_" + h.ToString("x8"), f);
+                }
+            }
+            return _library.TryGetValue(name, out var found) ? found : null;
+        }
+    }
+
     /// A formula given as an expression rather than a name becomes a formula of its own, named from a stable hash of the expression (string.GetHashCode is randomised per run).
     static string? Inline(DefinitionSet defs, string? expr, string? inverse, string? unit, int? decimals, double? step, string owner)
     {
-        if (expr == null || Regex.IsMatch(expr, @"^[A-Za-z_]\w*$")) return expr;
-        uint h = 2166136261;
-        foreach (char ch in expr + "|" + inverse + "|" + unit) h = (h ^ ch) * 16777619;
+        // a bare name is a named formula - except "x" itself, the raw value with this item's unit and decimals
+        if (expr == null || (Regex.IsMatch(expr, @"^[A-Za-z_]\w*$") && !expr.Equals("x", StringComparison.OrdinalIgnoreCase))) return expr;
+        // named by what it is (the map load axis, the MAP sensor byte); one the same as a built-in scaling is that one
+        var name = FormulaNames.ForInline(expr, inverse, unit);
+        if (Builtin.All.Any(b => b.Name == name)) return name;
+        string Norm(string? s) => Regex.Replace(s ?? "", @"\s+", "");
+        // the name taken by a different formula (the same sum in another unit): the unit goes on the end
+        var taken = defs.Formulas.FirstOrDefault(f => f.Name == name);
+        if (taken != null && (Norm(taken.Expr) != Norm(expr) || !string.Equals(taken.Unit ?? "", unit ?? "", StringComparison.OrdinalIgnoreCase)))
+        {
+            var u = Regex.Replace((unit ?? "").ToLowerInvariant(), "[^a-z0-9]", "");
+            name = $"{name}_{(u.Length > 0 ? u : "raw")}";
+            for (int n = 2; defs.Formulas.FirstOrDefault(f => f.Name == name) is { } t && Norm(t.Expr) != Norm(expr); n++) name = $"{FormulaNames.ForInline(expr, inverse, unit)}_{n}";
+        }
         var inline = new FormulaDef
         {
-            Name = "inline_" + h.ToString("x8"), Expr = expr, Inverse = inverse, Unit = unit ?? "",
-            Decimals = decimals ?? 2, Step = step ?? 0, Notes = $"inline formula from {owner}",
+            Name = name, Expr = expr, Inverse = inverse, Unit = unit ?? "",
+            Decimals = decimals ?? 2, Step = step ?? 0, Notes = $"from {owner}",
         };
         if (!defs.Formulas.Any(f => f.Name == inline.Name)) defs.Formulas.Add(inline);
         return inline.Name;
@@ -177,6 +260,7 @@ public static class DefinitionBuilder
         Add("label", item.Label);
         Add("category", item.Category == "General" ? null : item.Category);
         Add("slot", item.Slot);
+        Add("text", item.Text);
         Add("desc", item.Description);
         return sb.ToString();
     }

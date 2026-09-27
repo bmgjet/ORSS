@@ -33,8 +33,10 @@ public sealed class MoatesTrace : IDisposable
     public string Version { get; private set; } = "";
     public bool Connected => _port?.IsOpen == true;
     public bool Tracing => _thread?.IsAlive == true;
-    /// Emulation address of ECU address 0. A 32 KB image sits at 8000-FFFF of the bank the device has been told to select, which is what the established tuning software writes to, so the address bytes it sends are 00 80 and up. (An Ostrich 2.0 has half a megabyte behind that window; the bank is chosen with the BS command when the link is opened.)
+    /// Where ECU address 0 is in the addresses the Trace command reports (Settings > Emulator & datalog). The trace only: uploads and downloads always go to TransferBase.
     public int Base { get; set; } = 0x8000;
+    /// Where uploads and downloads put a 32 KB image: 8000-FFFF of the bank chosen when the link was opened, with the top address byte 00 - exactly what the established tuning software sends (Ostrich 'ZW' 10 00 80.., Demon 'ZW' 10 00 00 00 80..). Writing through the trace base instead (78000 is a common setting there) put the ROM somewhere the ECU does not run from and a download does not read, so it came back blank.
+    public const int TransferBase = 0x8000;
     /// Which device this is, as the user set it in Settings ("auto", "Ostrich", "Demon", "ROMulator", "PGMFI RTP", "CobraRTP", "ECU-Tamer", "Moates1").
     public string Kind { get; set; } = "auto";
     /// What the device answered to the version query, once it has been identified.
@@ -53,8 +55,10 @@ public sealed class MoatesTrace : IDisposable
     public event Action<int>? Hit;
     public event Action<string>? Status;
 
-    public static string[] Ports() => [.. SerialPort.GetPortNames().OrderBy(p => p.Length).ThenBy(p => p)];
+    public static string[] Ports() => SerialLink.Ports();
     public string PortName => _port?.PortName ?? "";
+    /// Goes up by one each time the link is made (so a new connection can be told from the one before).
+    public int Connections { get; private set; }
     readonly object _io = new();
     /// Bytes written since connecting (status display).
     public long BytesUploaded { get; private set; }
@@ -88,7 +92,7 @@ public sealed class MoatesTrace : IDisposable
                 SendRaw((byte)'V', (byte)'V');
                 Pause();
                 var v = Read(3);
-                if (Identify(v, out var name)) { Version = $"{name} {v[0]}.{v[1]}"; Device = name; break; }
+                if (Identify(v, out var name)) { Version = $"{name} {v[0]}.{v[1]}"; Device = name; Connections++; break; }
                 why = $"answered {v[0]:X2} {v[1]:X2} {v[2]:X2} to the version query; its third byte should say which device it is" +
                       (Kind == "auto" ? "" : $", and {Kind} was asked for in Settings");
             }
@@ -96,13 +100,23 @@ public sealed class MoatesTrace : IDisposable
             Drain();
             if (attempt == Math.Max(0, Retries)) throw new IOException(
                 $"no emulator answered on {portName} at {baud} baud: {why}. " +
-                "Check the port, and that the baud rate in Settings > Hit trace & emulator matches the device (115200 or 921600 for an Ostrich).");
+                "Check the port, and that the baud rate in Settings > Emulator & datalog matches the device (115200 or 921600 for an Ostrich).");
         }
-        // the Ostrich family needs its bank chosen before the 8000-FFFF window means anything: BRR resets the bank pointer (answers 00) and BS 0 selects bank 0 (answers O)
-        if (Device is "Ostrich" or "Demon" or "ECU-Tamer" or "CobraRTP")
+        // the banks, the way the established tuning software sets them up on each device:
+        //   Ostrich family: BRR asks the read/write bank (00 = bank 0, all is well); anything else, BS 0 (answers 'O')
+        //   Demon:          BRR the same, and BR 0 when it is not 0 (answers 'O'); then BER and BES, which answer 01
+        //                   on a Demon that is set up to emulate (never BS 0 - the Demon has no business with it)
+        if (Device is "Ostrich" or "ECU-Tamer" or "CobraRTP")
         {
-            Command("bank reset", [(byte)'B', (byte)'R', (byte)'R'], 0x00, soft: true);
-            Command("bank select", [(byte)'B', (byte)'S', 0x00], (byte)'O', soft: true);
+            if (!Command("bank read", [(byte)'B', (byte)'R', (byte)'R'], 0x00, soft: true))
+                Command("bank select", [(byte)'B', (byte)'S', 0x00], (byte)'O', soft: true);
+        }
+        else if (Device == "Demon")
+        {
+            if (!Command("bank read", [(byte)'B', (byte)'R', (byte)'R'], 0x00, soft: true))
+                Command("bank set", [(byte)'B', (byte)'R', 0x00], (byte)'O', soft: true);
+            Command("emulation bank", [(byte)'B', (byte)'E', (byte)'R'], 0x01, soft: true);
+            Command("emulation bank set", [(byte)'B', (byte)'E', (byte)'S'], 0x01, soft: true);
         }
         OkiRomSim.Core.AppLog.Write(OkiRomSim.Core.LogKind.Serial, "emulator", $"connected {Version} on {portName} at {baud} baud");
         return Version;
@@ -110,6 +124,9 @@ public sealed class MoatesTrace : IDisposable
 
     /// True for the devices whose bulk transfers carry a scrambled payload (the Demon family).
     bool Scrambled => Device is "Demon" or "RTP";
+
+    /// How much one read or write moves: the fast bulk transfer where the device has it - 4 KB (an Ostrich 2, the Demon family, which only takes whole 4 KB blocks), 2 KB on an ECU-Tamer - and one 256-byte block on the first Moates emulator, which does not (as HTS-master does it).
+    int Chunk => Scrambled ? 0x1000 : Kind switch { "ECU-Tamer" => 0x800, "Moates1" => 0x100, _ => 0x1000 };
 
     /// The 8-byte vendor key the Demon family scrambles a bulk transfer with, and the starting value of the chain, both exactly as the established tuning software has them. The transform is a byte chain, not a cipher: each byte is XORed with the previous *scrambled* byte, then alternately added to and XORed with the eight key bytes. It exists so a transfer only works with the vendor's own tool; there is nothing secret in it, and it is reproduced here purely so this program can talk to a device somebody already owns.
     static readonly byte[] VendorKey = { 0x0F, 0xFC, 0xCE, 0x2C, 0xA3, 0x9F, 0x65, 0x99 };
@@ -169,7 +186,7 @@ public sealed class MoatesTrace : IDisposable
     }
 
     /// A short command with its checksum, checking the byte it answers with. `soft` logs a wrong answer instead of throwing (the bank commands are not on every device).
-    void Command(string what, byte[] bytes, byte expect, bool soft = false)
+    bool Command(string what, byte[] bytes, byte expect, bool soft = false)
     {
         try
         {
@@ -177,7 +194,7 @@ public sealed class MoatesTrace : IDisposable
             Send(bytes);
             Pause();
             var a = Read(1);
-            if (a[0] == expect) return;
+            if (a[0] == expect) return true;
             if (!soft) throw new IOException($"{what} refused (answer {a[0]:X2}, expected {expect:X2})");
             OkiRomSim.Core.AppLog.Warn("emulator", $"{what}: answer {a[0]:X2}, expected {expect:X2} - carrying on");
         }
@@ -186,6 +203,7 @@ public sealed class MoatesTrace : IDisposable
             if (!soft) throw new IOException($"{what}: no answer");
             OkiRomSim.Core.AppLog.Warn("emulator", what + ": no answer - carrying on");
         }
+        return false;
     }
 
     /// Every command but the version query is followed by an 8-bit additive checksum of its bytes.
@@ -235,10 +253,52 @@ public sealed class MoatesTrace : IDisposable
         return buf;
     }
 
+    // ---- the port shared with the datalog (a Demon logs the ECU over the same cable)
+
+    /// The emulator's port kept for one exchange: an upload waits until it is let go, and the other way round.
+    public IDisposable Hold()
+    {
+        Monitor.Enter(_io);
+        return new Release(_io);
+    }
+
+    sealed class Release(object io) : IDisposable
+    {
+        int _done;
+        public void Dispose() { if (Interlocked.Exchange(ref _done, 1) == 0) Monitor.Exit(io); }
+    }
+
+    /// Bytes to the device as they are (the datalog's own framing).
+    public void LineWrite(byte[] data)
+    {
+        lock (_io)
+        {
+            if (_port == null) throw new IOException("the emulator is not connected");
+            if (Tracing) StopTrace();
+            _port.Write(data, 0, data.Length);
+        }
+    }
+
+    /// Whatever arrives within `timeoutMs`, up to `count` bytes; 0 when nothing does.
+    public int LineRead(byte[] buffer, int offset, int count, int timeoutMs)
+    {
+        lock (_io)
+        {
+            if (_port == null) return 0;
+            try { _port.ReadTimeout = Math.Max(1, timeoutMs); return _port.Read(buffer, offset, count); }
+            catch (TimeoutException) { return 0; }
+            catch (InvalidOperationException) { return 0; }
+            catch (IOException) { return 0; }
+            finally { try { _port.ReadTimeout = Math.Max(50, TimeoutMs); } catch { } }
+        }
+    }
+
+    public void LineDiscard() { lock (_io) try { _port?.DiscardInBuffer(); } catch { } }
+
     /// Upload a ROM image to the top of the 64 KB emulation space (32 KB -> 8000-FFFF).
     public void Upload(byte[] rom, Action<double>? progress = null) => WriteRange(rom, 0, rom.Length, progress);
 
-    /// Write part of the image: the 256-byte blocks covering [start, start+length). Used for uploading calibration edits as they are made. A running trace is paused around it. Blocks are addressed in the device's own space, not the ECU's: `Base` is where ECU address 0 lives in the emulator (0x78000 on an Ostrich 2.0, whose window is the top of half a megabyte), and the command carries all three bytes of it. Sending the bare ECU address instead is what made the device answer '?' - it was being asked to write at 0x008000, which is outside the window it is emulating.
+    /// Write part of the image: the blocks covering [start, start+length), at TransferBase + the offset (8000-FFFF, top address byte 00, as the established tuning software writes). Used for uploading calibration edits as they are made. A running trace is paused around it.
     public void WriteRange(byte[] rom, int start, int length, Action<double>? progress = null)
     {
         lock (_io)
@@ -253,11 +313,11 @@ public sealed class MoatesTrace : IDisposable
                 int grain = Scrambled ? 0x1000 : 0x100;
                 int first = Math.Max(0, start) & ~(grain - 1), end = Math.Min(romSize, start + Math.Max(1, length));
                 if (Scrambled) end = Math.Min(romSize, (end + 0xFFF) & ~0xFFF);
-                for (int off = first; off < end; off += 0x1000)
+                for (int off = first; off < end; off += Chunk)
                 {
-                    int len = Math.Min(0x1000, end - off);
+                    int len = Math.Min(Chunk, end - off);
                     int blocks = Scrambled ? 16 : (len + 255) / 256;
-                    int addr = Base + off;
+                    int addr = TransferBase + off;
                     var cmd = Scrambled ? DemonWriteFrame(rom, off, romSize, addr) : new byte[5 + (blocks * 256)];
                     if (!Scrambled)
                     {
@@ -280,9 +340,7 @@ public sealed class MoatesTrace : IDisposable
                         }
                         catch (TimeoutException) { answer = 0; }
                         if (attempt >= Math.Max(0, Retries))
-                            throw new IOException($"upload refused at {addr:X5} (answer {answer:X2}). " +
-                                                  "Check the emulation base in Settings > Hit trace & emulator: it is where ECU address 0 sits in " +
-                                                  "the emulator, and a 32 KB image in the bank the device has selected sits at 0x8000.");
+                            throw new IOException($"upload refused at {addr:X5} (answer {answer:X2}): check the device picked in Settings, and its baud rate");
                         OkiRomSim.Core.AppLog.Warn("emulator", $"upload at {addr:X5} answered {answer:X2}; retrying");
                     }
                     BytesUploaded += blocks * 256;
@@ -323,11 +381,11 @@ public sealed class MoatesTrace : IDisposable
             try
             {
                 var rom = new byte[size];
-                for (int off = 0; off < size; off += 0x1000)
+                for (int off = 0; off < size; off += Chunk)
                 {
-                    int len = Math.Min(0x1000, size - off);
+                    int len = Math.Min(Chunk, size - off);
                     int blocks = Scrambled ? 16 : (len + 255) / 256;
-                    int addr = Base + off;
+                    int addr = TransferBase + off;
                     byte[] data;
                     for (int attempt = 0; ; attempt++)
                     {
@@ -446,12 +504,21 @@ public sealed class MoatesTrace : IDisposable
         catch { }
     }
 
+    /// Let the port go: after anything using it (an upload, a datalog exchange) has finished, so nothing writes to a port that is half closed.
     public void Close()
     {
-        StopTrace();
-        try { _port?.Close(); _port?.Dispose(); } catch { }
-        _port = null;
-        Version = "";
+        lock (_io)
+        {
+            StopTrace();
+            var port = _port;
+            _port = null;
+            Version = "";
+            if (port == null) return;
+            try { port.DiscardInBuffer(); port.DiscardOutBuffer(); } catch { }
+            try { port.Close(); } catch { }
+            try { port.Dispose(); } catch { }
+            OkiRomSim.Core.AppLog.Write(OkiRomSim.Core.LogKind.Serial, "emulator", "port closed");
+        }
     }
 
     public void Dispose() => Close();

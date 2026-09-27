@@ -70,7 +70,7 @@ public sealed class GaugeSpec
     public string FaceImagePath { get; set; } = "";
     /// How solid the face is, 0-1: its colour and its picture. Turn it down to let the background show through.
     public double FaceOpacity { get; set; } = 1;
-    /// Where the reading comes from: "log" (the datalog) or the name of an external feed set up in Settings > Datalog (an HTTP endpoint or a JSON file).
+    /// Where the reading comes from: "log" (the datalog) or the name of an external feed set up in Settings > Emulator & datalog (an HTTP endpoint or a JSON file).
     public string Source { get; set; } = "log";
 
     public GaugeSpec Clone() => (GaugeSpec)MemberwiseClone();

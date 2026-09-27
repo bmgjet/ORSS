@@ -20,6 +20,11 @@
   <ItemGroup>
     <!-- File > New ROM lists these -->
     <None Include="..\..\Templates\*.asm" Link="Templates\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- File > New ROM > Create: the skeleton ROMs and their feature modules -->
+    <None Include="..\..\roms\*-skeleton.asm" Link="Templates\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\roms\*-features\**\*" Link="Templates\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Detect: known ROMs whose tables are found in a ROM opened with no labels, by lining the code up -->
+    <None Include="..\..\roms\p30.asm;..\..\roms\p72-269.asm;..\..\roms\p08-911-243.asm;..\..\roms\HTS115.asm" Link="Templates\References\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
     <!-- Floating versions so this restores against whatever 11.x is current. Pin them once it builds on your machine if you want reproducible restores. -->
@@ -40,4 +45,35 @@
     <ProjectReference Include="..\OkiRomSim.Calibration\OkiRomSim.Calibration.csproj" />
     <ProjectReference Include="..\OkiRomSim.Mcp\OkiRomSim.Mcp.csproj" />
   </ItemGroup>
+  <!-- A distribution build: dotnet publish -c Release -p:Bundle=true
+       The libraries (Avalonia and the rest, and this solution's own) go inside OkiRomSimStudio.dll and are loaded from
+       there (EmbeddedLibraries.cs); the runtimes folder - each platform's native files and platform builds - stays beside it. -->
+  <PropertyGroup Condition="'$(Bundle)' == 'true'">
+    <GenerateDependencyFile>false</GenerateDependencyFile>
+    <!-- its own build folders: an everyday build is left as it is -->
+    <OutputPath>bin\$(Configuration)-bundle\</OutputPath>
+    <IntermediateOutputPath>obj\$(Configuration)-bundle\</IntermediateOutputPath>
+  </PropertyGroup>
+  <Target Name="EmbedLibraries" AfterTargets="ResolveAssemblyReferences" BeforeTargets="CoreCompile" Condition="'$(Bundle)' == 'true'">
+    <ItemGroup>
+      <_Embed Include="@(ReferenceCopyLocalPaths)" Condition="'%(ReferenceCopyLocalPaths.Extension)' == '.dll' And '%(ReferenceCopyLocalPaths.DestinationSubDirectory)' == ''" />
+      <EmbeddedResource Include="@(_Embed)" LogicalName="deps/%(_Embed.Filename)%(_Embed.Extension)" WithCulture="false" Type="Non-Resx" />
+    </ItemGroup>
+    <Message Importance="high" Text="Bundle: @(_Embed->Count()) libraries inside $(AssemblyName).dll" />
+    <!-- and not copied beside it as well: with no .deps.json a loose copy is loaded before anything else, and the loose
+         System.IO.Ports.dll is the placeholder that only throws (the real ones are in runtimes\win and runtimes\unix) -->
+    <ItemGroup>
+      <_Loose Include="@(ReferenceCopyLocalPaths)" Condition="('%(ReferenceCopyLocalPaths.Extension)' == '.dll' Or '%(ReferenceCopyLocalPaths.Extension)' == '.pdb' Or '%(ReferenceCopyLocalPaths.Extension)' == '.xml') And '%(ReferenceCopyLocalPaths.DestinationSubDirectory)' == ''" />
+      <ReferenceCopyLocalPaths Remove="@(_Loose)" />
+    </ItemGroup>
+  </Target>
+  <!-- loose copies an earlier bundle build left in the build folder -->
+  <Target Name="ClearLooseLibraries" AfterTargets="Build" Condition="'$(Bundle)' == 'true'">
+    <Delete Files="@(_Loose->'$(OutDir)%(Filename)%(Extension)')" ContinueOnError="true" />
+  </Target>
+  <Target Name="LeaveEmbeddedOut" AfterTargets="ComputeResolvedFilesToPublishList" Condition="'$(Bundle)' == 'true'">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="('%(ResolvedFileToPublish.Extension)' == '.dll' Or '%(ResolvedFileToPublish.Extension)' == '.pdb' Or '%(ResolvedFileToPublish.Extension)' == '.xml') And '%(ResolvedFileToPublish.RelativePath)' == '%(ResolvedFileToPublish.Filename)%(ResolvedFileToPublish.Extension)' And '%(ResolvedFileToPublish.Filename)' != '$(AssemblyName)'" />
+    </ItemGroup>
+  </Target>
 </Project>

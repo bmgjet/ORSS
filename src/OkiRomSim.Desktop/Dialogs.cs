@@ -9,6 +9,21 @@ namespace OkiRomSim.Desktop;
 /// Small modal questions, in the same dark chrome as the rest of the program: "you are about to replace what is open - what would you like to do?". Returns which button was pressed, or null when the window was closed without choosing (treated as cancel everywhere).
 public static class Dialogs
 {
+    /// Show a dialog over `owner`, or, when that window is not on screen (closed, not open yet, hidden), over whichever window of the program is; with none on screen, on its own. Returns when it is closed.
+    public static async Task ShowModal(Window w, Window? owner)
+    {
+        owner = owner is { IsVisible: true } ? owner
+              : (Avalonia.Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?
+                    .Windows.LastOrDefault(x => x.IsVisible && x != w);
+        if (owner != null) { await w.ShowDialog(owner); return; }
+        w.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        var done = new TaskCompletionSource();
+        w.Closed += (_, _) => done.TrySetResult();
+        w.Show();
+        await done.Task;
+    }
+
+
     public static async Task<string?> Ask(Window owner, string title, string message, params string[] buttons)
     {
         var w = new Window
@@ -53,7 +68,7 @@ public static class Dialogs
         Grid.SetRow(bar, 2); g.Children.Add(bar);
         w.Content = g;
 
-        await w.ShowDialog(owner);
+        await ShowModal(w, owner);
         OkiRomSim.Core.AppLog.Action("ui", $"{title}: {answer ?? "(closed)"}");
         return answer;
     }
@@ -95,7 +110,7 @@ public static class Dialogs
         w.Content = g;
         w.Opened += (_, _) => editor.Focus();
 
-        await w.ShowDialog(owner);
+        await ShowModal(w, owner);
         OkiRomSim.Core.AppLog.Action("ui", $"{title}: {(accepted ? ok : "cancelled")}");
         return accepted;
     }

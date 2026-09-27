@@ -49,7 +49,7 @@ public static class BinDisassembler
 
     /// Disassemble `rom`. `assemble` rebuilds text to an image (null on failure) with any failing line numbers; it is used to verify and repair the output. Pass null to skip verification.
     public static BinDisassembly Disassemble(byte[] rom, string title,
-        Func<string, (byte[]? image, IEnumerable<int> badLines)>? assemble = null)
+        Func<string, (byte[]? image, IEnumerable<int> badLines)>? assemble = null, IReadOnlyDictionary<int, string>? names = null)
     {
         var image = new byte[Bus.RomSize];
         Array.Fill(image, (byte)0xFF);
@@ -99,6 +99,21 @@ public static class BinDisassembler
                 }
                 if (op is "J" or "SJ" or "RT" or "RTI" or "BRK" || IsIndirectJump(d)) break;
                 pc = next;
+            }
+        }
+
+        // names kept from before (a definitions file saved beside the .bin): they take the place of the made-up ones
+        if (names != null)
+        {
+            var used = new HashSet<string>(labels.Values, StringComparer.OrdinalIgnoreCase);
+            foreach (var (addr, name) in names.OrderBy(kv => kv.Key))
+            {
+                if (addr < VectorTableEnd || addr >= Bus.RomSize || !Regex.IsMatch(name, @"^[A-Za-z_]\w*$") || used.Contains(name)) continue;
+                if (OkiRomSim.Assembler.Lexer.IsReservedWord(name) || OkiRomSim.Assembler.OkiAssembler.Sfrs.ContainsKey(name)) continue;
+                if (owner[addr] >= 0 && owner[addr] != addr) continue;      // inside an instruction: nowhere to put it
+                if (labels.TryGetValue(addr, out var was)) used.Remove(was);
+                labels[addr] = name;
+                used.Add(name);
             }
         }
 

@@ -5,7 +5,7 @@ using System.Text;
 namespace OkiRomSim.Calibration;
 
 /// Where the HTS 1.15 pages keep each setting, by address: the calibration layout of HondaTuneSuite 1.15 (HTS-master Rom.cs, LoadECtuneAddresses + NewLocation115 and the code-pattern searches), checked against the code of HTS120 that reads each field. HTS120 keeps the 1.15 calibration where it was, so one table serves both; its own settings are found by label. A name cannot do this job - the page rows are named after what a setting does, the ROMs after the old software's field names, and several fields have more than one name or none - so an HTS ROM is bound by address. <see cref="Apply"/> types, scales and binds every row of every page in one go.
-public static class HtsLayout
+public static partial class HtsLayout
 {
     /// One setting: where it is (or, with a Label, the HTS120 label it sits at plus Address), and how to read it, written as the body of a ";@" annotation ("type=u8 formula=honda_temp_c", "count=6 colstride=2 ...").
     public sealed record Field(string Slot, int Address, string Name, string Spec, string Desc = "", string? Label = null);
@@ -14,21 +14,21 @@ public static class HtsLayout
 
     const string U8 = "type=u8";
     const string U16 = "type=u16";
-    const string Ect = "type=u8 formula=honda_temp_c";                  // method_191 / method_230
-    const string Tps = "type=u8 formula=hts_tps_pct";                   // method_198 / method_228
-    const string Vss = "type=u8 formula=speed_kmh_byte";                // method_197 / method_233
+    const string Ect = "type=u8 formula=honda_temp_c";
+    const string Tps = "type=u8 formula=tps_pct";
+    const string Vss = "type=u8 formula=speed_kmh_byte";
     const string RpmW = "type=u16 formula=rpm_period_word";             // wordToRpm16bit
     const string RpmL = "type=u8 formula=rpm_axis_byte_log";            // byteToRpmLow8bit
-    const string Mbar = "type=u8 formula=hts_map_mbar";                 // byteToMillibar, from the ROM's own MAP preset
-    const string Volt = "type=u8 formula=volts_5v_byte";                // method_196 / method_227
-    const string TrimW = "type=u16 formula=hts_trim_word";              // method_203 / method_231 (32768)
-    const string Trim128 = "type=u8 formula=hts_trim_128";              // method_205 (128)
-    const string X10 = "type=u8 formula=hts_x10_ms";                    // x * 10 ms
-    const string Fv = "type=u16 formula=hts_quarter";                   // method_223 (FV / 4)
-    const string QDeg = "type=u8 formula=hts_quarter_deg";              // x * 0.25 deg
-    const string Adv = "type=u8 formula=ign_advance";                   // method_188: x * 0.25 - 6
-    const string Duty = "type=u8 formula=hts_duty_half";                // method_207 / method_211
-    const string Half = "type=u8 formula=hts_half_step";                // method_190 / method_222
+    const string Mbar = "type=u8 formula=map_sensor_preset_mbar";                 // byteToMillibar, from the ROM's own MAP preset
+    const string Volt = "type=u8 formula=volts_5v_byte";
+    const string TrimW = "type=u16 formula=trim_word_pct";
+    const string Trim128 = "type=u8 formula=trim_byte_pct";
+    const string X10 = "type=u8 formula=time_10ms";                    // x * 10 ms
+    const string Fv = "type=u16 formula=quarter";
+    const string QDeg = "type=u8 formula=degrees_quarter";              // x * 0.25 deg
+    const string Adv = "type=u8 formula=ign_advance";
+    const string Duty = "type=u8 formula=duty_half_pct";
+    const string Half = "type=u8 formula=half_step_signed";
     const string On = "type=u8 flag=1 on=255 off=0";                    // ticked when not 00
     const string OnZ = "type=u8 flag=1 on=0 off=255";                   // ticked when 00 (the 1.15 "== 0" checks)
     const string On1 = "type=u8 flag=1 on=1 off=0";                     // HTS120's own switches (00 off, else on)
@@ -61,19 +61,19 @@ public static class HtsLayout
         F("closeloop.o2heater.disable", 0x61F4, "O2Heater", OnZ, "O2 heater off (and its code 41).");
         F("closeloop.adjust.min", 0x6167, "CLSTFT", TrimW, "Most the closed-loop trim may take away.");
         F("closeloop.adjust.max", 0x6169, "CLSTFV", TrimW, "Most the closed-loop trim may add.");
-        P("closeloop.tps.open", 0x63CA, "OpenLoopTPS", 6, "hts_tps_pct", "rpm_axis_byte_log", "Open loop above this throttle, against rpm.");
-        P("closeloop.tps.close", 0x63BE, "CloseLoopTPS", 6, "hts_tps_pct", "rpm_axis_byte_log", "Closed loop below this throttle, against rpm.");
+        P("closeloop.tps.open", 0x63CA, "OpenLoopTPS", 6, "tps_pct", "rpm_axis_byte_log", "Open loop above this throttle, against rpm.");
+        P("closeloop.tps.close", 0x63BE, "CloseLoopTPS", 6, "tps_pct", "rpm_axis_byte_log", "Closed loop below this throttle, against rpm.");
         F("closeloop.rate", 0x633E, "CloseLoopRate", "type=u16 count=4 formula=x/16 inverse=x*16 unit=%/s", "How fast the closed-loop trim moves.");
         F("closeloop.ve", 0x610F, "DisableVE", On, "VE correction off.");
         F("closeloop.ve.ect", 0x6110, "VE_ECT", Ect, "VE overheat correction above this coolant temperature.");
         F("closeloop.ve.fueldisable", 0x61F8, "CloseloopO2VE", On, "VE overheat fuel correction off.");
-        P("closeloop.ve.table", 0x63B2, "VEFuelCorrect", 6, "hts_trim_128", "honda_temp_c", "Fuel against coolant temperature once the VE overheat correction is in.");
+        P("closeloop.ve.table", 0x63B2, "VEFuelCorrect", 6, "trim_byte_pct", "honda_temp_c", "Fuel against coolant temperature once the VE overheat correction is in.");
 
         // --- cranking fuel
-        P("crankfuel.ect", 0x6518, "CrankFuel", 9, "hts_quarter", "honda_temp_c", "Cranking fuel against coolant temperature (the word / 4, as HTS shows it).", step: 3, yType: "u16");
+        P("crankfuel.ect", 0x6518, "CrankFuel", 9, "quarter", "honda_temp_c", "Cranking fuel against coolant temperature (the word / 4, as HTS shows it).", step: 3, yType: "u16");
         F("crankfuel.trim", 0x6103, "CrankT", TrimW, "Cranking fuel trim.");
-        P("crankfuel.rpm", 0x6533, "CrankFuelComp", 2, "hts_signed_trim", "rpm_axis_byte", "Cranking fuel compensation against rpm.");
-        P("crankfuel.map", 0x6537, "CrankFuelMap", 2, "hts_signed_trim", "hts_map_mbar", "Cranking fuel compensation against manifold pressure.");
+        P("crankfuel.rpm", 0x6533, "CrankFuelComp", 2, "trim_signed_pct", "rpm_axis_byte", "Cranking fuel compensation against rpm.");
+        P("crankfuel.map", 0x6537, "CrankFuelMap", 2, "trim_signed_pct", "map_sensor_preset_mbar", "Cranking fuel compensation against manifold pressure.");
 
         // --- fuel cut
         F("fuelcut.enable", 0x5FCA, "OFCEnable", OnZ, "Fuel cut on deceleration (FFh = off).");
@@ -83,8 +83,8 @@ public static class HtsLayout
         F("fuelcut.vacuum.disable", 0x5FC5, "VacCut", On);
         F("fuelcut.vacuum.rpm", 0x5FC7, "VacCutRPM", RpmL);
         F("fuelcut.vacuum.tps", 0x5FC6, "VacCutTPS", Tps);
-        P("fuelcut.resume.normal", 0x6549, "Overrun_Resume_nor", 7, "hts_x16", "honda_temp_c", "Fuel-cut resume against coolant temperature.");
-        P("fuelcut.resume.initial", 0x653B, "Overrun_Resume_int", 7, "hts_x16", "honda_temp_c", "Fuel-cut resume against coolant temperature, first cut after start.");
+        P("fuelcut.resume.normal", 0x6549, "Overrun_Resume_nor", 7, "times_16", "honda_temp_c", "Fuel-cut resume against coolant temperature.");
+        P("fuelcut.resume.initial", 0x653B, "Overrun_Resume_int", 7, "times_16", "honda_temp_c", "Fuel-cut resume against coolant temperature, first cut after start.");
 
         // --- tip in / out
         F("tipinout.tipin", 0x6109, "TipinT", TrimW);
@@ -100,7 +100,7 @@ public static class HtsLayout
         F("injector.postfuel", 0x6105, "PostfuelT", TrimW);
         F("injector.tipin", 0x6109, "TipinT", TrimW);
         F("injector.multiplier", 0x6101, "INJ_MULT", "type=u16 formula=x/32768 inverse=x*32768 unit=x decimals=3", "Injector size multiplier (old / new).");
-        P("injector.lag", 0x6442, "InjectorIndex", 7, "x*3.2/1000 inverse=x*1000/3.2 unit=ms", "hts_batt_v", "Injector lag against battery voltage.", step: 3, yType: "u16");
+        P("injector.lag", 0x6442, "InjectorIndex", 7, "x*3.2/1000 inverse=x*1000/3.2 unit=ms", "battery_v", "Injector lag against battery voltage.", step: 3, yType: "u16");
         F("injector.hotlow", 0x6216, "InjectorTable", "type=u8 formula=570-x*15 inverse=(570-x)/15 unit=cc decimals=0");
         F("injector.hothigh", 0x6217, "InjectorTable_hothigh", "type=u8 formula=570-x*15 inverse=(570-x)/15 unit=cc decimals=0");
         F("injector.coldlow", 0x6219, "InjectorTable_coldlow", "type=u8 formula=570-x*15 inverse=(570-x)/15 unit=cc decimals=0");
@@ -112,23 +112,23 @@ public static class HtsLayout
         // --- flex fuel
         F("flexfuel.input", 0x61DE, "Flexinput", U8, "Analog input the ethanol sensor is on.");
         P("flexfuel.fuel", 0x5F8A, "EthanolComp", 6, "raw", "percent255", "Fuel against ethanol content.", step: 3, yType: "u16");
-        P("flexfuel.ign", 0x5FA4, "EthanolAdvance", 6, "hts_quarter_deg", "percent255", "Advance against ethanol content.");
+        P("flexfuel.ign", 0x5FA4, "EthanolAdvance", 6, "degrees_quarter", "percent255", "Advance against ethanol content.");
 
         // --- cylinder trims
-        F("cyltrim.fuel", 0x6426, "CylinderIGNCorrect", "type=u8 count=4 formula=hts_trim_128", "Fuel trim per cylinder (despite its name).");
+        F("cyltrim.fuel", 0x6426, "CylinderIGNCorrect", "type=u8 count=4 formula=trim_byte_pct", "Fuel trim per cylinder (despite its name).");
         F("cyltrim.ign", 0x6134, "CylinderIgn", "type=u8 count=4 formula=ign_trim", "Timing trim per cylinder.");
 
         // --- dwell
         P("dwell.base", 0x6A56, "DwellBaseValues", 8, "x/16-1 inverse=(x+1)*16", "rpm_axis_byte");
-        P("dwell.rpm", 0x6A7A, "DwellBaseRPM", 7, "hts_quarter", "rpm_axis_byte");
-        P("dwell.batt", 0x6A66, "DwellBattery", 10, "hts_trim_64", "hts_dwell_batt_v");
+        P("dwell.rpm", 0x6A7A, "DwellBaseRPM", 7, "quarter", "rpm_axis_byte");
+        P("dwell.batt", 0x6A66, "DwellBattery", 10, "trim_byte_64_pct", "dwell_battery_v");
 
         // --- TPS tip-in retard
         P("tpsretard.base", 0x6B6A, "TipinRPM", 7, "-x/4 inverse=-x*4 unit=deg", "rpm_axis_byte_log");
-        P("tpsretard.mintps", 0x6B5C, "TipinTPS", 7, "hts_tps_pct", "rpm_axis_byte_log");
-        P("tpsretard.tpsmul", 0x6B7D, "TipinRetard", 6, "x/128 inverse=x*128 unit=x", "hts_tps_pct");
-        F("tpsretard.gearmul", 0x6BA7, "TipinGear", "type=u8 count=5 formula=hts_trim_128");
-        F("tpsretard.duration", 0x6B78, "TipinEnrich_duration", "type=u8 count=5 formula=hts_x10_ms", "Tip-in retard duration per gear.");
+        P("tpsretard.mintps", 0x6B5C, "TipinTPS", 7, "tps_pct", "rpm_axis_byte_log");
+        P("tpsretard.tpsmul", 0x6B7D, "TipinRetard", 6, "x/128 inverse=x*128 unit=x", "tps_pct");
+        F("tpsretard.gearmul", 0x6BA7, "TipinGear", "type=u8 count=5 formula=trim_byte_pct");
+        F("tpsretard.duration", 0x6B78, "TipinEnrich_duration", "type=u8 count=5 formula=time_10ms", "Tip-in retard duration per gear.");
         F("tpsretard.rpm.min", 0x6025, "TipinRetardRpmMin", RpmL);
         F("tpsretard.rpm.max", 0x6026, "TipinRetardRpmMax", RpmL);
         F("tpsretard.speed.min", 0x6023, "TipinRetardVssMin", Vss);
@@ -140,16 +140,16 @@ public static class HtsLayout
         F("idleigncorr.ect", 0x6022, "IDLEignECT", Ect);
 
         // --- ECT / IAT corrections
-        P("ectcorr.fuel", 0x622E, "ECTFuelCorrect", 9, "hts_trim_128", "honda_temp_c");
+        P("ectcorr.fuel", 0x622E, "ECTFuelCorrect", 9, "trim_byte_pct", "honda_temp_c");
         P("ectcorr.ign", 0x6A96, "ECTIgnCorrect", 10, "ign_trim", "honda_temp_c");
         P("ectcorr.poststart", 0x630B, "PostFuel", 9, "x/1024 inverse=x*1024", "honda_temp_c", step: 3, yType: "u16");
         l.Add(new("iatcorr.fuel", 0x62A3, "IATFuelCorrect",
-            "type=u16 size=3x9 stride=27 colstride=3 formula=hts_trim_word cols.axis=062A2h cols.stride=3 cols.formula=honda_temp_c rows.values=1,2,3 rows.name=block",
+            "type=u16 size=3x9 stride=27 colstride=3 formula=trim_word_pct cols.axis=062A2h cols.stride=3 cols.formula=honda_temp_c rows.values=1,2,3 rows.name=block",
             "Fuel against intake air temperature, three blocks."));
         P("iatcorr.ign", 0x6AB6, "IATCorrect", 9, "ign_trim", "honda_temp_c");
 
         // --- gear corrections
-        F("gearcorr.fuel", 0x6129, "GearCorrectFuel_cells", "type=u8 count=5 formula=hts_trim_128", "Fuel trim, gears 1-5.");
+        F("gearcorr.fuel", 0x6129, "GearCorrectFuel_cells", "type=u8 count=5 formula=trim_byte_pct", "Fuel trim, gears 1-5.");
         F("gearcorr.ign", 0x612F, "GearCorrectIgn_cells", "type=u8 count=5 formula=ign_trim", "Timing trim, gears 1-5.");
         F("gearcorr.load", 0x5FC8, "GearCorrectMap", Mbar);
         F("gearcorr.speed", 0x6127, "GearCorrectVSS", Vss);
@@ -258,12 +258,12 @@ public static class HtsLayout
         F("ebc.cl.overshoot", 0x617B, "bstOvershootSens", X10);
         F("ebc.cl.undershoot", 0x617C, "bstUndershootSen", X10);
         F("ebc.cl.deadband", 0x617A, "bstDeadBand", U8);
-        P("ebc.lookup", 0x6079, "WasteGateLookup", 11, "hts_duty_half", "hts_map_psi");
-        P("ebc.gear", 0x608F, "wastegateGEAR", 11, "hts_map_psi", "raw");
-        P("ebc.rpm", 0x60A5, "wastegateRPM", 11, "hts_half_step", "rpm_axis_byte");
-        P("ebc.iat", 0x60BB, "wastegateIAT", 5, "hts_half_step", "honda_temp_c");
-        F("ebc.gearlow", 0x6180, "WGGearLow_cells", "type=u8 count=5 formula=hts_map_psi");
-        F("ebc.gearhigh", 0x6186, "WGGearHi_cells", "type=u8 count=5 formula=hts_map_psi");
+        P("ebc.lookup", 0x6079, "WasteGateLookup", 11, "duty_half_pct", "map_sensor_preset_psi");
+        P("ebc.gear", 0x608F, "wastegateGEAR", 11, "map_sensor_preset_psi", "raw");
+        P("ebc.rpm", 0x60A5, "wastegateRPM", 11, "half_step_signed", "rpm_axis_byte");
+        P("ebc.iat", 0x60BB, "wastegateIAT", 5, "half_step_signed", "honda_temp_c");
+        F("ebc.gearlow", 0x6180, "WGGearLow_cells", "type=u8 count=5 formula=map_sensor_preset_psi");
+        F("ebc.gearhigh", 0x6186, "WGGearHi_cells", "type=u8 count=5 formula=map_sensor_preset_psi");
 
         // --- manual boost
         F("boostmanual.input", 0x61C0, "ManualBstInput1", U8);
@@ -384,7 +384,7 @@ public static class HtsLayout
         F("scc.input", 0x6138, "SCCInput", U8);
         F("scc.input.invert", 0x6139, "SCCInvert", On);
         F("scc.fuelpump", 0x61A7, "FPMode", U8);
-        F("scc.prime", 0x606A, "FPPrimeT", "type=u8 formula=hts_x01_s");
+        F("scc.prime", 0x606A, "FPPrimeT", "type=u8 formula=time_tenth_s");
         F("scc.milflashes", 0x6020, "MILFlashCount", U8);
         F("scc.ignlock.enable", 0x5FD4, "Lockigndeg", On);
         F("scc.ignlock.deg", 0x6202, "Lockdeg", Adv);
@@ -417,7 +417,7 @@ public static class HtsLayout
             F($"{p}.tps", g[18], $"{gio}TPS", Tps);
         }
         l.Add(new("gpo1.fuel", 0x60DC, "GIOAdjustment2",
-            "type=u16 count=11 colstride=3 formula=hts_trim_word cols.axis=060DBh cols.stride=3 cols.formula=rpm_axis_byte", "Fuel while GPO 1 is on, against rpm."));
+            "type=u16 count=11 colstride=3 formula=trim_word_pct cols.axis=060DBh cols.stride=3 cols.formula=rpm_axis_byte", "Fuel while GPO 1 is on, against rpm."));
         P("gpo1.retard", 0x60C5, "GIOAdjustment1", 11, "ign_trim", "rpm_axis_byte", "Timing while GPO 1 is on, against rpm.");
 
         // --- ROM options
@@ -477,10 +477,69 @@ public static class HtsLayout
     public static int Version(byte[] rom) =>
         IsHts(rom) && rom.Length >= 0x7FF2 ? (rom[0x7FEF] * 100) + (rom[0x7FF0] * 10) + rom[0x7FF1] : 0;
 
+    /// Which layout of the HTS family a ROM has: 1.15 (and HTS120), the earlier one (HTS 1.00-1.14, original eCtune ROMs, and eCtune-format ROMs made by other tuning software), or the P13 base ROM. Found the way HTS-master finds it: the version digits at 7FEFh with the suite's signature, or the eCtune signature word at 7FEFh / 7FF1h.
+    public enum Family { None, Hts115, Older, P13 }
+
+    public static (Family Layout, string Name) Identify(byte[] rom)
+    {
+        if (rom.Length < 0x8000) return (Family.None, "");
+        int v = Version(rom);
+        if (v is 115 or 120) return (Family.Hts115, $"HTS {v / 100}.{v % 100:00}");
+        if (v == 116) return (Family.P13, "HTS P13 base ROM (1.16)");
+        if (v is >= 100 and < 115) return (Family.Older, $"HTS {v / 100}.{v % 100:00}");
+        // a base ROM of the same family without the suite's name: its version as three digits at 7FEFh and a text of its
+        // maker's in the last bytes (HTS-master takes the last byte 'e', or "ITE" / "ple" before it)
+        bool digits = rom[0x7FEF] <= 9 && rom[0x7FF0] <= 9 && rom[0x7FF1] <= 9;
+        bool tail = rom[0x7FFF] == (byte)'e' || (rom[0x7FFD] == (byte)'I' && rom[0x7FFE] == (byte)'T' && rom[0x7FFF] == (byte)'E');
+        int bv = (rom[0x7FEF] * 100) + (rom[0x7FF0] * 10) + rom[0x7FF1];
+        if (digits && tail && bv is >= 100 and < 200)
+            return bv switch
+            {
+                115 or 120 => (Family.Hts115, $"base ROM {bv / 100}.{bv % 100:00}"),
+                116 => (Family.P13, $"P13 base ROM {bv / 100}.{bv % 100:00}"),
+                _ => (Family.Older, $"base ROM {bv / 100}.{bv % 100:00}"),
+            };
+        int W(int a) => rom[a] | (rom[a + 1] << 8);
+        if (W(0x7FF1) == 0xA974)
+        {
+            if (W(0x7FEF) == 0x4365) return (Family.Older, "an original eCtune ROM");
+            if (W(0x7FEF) == 0x4D62) return (Family.Older, $"an eCtune-format ROM from other tuning software (version {rom[0x7FF7]}.{rom[0x7FF8]}.{rom[0x7FF9]})");
+        }
+        return (Family.None, "");
+    }
+
+    /// What kind of ROM this is, for the status line when it is opened: the HTS family (with its layout), a Crome ROM, the custom1 base, or an OBD0 image (a different ECU). Signatures as HTS-master tells them apart (bytes 0210h-0212h, the first reset vectors). Empty when none of these.
+    public static string Describe(byte[] rom)
+    {
+        if (rom.Length < 0x8000) return "";
+        var (layout, name) = Identify(rom);
+        if (layout != Family.None) return name + (layout == Family.Hts115 ? "" : " - its settings are read with that version's layout");
+        (byte, byte, byte) sig = (rom[0x210], rom[0x211], rom[0x212]);
+        string? crome = sig switch
+        {
+            (137, 198, 171) => "Crome Gold", (212, 26, 2) => "Crome P28", (46, 249, 125) => "Crome P30", (228, 248, 162) => "Crome P72",
+            (41, 15, 201) or (196, 170, 152) => "Crome P13", (16, 138, 196) => "custom1", _ => null,
+        };
+        if (crome != null) return $"a {crome} ROM - Detect finds its maps by lining it up with the known ROMs";
+        bool obd0 = rom[6] == 143 && rom[7] == 0 && ((rom[0] == 58 && rom[1] == 25) || (rom[0] == 216 && rom[1] == 22) || (rom[0] == 115 && rom[1] == 22))
+                    || (rom[2] == 0 && rom[3] == 192 && rom[4] == 224 && rom[5] == 192 && rom[6] == 131 && rom[7] == 192);
+        return obd0 ? "an OBD0 ROM - a different ECU from the OKI 66207 this app simulates: it will not run here" : "";
+    }
+
+    /// Where a 1.15 address is in a ROM of this layout, or null when that layout has no such setting.
+    static int? Place(Family layout, int addr) => layout switch
+    {
+        Family.Hts115 => addr,
+        Family.Older => OlderAddress.TryGetValue(addr, out var o) ? o : null,
+        Family.P13 => P13Address.TryGetValue(addr, out var p) ? p : null,
+        _ => null,
+    };
+
     /// Define, type, scale and bind every page row the layout knows, on an HTS 1.15 (or HTS120) ROM. The layout is authoritative: a row it fills is taken off whatever it was bound to before, and a definition already at the address is retyped to what the page needs. Returns the rows bound (0 when the ROM is not HTS 1.15).
     public static int Apply(DefinitionSet defs, byte[] rom)
     {
-        if (Version(rom) != 115) return 0;
+        var layout = Identify(rom).Layout;
+        if (layout == Family.None) return 0;
         MapFormulas(defs, rom);
         var pages = CalPage.All();
         string CategoryOf(string slot) =>
@@ -494,16 +553,33 @@ public static class HtsLayout
         var claimed = new Dictionary<int, (ItemDef Item, string Spec)>();
         var cleared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         int bound = 0;
-        foreach (var f in fields)
+        int patchesFrom = All.Count;      // the fields after the fixed ones were found by their code: already where they are
+        for (int n = 0; n < fields.Count; n++)
         {
+            var f = fields[n];
             int addr = f.Address;
+            var spec = f.Spec;
             if (f.Label != null)
             {
                 if (!defs.Symbols.TryGetValue(f.Label, out int at)) continue;
                 addr = at + f.Address;
             }
+            else if (n < patchesFrom && layout != Family.Hts115)
+            {
+                // an earlier layout: the setting's own address, and any address in its spec (an axis), where that layout has them
+                if (Place(layout, addr) is not int moved) continue;
+                addr = moved;
+                bool missing = false;
+                spec = System.Text.RegularExpressions.Regex.Replace(spec, @"\b0([0-9A-Fa-f]{4})h\b", m =>
+                {
+                    int a = int.Parse(m.Groups[1].Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+                    if (Place(layout, a) is int b) return $"0{b:X4}h";
+                    missing = true; return m.Value;
+                });
+                if (missing) continue;
+            }
             if (addr < 0 || addr >= rom.Length) continue;
-            var template = DefinitionBuilder.Parse(f.Spec, defs, addr);
+            var template = DefinitionBuilder.Parse(spec, defs, addr);
             if (template == null) continue;
 
             ItemDef? item;
@@ -512,6 +588,10 @@ public static class HtsLayout
             else
                 item = defs.Items.FirstOrDefault(i => i.Address == addr && i.Name.Equals(f.Name, StringComparison.OrdinalIgnoreCase))
                        ?? defs.Items.FirstOrDefault(i => i.Address == addr);
+            // something only detected there (a guess, or a name from another ROM) takes HTS's name for the field
+            if (item != null && !claimed.ContainsKey(addr) && item.Origin?.StartsWith("detected") == true
+                && !item.Name.Equals(f.Name, StringComparison.OrdinalIgnoreCase) && defs.Find(f.Name) == null)
+                item.Name = f.Name;
             if (item == null)
             {
                 // a code patch is named for what it does, not after the routine it sits in
@@ -530,7 +610,30 @@ public static class HtsLayout
             bound++;
         }
         defs.Items.Sort((x, y) => x.Address.CompareTo(y.Address));
+        ScaleFromLayout(defs, rom);
+        DefinitionBuilder.IndexAxes(defs);
         return bound;
+    }
+
+    /// Give a scaling to the definitions of an HTS-family ROM that have none (raw), from how HTS-master reads the field at that address. Returns how many got one.
+    public static int ScaleFromLayout(DefinitionSet defs, byte[] rom)
+    {
+        var layout = Identify(rom).Layout;
+        if (layout == Family.None) return 0;
+        int n = 0;
+        foreach (var (addr, (type, formula)) in FieldFormulas)
+        {
+            if (Place(layout, addr) is not int at) continue;
+            foreach (var item in defs.Items.Where(i => i.Address == at && i.Text == null && !i.Flag && i.Type != CellType.Bit
+                                                     && i.Formula is null or "raw" or "x"))
+            {
+                bool word = item.Type is CellType.U16 or CellType.S16;
+                if (word != (type == "u16")) continue;          // read another way than HTS reads it: leave it
+                item.Formula = formula;
+                n++;
+            }
+        }
+        return n;
     }
 
     static void Shape(ItemDef item, ItemDef t)
@@ -580,11 +683,11 @@ public static class HtsLayout
                 string plus = hi < 0 ? $"- {N(-hi)}" : $"+ {N(hi)}", minus = hi < 0 ? $"+ {N(-hi)}" : $"- {N(hi)}";
                 expr = $"x * {N(span)} / 255 {plus}"; inverse = $"(x {minus}) * 255 / {N(span)}"; break;
         }
-        Put(defs, new FormulaDef { Name = "hts_map_mbar", Expr = expr, Inverse = inverse, Unit = "mBar", Decimals = 0, Notes = "HTS byteToMillibar for this ROM's MAP preset" });
+        Put(defs, new FormulaDef { Name = "map_sensor_preset_mbar", Expr = expr, Inverse = inverse, Unit = "mBar", Decimals = 0, Notes = "HTS byteToMillibar for this ROM's MAP preset" });
         // mapToPsi against a 1013 mBar sea level, as HTS's wastegate pages show it
         Put(defs, new FormulaDef
         {
-            Name = "hts_map_psi", Expr = $"(({expr}) - 1013) * 0.0145038", Inverse = inverse.Replace("x", "(x / 0.0145038 + 1013)"),
+            Name = "map_sensor_preset_psi", Expr = $"(({expr}) - 1013) * 0.0145038", Inverse = inverse.Replace("x", "(x / 0.0145038 + 1013)"),
             Unit = "psi", Decimals = 1, Notes = "HTS mapToPsi(byteToMillibar(x)), sea level 1013 mBar",
         });
     }

@@ -30,9 +30,9 @@ public interface IMcpSession
     int ApplyPatches(IReadOnlyList<BytePatch> patches, string what);
     /// Save the running ROM image.
     string SaveRom(string path);
-    /// Open a ROM image in the app (an agent working from another machine sends one).
+    /// Open a ROM image in the app (a client working from another machine sends one).
     string LoadRom(byte[] rom, string name);
-    /// Open a file that is already on the app's machine, exactly as if it had been opened from the File menu: a .asm (assembled and loaded), a .bin / .rom (disassembled and loaded) or a saved project .zip. This is the other half of file_upload for an agent on a different computer - send the file, then ask for it to be opened here.
+    /// Open a file that is already on the app's machine, exactly as if it had been opened from the File menu: a .asm (assembled and loaded), a .bin / .rom (disassembled and loaded) or a saved project .zip. This is the other half of file_upload for a client on a different computer - send the file, then ask for it to be opened here.
     string OpenFile(string path);
     /// Emulator (Moates Ostrich / Demon): status, connect, upload, disconnect, auto_upload on|off.
     string Emulator(string action, string? port);

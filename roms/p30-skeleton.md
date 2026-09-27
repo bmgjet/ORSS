@@ -39,7 +39,9 @@ block, plus 200 bytes between the hook table and the info block.
   fail their checks. The skeleton skips those checks. One of them guarded against a stopped timer 0,
   which drives injector timing; if you want that protection back, it is a candidate for a module.
 - **The calibration moved.** Tables are packed straight after the code, so stock P30 definitions and
-  XDFs do not line up. Make definitions for this ROM (for example with `cal_detect` / `cal_save`).
+  XDFs do not line up. The skeleton carries its own: every table has a `;@` annotation with its name,
+  layout and axes, so a ROM made from it opens with the maps and tables already named (see
+  "Calibration names" below).
 - **Open loop only.** Fuel is the map value with no O2 trim, so tune the VE map with a wideband.
   The narrowband sensor is not read and its heater is off, so it can come out (or be replaced by a
   wideband that a module reads).
@@ -110,14 +112,16 @@ These are things a module asks the skeleton to do, instead of patching the fuel 
 
 | RAM | Service |
 | --- | --- |
-| **1F0h** | Fuel-cut request. While any bit is set, fuel is cut exactly like the rev limiter does it. Give each module its own bit. |
+| **1F0h** | Fuel-cut request. While any bit is set, fuel is cut exactly like the rev limiter does it. Give each module its own bit. Checked where every path of the fuel-cut decision meets, so it also holds at idle, when cranking and on a closed throttle. |
+| **0FCh** | Spark-cut request (build with `NEED_SPARKCUT`). While any bit is set, no spark: the coil is left unarmed at each timer-3 compare and disarmed if an earlier pass armed it, which the idle paths otherwise leave set. |
 | **2FDh** | Ignition retard request, in the units of the advance bytes (0.25 degrees each). It is subtracted from the final advance, with a floor of 0. |
 | **0FEh-0FFh** | Tick: a word that goes up by 1 every 2.048 ms (one IACV PWM period, from timer 1), whatever the rpm or loop speed. Read it; never write it. |
 
 Both requests are cleared at power-up before `hook_init` runs.
 
 Checked in the simulator: 1F0h=01h cuts the injectors at cruise and at 6500 rpm while the spark
-keeps running. 2FDh=20h moves the spark 8 degrees later at cruise.
+keeps running, and at idle. 0FCh=01h stops the spark at idle, cruise and 4500 rpm with the injectors
+still firing. 2FDh=20h moves the spark 8 degrees later at cruise.
 
 ### Other free resources
 
@@ -132,7 +136,20 @@ keeps running. 2FDh=20h moves the spark 8 degrees later at cruise.
 - Inputs: the A/C switch (211h bit 2) is read into RAM but nothing uses it, so a module can give it
   another job (a launch-control or map-switch button, for example).
 
-## Feature files
+## Feature modules (source)
+
+The way to build a ROM from the skeleton is File > New ROM > Create: pick the functions, and the app
+writes a build file (the chosen `define FEAT_...` lines, then `include "p30-skeleton.asm"`) and opens it.
+The modules are source files in `roms/p30-features/`, placed by the assembler, so any mix builds in any
+order without collisions until the ROM is full. See `p30-features/README.md` for writing one,
+`p30-features/CATALOGUE.md` for the full list of functions (built and still to port), and
+`tools/skeleton/SkeletonTest` for the simulator tests of each.
+
+Limiter and output modules share `p30-features/lib.asm`. It runs them from the 2.048 ms tick rather than
+the main loop, which only makes a few passes a second at high rpm. It gives each limiter its own bit in a
+fuel and a spark want word, so two limiters never clear each other's cut.
+
+## Feature files (binary patches)
 
 A module fits the existing `okirom-features` format as-is: code bytes into free space (original
 `FF`), the hook slot from `01 00 00` to `03 lo hi`, and `"checksumByte": "7FFF"` so the app keeps
@@ -161,6 +178,31 @@ instruction (which table, which offset), and every indexed table read in the sou
 reads that run past its table into the next one. That found one start-up copy loop (RAM 1A9h-1B5h)
 that read its values through another table's address; it now has its own 13-byte table with the
 stock values.
+
+A read trace does not catch a number that happens to equal a table's stock address. Five
+instructions used a calibration label as a plain number, so moving the calibration changed the
+number: the speed-sensor period and numerator (72FAh, 5E59h), a multiplier and a compare value
+(both 6000h), and an injector clamp's floor (7133h). They are numbers in the source now. The copy
+loop for the diagnostic snapshot (with `FEAT_STOCK_DTC`) runs from one table up to the next, so
+nothing may sit between those two; the RAM 1A9h start-up table sits before them.
+
+## Calibration names
+
+Every table, option byte and map has a `;@` annotation: the app reads them when the ROM is opened,
+so nothing needs detecting. The names say what each table does where the code shows it, and
+otherwise what it is looked up by and where its result goes (the description gives the RAM byte).
+
+| Group | Tables |
+| --- | --- |
+| Maps | `FuelLo`, `FuelHi` (column multipliers after the last row), `IgnLo`, `IgnHi`, `VELo`, `VEHi`; `FuelLoEGR`, `IgnLoEGR`, `ClosedLoopMap` (11 rows, with the stock functions that use them) |
+| Axes | `MapScaler` (the MAP load byte 0A7h: mbar = x * 3.61 + 114), `RpmScalerLo` (log rpm byte), `RpmScalerHi` (rpm = x * 35.3) |
+| Options | `OptionAutomaticTransmission`, `OptionKnockSensor`, `OptionBaroSensor`, `OptionFlagsFromBytes`...: the bytes read at power-up into the equipment flags 216h/217h/219h/227h, each named after what the code does with its flag |
+| Internal | Crank decoding, trouble-code lists, self-test values, the info block: not tuning values |
+
+Most small tables are (input, value) pairs or (input, word) triples, read by VCAL 0/2 and VCAL 1/3.
+Their label is the input column (`...Tbl`) and the annotation shows the values against it, in the
+input's units: coolant and intake air in degrees C, rpm, throttle, road speed, battery volts, MAP.
+Values the code does not show the scaling of are left raw.
 
 Some caveats about that comparison:
 

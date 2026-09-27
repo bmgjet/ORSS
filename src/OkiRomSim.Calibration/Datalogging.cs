@@ -192,6 +192,8 @@ public static class HondaDatalog
             EctC = ThermistorC(f[33]),
         };
         fr.Extra["inj_raw"] = inj;
+        fr.Extra["knock_retard_deg"] = f[10] * 0.25;
+        fr.Vtec = (f[19] & 1) != 0;
         return fr;
     }
 
@@ -213,16 +215,21 @@ public interface IByteLink
     /// Read up to `count` bytes, waiting at most `timeoutMs` for them; returns how many arrived.
     int Read(byte[] buffer, int offset, int count, int timeoutMs);
     void Discard();
-    /// A single-wire K-line (the stock Honda tester link): the ECU hears its own bytes. Links that can model it (the simulator) do; a real cable is one already, or is not, whatever is asked here.
-    void SetKLine(bool on) { }
+    /// A single-wire serial link (the stock Honda tester link): the ECU hears its own bytes. Links that can model it (the simulator) do; a real cable is one already, or is not, whatever is asked here.
+    void SetEcho(bool on) { }
     /// Let `ms` pass on the line (a pause between bytes). A real port just waits; a simulated one runs the ROM.
     void Wait(int ms) => Thread.Sleep(ms);
     /// Change the line speed (auto-detection tries each protocol at its own). Links that cannot, ignore it.
     void SetBaud(int baud) { }
+    /// Keep the line for one request and its answer, on a link shared with something else (the emulator's port, which uploads go over too); disposing it lets the other user back in. Links of their own need nothing.
+    IDisposable? Hold() => null;
 }
 
 public enum PacketDir { Tx, Rx }
 public sealed record Packet(DateTime Time, PacketDir Dir, byte[] Bytes, string Note);
+
+/// One request and its fixed-length answer, which an emulator can ask the ECU for itself (DatalogProtocol.Relay).
+public sealed record RelayPlan(byte Hello, byte HelloAnswer, byte Request, int Length, Func<byte[], double, LogFrame> Decode);
 
 /// One way of datalogging an OBD1 ROM. New ROM families add a subclass and a line in All.
 public abstract class DatalogProtocol
@@ -236,14 +243,28 @@ public abstract class DatalogProtocol
     /// How many times a handshake is tried before the protocol is called wrong.
     public int Retries { get; set; } = RetriesDefault;
 
-    /// What a new protocol object starts with (Settings > Datalog sets these).
+    /// What a new protocol object starts with (Settings > Emulator & datalog sets these).
     public static int TimeoutMsDefault = 250, PostWritePauseMsDefault = 10, RetriesDefault = 3;
 
     /// Called with every packet sent and received (for the packet monitor).
     public Action<Packet>? OnPacket { get; set; }
 
+    /// The protocol as one fixed exchange, for an emulator that asks the ECU itself and hands the answer on (a Demon on the emulator's port): the handshake byte and its answer, the request byte, how many bytes come back before the checksum, and how to read them. Null for a protocol that is more than that.
+    public virtual RelayPlan? Relay => null;
+
     /// Open the conversation; false when the ROM does not speak this protocol.
     public abstract bool Handshake(IByteLink link, out string note);
+
+    /// One command byte between frames and its one-byte answer (TroubleCodes: 50h clears the stored codes, 51h switches the injectors off...), or null when nothing came back. A protocol that streams, or goes through an emulator, puts its own conversation back afterwards.
+    public virtual byte? Command(IByteLink link, byte command, out string note)
+    {
+        using var hold = link.Hold();
+        link.Discard();
+        Send(link, command);
+        var r = Receive(link, 1, $"command {command:X2}");
+        note = r.Length == 1 ? $"{command:X2} answered {r[0]:X2}" : $"no answer to {command:X2}";
+        return r.Length == 1 ? r[0] : null;
+    }
     /// One frame, or null (timeout / bad checksum; `note` says which).
     public abstract LogFrame? Poll(IByteLink link, double t, out string note);
 
@@ -320,7 +341,7 @@ public abstract class DatalogProtocol
     public static IReadOnlyList<DatalogProtocol> All() => new DatalogProtocol[]
     {
         // order matters for Detect: the single-byte probe would accept any ROM that answers C6h, and the 66207 multi-byte handshake is the same one the P13 loggers use, so the protocols that ask for a particular frame length come before the ones that take any
-        new MultiByte90(), new IsrMultiByte(), new Qd3Protocol(),
+        new ChannelStream(), new MultiByte90(), new IsrMultiByte(), new Qd3Protocol(),
         new P13Protocol(0x46), new P13Protocol(0x20),
         new Custom1Protocol(), new Custom2Protocol(),
         new RawFrame10(), new ByteRequestC0(), new HondaStockTester(),
@@ -330,7 +351,7 @@ public abstract class DatalogProtocol
     static readonly Dictionary<string, string> Aliases = new(StringComparer.OrdinalIgnoreCase)
     {
         ["multi-byte"] = "Multi-byte 90h",
-        ["ISR"] = "Multi-byte 20h", ["BMTune"] = "Multi-byte 20h",
+        ["ISR"] = "Multi-byte 20h",
         ["single-byte"] = "Byte requests C0h",
         ["raw"] = "Raw 10h frame",
     };
@@ -350,7 +371,7 @@ public abstract class DatalogProtocol
             p.OnPacket = onPacket;
             if (quick) { p.Retries = 0; p.TimeoutMs = Math.Min(p.TimeoutMs, 150); }
             // each at its own line speed (the stock tester link is 9600, the rest 38400), on a plain line
-            link.SetKLine(false);
+            link.SetEcho(false);
             link.SetBaud(p.Baud);
             try
             {
@@ -537,18 +558,134 @@ public sealed class Custom2Protocol : DatalogProtocol
     }
 }
 
-/// The stock Honda ECU's own link (P28 / P30 / P08 and the rest of the OBD1 family, no chip needed): the tester protocol on the single-wire K-line. A request is 20h, 05h, first slot, slot count, checksum; the answer is 00h, its length, one byte per slot, checksum (every frame sums to 00h). The slots are a table in the ROM of RAM addresses, laid out the same way on every ROM checked (P30 and P08 traced in the simulator one input at a time): 03-04 the crank period (high, low), 05 road speed, 13h coolant, 14h intake air, 15h MAP, 16h baro, 17h throttle, 18h O2, 1Ah battery. The ECU sends each byte of its answer as it hears the echo of the one before, and the PC hears its own request back first.
+/// The skeleton ROM's datalog module (p30-features/datalog.asm, FEAT_DATALOG): the logger picks the channels it wants (version 2: up to 16 channel numbers from the ROM's table, 73h; version 1: up to 8 RAM addresses, 70h) and the ECU streams just those, back to back, each frame stamped with its own 2.048 ms tick. 7Eh                    -> 7Eh, version, most channels, 00h, checksum (the five sum to 00h) 70h N a1lo a1hi .. chk -> 70h taken / 7Fh refused   (chk: N, the addresses and chk sum to 00h) 71h                    -> frames back to back until any other byte arrives;  72h -> one frame frame: A5h, seq, tick lo, tick hi, the N bytes, chk (the whole frame sums to 00h) The same ROM also answers the HTS 10h/20h frame, so older loggers work on it too; this one is faster.
+public sealed class ChannelStream : DatalogProtocol
+{
+    public override string Name => "Channel stream";
+    public override string Description => "7E -> ident; 70 N addresses -> 70; 71 -> A5-framed stream of the chosen RAM bytes";
+
+    /// The channels to ask for (DatalogChannels keys), set from the app's datalog settings. What does not fit the ROM (16 bytes on version 2, 8 on version 1) is left out, in catalogue order.
+    public static IReadOnlyList<string> Selected { get; set; } = DatalogChannels.Defaults;
+    /// The channels this connection streams, in frame order (set by the handshake).
+    public IReadOnlyList<DatalogChannel> Streaming => _chosen;
+    List<DatalogChannel> _chosen = DatalogChannels.Fit(DatalogChannels.Defaults, 8, false);
+    readonly List<byte> _buf = [];
+    int _lastSeq = -1;
+    /// Frames the ECU sent that never arrived (a gap in the sequence number).
+    public int Lost { get; private set; }
+
+    public override bool Handshake(IByteLink link, out string note)
+    {
+        for (int attempt = 0; attempt <= Math.Max(0, Retries); attempt++)
+        {
+            Drain(link);
+            Send(link, 0x7E);
+            var id = Receive(link, 5, "Channel stream ident");
+            if (id.Length < 5 || id[0] != 0x7E || (id.Sum(b => b) & 0xFF) != 0)
+            {
+                note = id.Length == 0 ? "no answer to 7E" : $"answer {string.Join(" ", id.Select(b => b.ToString("X2")))} is not the stream ident";
+                if (id.Length == 1 && id[0] == 0x7E) { note = "echo of 7E: the datalog jumper is still fitted"; return false; }
+                continue;
+            }
+            int version = id[1], most = Math.Max(1, (int)id[2]);
+            bool v2 = version >= 2;
+            _chosen = DatalogChannels.Fit(Selected, v2 ? Math.Min(most, 16) : Math.Min(most, 8), version);
+            if (_chosen.Count == 0) _chosen = DatalogChannels.Fit(DatalogChannels.Defaults, 8, false);
+            var msg = new List<byte> { (byte)(v2 ? 0x73 : 0x70) };
+            var items = _chosen.SelectMany(c => v2 ? c.Numbers : c.Addresses).ToList();
+            msg.Add((byte)items.Count);
+            foreach (var x in items) { if (v2) msg.Add((byte)x); else { msg.Add((byte)x); msg.Add((byte)(x >> 8)); } }
+            msg.Add((byte)-msg.Skip(1).Sum(b => b));
+            Drain(link, 20);
+            // a byte at a time with a pause after each: the ECU has a one-byte receive buffer, and a byte that
+            // lands while a crank interrupt holds it off overwrites the one before, leaving the ECU waiting for the rest
+            foreach (var b in msg) { link.Write([b]); link.Wait(1); }
+            OnPacket?.Invoke(new Packet(DateTime.Now, PacketDir.Tx, [.. msg], "channel list"));
+            var ok = Receive(link, 1, "channel list answer");
+            if (ok.Length != 1 || ok[0] != 0x70) { note = ok.Length == 1 && ok[0] == 0x7F ? "channel list refused (7F)" : "no answer to the channel list"; continue; }
+            _buf.Clear(); _lastSeq = -1; Lost = 0;
+            Send(link, 0x71);
+            note = $"ident version {id[1]}, {_chosen.Count} channels ({items.Count} bytes), streaming";
+            return true;
+        }
+        note = "no channel stream";
+        return false;
+    }
+
+    /// The stream stops at any byte from the logger: a byte the ROM ignores (00h) stops it, the line is let go quiet, then the command, then the stream again.
+    public override byte? Command(IByteLink link, byte command, out string note)
+    {
+        Send(link, 0x00);
+        Drain(link, 30);
+        var answer = base.Command(link, command, out note);
+        _buf.Clear();
+        Send(link, 0x71);
+        return answer;
+    }
+
+    public override LogFrame? Poll(IByteLink link, double t, out string note)
+    {
+        int n = _chosen.Sum(c => c.Bytes), len = 5 + n;
+        var chunk = new byte[256];
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        byte[]? frame = null;
+        while (sw.ElapsedMilliseconds < Math.Max(TimeoutMs, 100))
+        {
+            int got = link.Read(chunk, 0, chunk.Length, 20);
+            if (got > 0) _buf.AddRange(chunk.Take(got));
+            // every complete frame that has arrived, in order (so a gap in the sequence is a frame the line
+            // lost, not one skipped here); the newest one is what this poll returns
+            int j = 0, used = 0;
+            while (j + len <= _buf.Count)
+            {
+                if (_buf[j] == 0xA5 && (_buf.Skip(j).Take(len).Sum(b => b) & 0xFF) == 0)
+                {
+                    frame = [.. _buf.Skip(j).Take(len)];
+                    int seq = frame[1];
+                    if (_lastSeq >= 0) Lost += (seq - _lastSeq - 1) & 0xFF;
+                    _lastSeq = seq;
+                    j += len; used = j;
+                }
+                else j++;
+            }
+            if (used > 0) _buf.RemoveRange(0, used);
+            if (frame != null) break;
+            if (_buf.Count > 2048) _buf.RemoveRange(0, _buf.Count - len);
+        }
+        if (frame == null)
+        {
+            // the stream stopped (the ECU restarted, a stray byte ended it): ask for it again
+            Send(link, 0x71);
+            note = "timeout";
+            return null;
+        }
+        OnPacket?.Invoke(new Packet(DateTime.Now, PacketDir.Rx, frame, "Channel stream frame"));
+        var f = new LogFrame { T = t, Raw = frame, Protocol = Name };
+        int at = 4;
+        foreach (var c in _chosen)
+        {
+            try { c.Decode(f, frame[at..(at + c.Bytes)]); } catch (Exception) { }
+            at += c.Bytes;
+        }
+        f.Extra["ecu_tick_ms"] = Math.Round((frame[2] | (frame[3] << 8)) * 2.048, 1);
+        f.Extra["frames_lost"] = Lost;
+        note = "ok";
+        return f;
+    }
+}
+
+/// The stock Honda ECU's own link (P28 / P30 / P08 and the rest of the OBD1 family, no chip needed): the tester protocol on the single-wire diagnostic link. A request is 20h, 05h, first slot, slot count, checksum; the answer is 00h, its length, one byte per slot, checksum (every frame sums to 00h). The slots are a table in the ROM of RAM addresses, laid out the same way on every ROM checked (P30 and P08 traced in the simulator one input at a time): 03-04 the crank period (high, low), 05 road speed, 13h coolant, 14h intake air, 15h MAP, 16h baro, 17h throttle, 18h O2, 1Ah battery. The ECU sends each byte of its answer as it hears the echo of the one before, and the PC hears its own request back first.
 public sealed class HondaStockTester : DatalogProtocol
 {
     public override string Name => "Honda stock (tester 20h)";
-    public override string Description => "stock ROM, K-line tester link: 20 05 start count chk -> 00 len slots... chk (9600 baud)";
+    public override string Description => "stock ROM, one-wire tester link: 20 05 start count chk -> 00 len slots... chk (9600 baud)";
     public override int Baud => 9600;
     /// Slots 03h up to and including 1Ah: everything the decode uses.
     const int First = 0, Count = 0x18;
 
     public override bool Handshake(IByteLink link, out string note)
     {
-        link.SetKLine(true);
+        link.SetEcho(true);
         for (int attempt = 0; attempt <= Math.Max(0, Retries); attempt++)
         {
             Drain(link, 60);
@@ -581,7 +718,7 @@ public sealed class HondaStockTester : DatalogProtocol
         return f;
     }
 
-    /// One request and its answer's slot bytes, or null. The PC's own request coming back (a K-line cable echoes it) is skipped: the answer is found by its 00h, its length and its checksum.
+    /// One request and its answer's slot bytes, or null. The PC's own request coming back (a one-wire cable echoes it) is skipped: the answer is found by its 00h, its length and its checksum.
     byte[]? Exchange(IByteLink link, int first, int count, out string note)
     {
         byte[] req = [0x20, 0x05, (byte)first, (byte)count, 0];
@@ -619,9 +756,10 @@ public sealed class MultiByte90 : DatalogProtocol
     public override string Description => "handshake AB→CD, then 90h → 51 bytes + checksum";
     public override bool Handshake(IByteLink link, out string note) => HandshakeByte(link, 0xAB, 0xCD, out note);
     public override LogFrame? Poll(IByteLink link, double t, out string note) => Framed(link, 0x90, HondaDatalog.FrameLength, f => HondaDatalog.Decode(f, t), t, out note);
+    public override RelayPlan Relay => new(0xAB, 0xCD, 0x90, HondaDatalog.FrameLength, HondaDatalog.Decode);
 }
 
-/// Multi-byte 20h (the ISR v2 / BMTune style): handshake 10h -> CDh, then 20h returns the same 51-byte table.
+/// Multi-byte 20h (the ISR v2 style): handshake 10h -> CDh, then 20h returns the same 51-byte table.
 public sealed class IsrMultiByte : DatalogProtocol
 {
     public override string Name => "Multi-byte 20h";
@@ -629,17 +767,22 @@ public sealed class IsrMultiByte : DatalogProtocol
     public override bool Handshake(IByteLink link, out string note) => HandshakeByte(link, 0x10, 0xCD, out note);
     public override LogFrame? Poll(IByteLink link, double t, out string note)
     {
-        var f = Framed(link, 0x20, HondaDatalog.FrameLength, x => HondaDatalog.Decode(x, t), t, out note);
-        if (f?.Raw is { } raw)
-        {
-            // ISR's own extras: switch inputs, ELD, EGR, B6, IACV
-            f.Extra["clutch"] = raw[21] & 1; f.Extra["brake"] = (raw[21] >> 1) & 1; f.Extra["ac"] = (raw[21] >> 2) & 1;
-            f.Extra["eld_v"] = Math.Round(HondaDatalog.Volts(raw[24]), 2);
-            f.Extra["egr_v"] = Math.Round(HondaDatalog.Volts(raw[44]), 2);
-            f.Extra["b6_v"] = Math.Round(HondaDatalog.Volts(raw[45]), 2);
-            f.Extra["iacv"] = raw[49] | (raw[50] << 8);
-            if (_hts120 != false) Hts120Extras(link, f);
-        }
+        var f = Framed(link, 0x20, HondaDatalog.FrameLength, x => Decode(x, t), t, out note);
+        if (f != null && _hts120 != false) Hts120Extras(link, f);
+        return f;
+    }
+
+    public override RelayPlan Relay => new(0x10, 0xCD, 0x20, HondaDatalog.FrameLength, Decode);
+
+    static LogFrame Decode(byte[] raw, double t)
+    {
+        var f = HondaDatalog.Decode(raw, t);
+        // ISR's own extras: switch inputs, ELD, EGR, B6, IACV
+        f.Extra["clutch"] = raw[21] & 1; f.Extra["brake"] = (raw[21] >> 1) & 1; f.Extra["ac"] = (raw[21] >> 2) & 1;
+        f.Extra["eld_v"] = Math.Round(HondaDatalog.Volts(raw[24]), 2);
+        f.Extra["egr_v"] = Math.Round(HondaDatalog.Volts(raw[44]), 2);
+        f.Extra["b6_v"] = Math.Round(HondaDatalog.Volts(raw[45]), 2);
+        f.Extra["iacv"] = raw[49] | (raw[50] << 8);
         return f;
     }
 
@@ -670,6 +813,120 @@ public sealed class Qd3Protocol : DatalogProtocol
     public override string Description => "QD3 (AB→BC, 46h → 40 bytes + checksum)";
     public override bool Handshake(IByteLink link, out string note) => HandshakeByte(link, 0xAB, 0xBC, out note);
     public override LogFrame? Poll(IByteLink link, double t, out string note) => Framed(link, 0x46, 40, f => HondaDatalog.DecodeQd3(f, t), t, out note);
+    public override RelayPlan Relay => new(0xAB, 0xBC, 0x46, 40, HondaDatalog.DecodeQd3);
+}
+
+/// Datalogging through a Moates Demon on the emulator's own port: the Demon asks the ECU itself (on the ECU's datalog line) and hands the answer on, with its own five analog inputs, so one cable does both jobs. The ROM's protocol is the inner one, reduced to a single request (RelayPlan); what goes over the emulator's port is the Demon's: 'D' 'R' adc divisor 0 0 n (1 len req)*n chk -> 'O'   what to ask the ECU: n requests of one byte, each answered with len bytes; adc = which analog inputs to add (1Fh = all five); divisor 23 = the ECU's 38400 baud 'd' -> status, the ECU's answers, the analog inputs (two bytes each, high first, 0-1023), a byte, chk The first byte of the ECU's answer is 54h or 84h when the ECU did not answer the Demon (ignition off, wiring). Worked out from what the established tuning software sends a Demon.
+public sealed class EmulatorRelay : DatalogProtocol
+{
+    readonly DatalogProtocol _inner;
+    readonly RelayPlan _plan;
+    const byte Adc = AdcMask, Divisor = EcuBaudDivisor;
+    const int Analog = AnalogInputs;
+    /// The Demon's analog inputs asked for with every packet (all five), and its divisor for the ECU's 38400 baud.
+    public const byte AdcMask = 0x1F, EcuBaudDivisor = 23;
+    public const int AnalogInputs = 5;
+    /// The request this relay asks the ECU for (and the Demon's onboard logging asks too).
+    public RelayPlan Plan => _plan;
+
+    public EmulatorRelay(DatalogProtocol inner)
+    {
+        _inner = inner;
+        _plan = inner.Relay ?? throw new ArgumentException($"{inner.Name} cannot go through the emulator: it is not one fixed request");
+        TimeoutMs = Math.Max(TimeoutMs, 400);
+    }
+
+    public override string Name => $"{_inner.Name} via emulator";
+    public override string Description => $"{_inner.Description}, asked by the Demon on the emulator's port";
+
+    /// The protocols a Demon can ask the ECU for itself.
+    public static IEnumerable<DatalogProtocol> Candidates() => All().Where(p => p.Relay != null);
+
+    byte[]? Exchange(IByteLink link, byte[] send, int answer, string what)
+    {
+        using var hold = link.Hold();
+        link.Discard();
+        Send(link, send);
+        var r = Receive(link, answer, what);
+        return r.Length == answer ? r : null;
+    }
+
+    byte[] Setup(byte adc, params (int Length, byte Request)[] asks)
+    {
+        var b = new List<byte> { (byte)'D', (byte)'R', adc, Divisor, 0, 0, (byte)asks.Length };
+        foreach (var (len, req) in asks) { b.Add(1); b.Add((byte)len); b.Add(req); }
+        b.Add(HondaDatalog.Checksum([.. b], b.Count));
+        return [.. b];
+    }
+
+    /// A 'd' answer: status, the answers, the analog words, one byte, then the sum of all that.
+    byte[]? Fetch(IByteLink link, int answers, int analog, string what)
+    {
+        int n = 1 + answers + (analog * 2) + 1;
+        var r = Exchange(link, [(byte)'d'], n + 1, what);
+        if (r == null || HondaDatalog.Checksum(r, n) != r[n]) return null;
+        return r;
+    }
+
+    public override bool Handshake(IByteLink link, out string note)
+    {
+        note = "no answer through the Demon";
+        for (int attempt = 0; attempt <= Math.Max(0, Retries); attempt++)
+        {
+            // the ECU's handshake, asked three times over by the Demon (as the tuning software asks it)
+            var ok = Exchange(link, Setup(0, (1, _plan.Hello), (1, _plan.Hello), (1, _plan.Hello)), 1, "Demon setup (handshake)");
+            if (ok == null) { note = "the emulator did not answer the datalog setup: is it a Demon?"; continue; }
+            if (ok[0] != 'O') { note = $"the emulator answered {ok[0]:X2} to the datalog setup (a Demon answers 'O')"; continue; }
+            var r = Fetch(link, 3, 0, "Demon handshake");
+            if (r == null) { note = "no answer from the Demon to 'd'"; continue; }
+            if (r[1] is 0x54 or 0x84) { note = "the Demon is there but the ECU did not answer it: ignition on? datalog wiring?"; continue; }
+            if (r[1] != _plan.HelloAnswer) { note = $"the ECU answered {r[1]:X2} to {_plan.Hello:X2} through the Demon, expected {_plan.HelloAnswer:X2}"; continue; }
+            // now the frame, with the analog inputs
+            var go = Exchange(link, Setup(Adc, (_plan.Length + 1, _plan.Request)), 1, "Demon setup (frames)");
+            if (go is not [(byte)'O']) { note = "the Demon did not take the frame request"; continue; }
+            note = $"handshake {_plan.Hello:X2} -> {_plan.HelloAnswer:X2} through the Demon";
+            return true;
+        }
+        return false;
+    }
+
+    /// The Demon asks the ECU for the command instead of the frame, once, and is set back to the frame after (as the tuning software clears the check-engine lamp through a Demon). Its footer is 'T' when the ECU did not answer.
+    public override byte? Command(IByteLink link, byte command, out string note)
+    {
+        byte? answer = null;
+        note = $"the Demon did not take the command {command:X2}";
+        var ok = Exchange(link, Setup(0, (1, command)), 1, $"Demon setup (command {command:X2})");
+        if (ok is [(byte)'O'])
+        {
+            var r = Fetch(link, 1, 0, $"command {command:X2}");
+            if (r == null) note = $"no answer from the Demon to 'd' after {command:X2}";
+            else if (r[2] == 'T') note = $"the ECU did not answer {command:X2} (through the Demon)";
+            else { answer = r[1]; note = $"{command:X2} answered {r[1]:X2} (through the Demon)"; }
+        }
+        var back = Exchange(link, Setup(Adc, (_plan.Length + 1, _plan.Request)), 1, "Demon setup (frames)");
+        if (back is not [(byte)'O']) note += "; the frame request was not taken back: it is asked again at the next handshake";
+        return answer;
+    }
+
+    public override LogFrame? Poll(IByteLink link, double t, out string note)
+    {
+        int len = _plan.Length;
+        var r = Fetch(link, len + 1, Analog, "frame");
+        if (r == null) { note = "timeout or bad checksum from the Demon"; return null; }
+        if (r[1] is 0x54 or 0x84) { note = "the ECU did not answer the Demon"; return null; }
+        var data = r[1..(1 + len)];
+        if (HondaDatalog.Checksum(data, len) != r[1 + len]) { note = "bad checksum from the ECU"; return null; }
+        var f = _plan.Decode(data, t);
+        f.T = t; f.Protocol = Name;
+        // the Demon's own analog inputs, as volts
+        for (int k = 0; k < Analog; k++)
+        {
+            int at = 2 + len + (k * 2);
+            f.Extra[$"emu_a{k + 1}_v"] = Math.Round(((r[at] << 8) | r[at + 1]) * 5.0 / 1023.0, 3);
+        }
+        note = "ok";
+        return f;
+    }
 }
 
 /// Byte requests: C0h+n returns byte n of the main table, one at a time. Slower, but needs no multi-byte support in the ROM.
@@ -1072,7 +1329,7 @@ public static class LogFile
     }
 
     static bool IsLoggerFile(byte[] data) =>
-        data.Length >= 17 && Encoding.ASCII.GetString(data, 0, 10) is "DATALOGGER" or "eCtune.dlf" or "BMTune.bml";
+        data.Length >= 17 && Encoding.ASCII.GetString(data, 0, 10) is "DATALOGGER" or "eCtune.dlf" or [_, _, _, _, _, _, '.', 'b', 'm', 'l'];
 
     static bool IsRlog(string path)
     {

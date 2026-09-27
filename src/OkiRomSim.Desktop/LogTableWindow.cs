@@ -13,8 +13,21 @@ public sealed class LogTableWindow : Window
 {
     readonly SimHost _host;
     readonly Func<IReadOnlyList<LogFrame>> _frames;
-    readonly ComboBox _table = new() { Width = 220 };
-    readonly ComboBox _channel = new() { Width = 150 };
+    // searchable: type any part of a name ("fuel", "ign", "afr") and pick from what matches
+    readonly AutoCompleteBox _table = Search(240, "type part of a table name");
+    readonly AutoCompleteBox _channel = Search(170, "type part of a channel");
+
+    static AutoCompleteBox Search(double width, string hint)
+    {
+        var box = new AutoCompleteBox
+        {
+            Width = width, MinimumPrefixLength = 0, FilterMode = AutoCompleteFilterMode.Contains, Watermark = hint,
+            MaxDropDownHeight = 360, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+        };
+        // the whole list on a click, before anything is typed
+        box.GotFocus += (_, _) => { if (string.IsNullOrEmpty(box.Text) || box.SelectedItem != null) box.IsDropDownOpen = true; };
+        return box;
+    }
     readonly CheckBox _asVolts = new() { Content = "scale from volts", VerticalAlignment = VerticalAlignment.Center };
     readonly NumericUpDown _at0 = Num(10, 0, 100, 0.5), _at5 = Num(20, 0, 100, 0.5);
     readonly NumericUpDown _target = Num(14.7, 0.5, 30, 0.1);
@@ -141,11 +154,11 @@ public sealed class LogTableWindow : Window
         return b;
     }
 
-    ItemDef? Item() => _host.Defs().Items.FirstOrDefault(i => i.Name == (_table.SelectedItem as string ?? ""));
+    ItemDef? Item() => _host.Defs().Items.FirstOrDefault(i => i.Name.Equals(_table.SelectedItem as string ?? _table.Text ?? "", StringComparison.OrdinalIgnoreCase));
 
     ChannelScale Scale() => new()
     {
-        Channel = _channel.SelectedItem as string ?? "afr",
+        Channel = _channel.SelectedItem as string ?? (string.IsNullOrWhiteSpace(_channel.Text) ? "afr" : _channel.Text.Trim()),
         Volts = _asVolts.IsChecked == true,
         AtZeroVolts = (double)(_at0.Value ?? 0),
         AtFiveVolts = (double)(_at5.Value ?? 5),

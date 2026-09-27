@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
-VisualStudioVersion = 18.10.12201.205 stable
+VisualStudioVersion = 18.10.12201.205
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72D-47B6-A68D-7590B98EB39B}"
 EndProject
@@ -18,6 +18,10 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OkiRomSim.Mcp", "src\OkiRomSim.Mcp\OkiRomSim.Mcp.csproj", "{B8955DD4-EE14-45CF-9FD8-5244C4F6D97D}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OkiRomSim.McpHost", "src\OkiRomSim.McpHost\OkiRomSim.McpHost.csproj", "{1D04C33D-DCAF-4889-99DE-8446CEE2248A}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Plugins", "Plugins", "{07D57EEB-2F50-60C4-C011-FE4FA775C9A8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ScanTool", "src\Plugins\ScanTool\ScanTool.csproj", "{00F91519-D02E-470A-BFDE-E64655B1F11E}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -113,6 +117,18 @@ Global
 		{1D04C33D-DCAF-4889-99DE-8446CEE2248A}.Release|x64.Build.0 = Release|Any CPU
 		{1D04C33D-DCAF-4889-99DE-8446CEE2248A}.Release|x86.ActiveCfg = Release|Any CPU
 		{1D04C33D-DCAF-4889-99DE-8446CEE2248A}.Release|x86.Build.0 = Release|Any CPU
+		{00F91519-D02E-470A-BFDE-E64655B1F11E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{00F91519-D02E-470A-BFDE-E64655B1F11E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{00F91519-D02E-470A-BFDE-E64655B1F11E}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{00F91519-D02E-470A-BFDE-E64655B1F11E}.Debug|x64.Build.0 = Debug|Any CPU
+		{00F91519-D02E-470A-BFDE-E64655B1F11E}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{00F91519-D02E-470A-BFDE-E64655B1F11E}.Debug|x86.Build.0 = Debug|Any CPU
+		{00F91519-D02E-470A-BFDE-E64655B1F11E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{00F91519-D02E-470A-BFDE-E64655B1F11E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{00F91519-D02E-470A-BFDE-E64655B1F11E}.Release|x64.ActiveCfg = Release|Any CPU
+		{00F91519-D02E-470A-BFDE-E64655B1F11E}.Release|x64.Build.0 = Release|Any CPU
+		{00F91519-D02E-470A-BFDE-E64655B1F11E}.Release|x86.ActiveCfg = Release|Any CPU
+		{00F91519-D02E-470A-BFDE-E64655B1F11E}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -123,5 +139,6 @@ Global
 		{E73CA9BC-BD39-4B4B-A060-DB8344DD283B} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{FE9E8D3A-1672-40BE-8B2E-367A0DF0AB84} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{118754A0-4F20-41D9-87CD-7BE77D812EFE} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{00F91519-D02E-470A-BFDE-E64655B1F11E} = {07D57EEB-2F50-60C4-C011-FE4FA775C9A8}
 	EndGlobalSection
 EndGlobal

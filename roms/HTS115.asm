@@ -34,27 +34,27 @@ currentRPMByte      equ 00133h ; working RAM byte read/compared 40x throughout t
 ; coincidentally-equal code address 0x5BB7 and it has been cleaned up. leanprotect_backref_m2
 ; (0x5AAC, the deliberate "EQU $-2" backward
 org 0000h
-int_start_vec:            DW  int_start        ; 0000 AF22 Starts here with normal power up reset
-int_break_vec:            DW  int_break        ; 0002 B622 Goes here if BREAK
-int_WDT_vec:              DW  int_WDT          ; 0004 9E22 Goes here if WDT timed out
+int_start_vec:            DW  int_start  ; Starts here with normal power up reset
+int_break_vec:            DW  int_break  ; Goes here if BREAK
+int_WDT_vec:              DW  int_WDT  ; Goes here if WDT timed out
 int_NMI_vec:              DW  int_NMI
-int_INT0_vec:             DW  int_int0_vss     ; 0008 IRQ bit0 INT0 = vehicle-speed pulse input (P3.2): latches TM2 (CKP edge counter) into
+int_INT0_vec:             DW  int_int0_vss  ; IRQ bit0 INT0 = vehicle-speed pulse input (P3.2): latches TM2 (CKP edge counter) into
                                               ; 0A8h/0ACh on every VSS pulse -- the words the VSS calc consumes to produce the 0CCh speed byte
-int_serial_rx_vec:        DW  int_serial_rx    ; 000A IRQ bit1 serial RX (P3.1): tuning-link / datalog byte received
-int_serial_tx_vec:        DW  int_serial_tx    ; 000C IRQ bit2 serial TX (P3.0): datalog/report byte sent
-int_serial_rx_BRG_vec:    DW  int_serial_rx_BRG ; 000E IRQ bit3 serial RX baud-rate generator: handler completes crank-sync pattern confirmation
-int_timer_0_overflow_vec: DW  int_spurious_irq_trap ; 0010 TM0 overflow: never enabled in this ROM -> shared spurious-IRQ trap (code 045h)
-int_timer_0_vec:          DW  int_timer_0_match ; 0012 TM0 match: injector pulse end -- advances the next injector-bank pattern onto P2 and rearms TMR0
-int_timer_1_overflow_vec: DW  int_spurious_irq_trap ; 0014 TM1 overflow: trap (045h)
-int_timer_1_vec:          DW  int_timer_1_match ; 0016 TM1 match: reschedules TMR1 from the 098h/09Ah phase words, TCON1.3 phase toggle
-int_timer_2_overflow_vec: DW  int_timer_2_overflow ; 0018 TM2 overflow: edge bookkeeping shared with int_int0_vss (0B6h bits)
-int_timer_2_vec:          DW  int_timer_2_capture ; 001A TM2 capture = CKP tooth edge: reschedules TMR3 (ignition) around the measured tooth period
-int_timer_3_overflow_vec: DW  int_spurious_irq_trap ; 001C TM3 overflow: trap (045h)
-int_timer_3_vec:          DW  int_timer_3_match ; 001E TM3 match = ignition-output timer event: rearms TMR3 from er3 for the next event
-int_a2d_finished_vec:     DW  int_spurious_irq_trap ; 0020 A/D conversion-done: not enabled (result polling used) -> trap (045h)
-int_PWM_timer_vec:        DW  int_PWM_timer    ; 0022 PWM timer: boost-solenoid duty end / cycle start, drives P4.3
-int_serial_tx_BRG_vec:    DW  int_spurious_irq_trap ; 0024 serial TX baud-rate generator: never enabled -> trap (045h)
-int_INT1_vec:             DW  int_INT1         ; 0026 IRQ bit15 INT1 = TDC input (P3.3): the main per-cycle engine control handler
+int_serial_rx_vec:        DW  int_serial_rx  ; IRQ bit1 serial RX (P3.1): tuning-link / datalog byte received
+int_serial_tx_vec:        DW  int_serial_tx  ; IRQ bit2 serial TX (P3.0): datalog/report byte sent
+int_serial_rx_BRG_vec:    DW  int_serial_rx_BRG  ; IRQ bit3 serial RX baud-rate generator: handler completes crank-sync pattern confirmation
+int_timer_0_overflow_vec: DW  int_spurious_irq_trap  ; TM0 overflow: never enabled in this ROM -> shared spurious-IRQ trap (code 045h)
+int_timer_0_vec:          DW  int_timer_0_match  ; TM0 match: injector pulse end -- advances the next injector-bank pattern onto P2 and rearms TMR0
+int_timer_1_overflow_vec: DW  int_spurious_irq_trap  ; TM1 overflow: trap (045h)
+int_timer_1_vec:          DW  int_timer_1_match  ; TM1 match: reschedules TMR1 from the 098h/09Ah phase words, TCON1.3 phase toggle
+int_timer_2_overflow_vec: DW  int_timer_2_overflow  ; TM2 overflow: edge bookkeeping shared with int_int0_vss (0B6h bits)
+int_timer_2_vec:          DW  int_timer_2_capture  ; TM2 capture = CKP tooth edge: reschedules TMR3 (ignition) around the measured tooth period
+int_timer_3_overflow_vec: DW  int_spurious_irq_trap  ; TM3 overflow: trap (045h)
+int_timer_3_vec:          DW  int_timer_3_match  ; TM3 match = ignition-output timer event: rearms TMR3 from er3 for the next event
+int_a2d_finished_vec:     DW  int_spurious_irq_trap  ; A/D conversion-done: not enabled (result polling used) -> trap (045h)
+int_PWM_timer_vec:        DW  int_PWM_timer  ; PWM timer: boost-solenoid duty end / cycle start, drives P4.3
+int_serial_tx_BRG_vec:    DW  int_spurious_irq_trap  ; serial TX baud-rate generator: never enabled -> trap (045h)
+int_INT1_vec:             DW  int_INT1  ; IRQ bit15 INT1 = TDC input (P3.3): the main per-cycle engine control handler
 vcal_0_vec:               DW  vcal_0
 vcal_1_vec:               DW  vcal_1
 vcal_2_vec:               DW  vcal_2
@@ -134,7 +134,7 @@ nmi_brk:        BRK ; forces a BRK -> re-enters int_break (full reinit),
 ;	ultimately drives the injector bank bits on Port2 pins 3,2,1 and 0
 ;--------------------------------------------------------------------------------------------------
 
-int_timer_0_match: MOV    LRB, #00022h           ; 0099 0 110 ??? 572200
+int_timer_0_match: MOV    LRB, #00022h
 ; --- Timer0-match ISR = injector pulse end / next-bank stagger (P2.0-3 are the four injector
 ; drives on the P28). On each TMR0 match: clears the TCON0.3 timer-output bit (ANDB #0FBh) to end
 ; the pulse that just ran, then walks the er0->er1->er2 interval chain written by
@@ -142,92 +142,92 @@ int_timer_0_match: MOV    LRB, #00022h           ; 0099 0 110 ??? 572200
 ; rotating bit pattern (&00Fh, mirrored into the P2 shadow 0197h) is ORed onto P2 to open the next
 ; injector bank. r7==00Fh marks "no pulse pending" (timer0_return); timer0_sequence_done resets the
 ; chain. This is NOT a bit-banged serial port -- it is the staged injector-bank firing engine.
-                ANDB    TCON0, #0fbh           ; 009C 0 110 ??? C540D0FB
-                CMPB    r7, #00fh              ; 00A0 0 110 ??? 27C00F
-                JEQ     timer0_return             ; 00A3 0 110 ??? C93F
-                L       A, er0                 ; 00A5 1 110 ??? 34
-                JNE     timer0_bit_accumulate             ; 00A6 1 110 ??? CE3D
-                L       A, er1                 ; 00A8 1 110 ??? 35
-                JEQ     timer0_final_bit_check             ; 00A9 1 110 ??? C953
-                ADD     TMR0, A                ; 00AB 1 110 ??? B53281
-                LB      A, r6                  ; 00AE 0 110 ??? 7E
-                MB      C, ACC.7               ; 00AF 0 110 ??? C5062F
-                ROLB    r6                     ; 00B2 0 110 ??? 26B7
-                ORB     A, r6                  ; 00B4 0 110 ??? 6E
-                ANDB    A, #00fh               ; 00B5 0 110 ??? D60F
-                ORB     r7, A                  ; 00B7 0 110 ??? 27E1
-                ORB     off(00197h), A         ; 00B9 0 110 ??? C497E1
-                LB      A, r6                  ; 00BC 0 110 ??? 7E
-                SLLB    A                      ; 00BD 0 110 ??? 53
-                ROLB    r6                     ; 00BE 0 110 ??? 26B7
-                MOV     er0, er2               ; 00C0 0 110 ??? 4648
-                L       A, #00001h             ; 00C2 1 110 ??? 670100
-                ST      A, er1                 ; 00C5 1 110 ??? 89
+                ANDB    TCON0, #0fbh
+                CMPB    r7, #00fh
+                JEQ     timer0_return
+                L       A, er0
+                JNE     timer0_bit_accumulate
+                L       A, er1
+                JEQ     timer0_final_bit_check
+                ADD     TMR0, A
+                LB      A, r6
+                MB      C, ACC.7
+                ROLB    r6
+                ORB     A, r6
+                ANDB    A, #00fh
+                ORB     r7, A
+                ORB     off(00197h), A
+                LB      A, r6
+                SLLB    A
+                ROLB    r6
+                MOV     er0, er2
+                L       A, #00001h
+                ST      A, er1
 
-timer0_bitshift_loop:     ST      A, er2                 ; 00C6 1 110 ??? 8A
-                L       A, er0                 ; 00C7 1 110 ??? 34
-                JNE     timer0_bit_shift_right             ; 00C8 1 110 ??? CE10
-                L       A, er1                 ; 00CA 1 110 ??? 35
-                JEQ     timer0_bit_invert             ; 00CB 1 110 ??? C910
-                LB      A, r6                  ; 00CD 0 110 ??? 7E
-                SRLB    A                      ; 00CE 0 110 ??? 63
-                SRLB    A                      ; 00CF 0 110 ??? 63
-                SRLB    A                      ; 00D0 0 110 ??? 63
-                ORB     A, r6                  ; 00D1 0 110 ??? 6E
+timer0_bitshift_loop:     ST      A, er2
+                L       A, er0
+                JNE     timer0_bit_shift_right
+                L       A, er1
+                JEQ     timer0_bit_invert
+                LB      A, r6
+                SRLB    A
+                SRLB    A
+                SRLB    A
+                ORB     A, r6
 
-timer0_bit_output:     ORB     A, off(00197h)         ; 00D2 0 110 ??? E797
-                ANDB    A, #00fh               ; 00D4 0 110 ??? D60F
-                ORB     P2, A                  ; 00D6 0 110 ??? C524E1
-                RTI                            ; 00D9 0 110 ??? 02
+timer0_bit_output:     ORB     A, off(00197h)
+                ANDB    A, #00fh
+                ORB     P2, A
+                RTI
 
-timer0_bit_shift_right:     LB      A, r6                  ; 00DA 0 110 ??? 7E
-                SJ      timer0_bit_output             ; 00DB 0 110 ??? CBF5
+timer0_bit_shift_right:     LB      A, r6
+                SJ      timer0_bit_output
 
-timer0_bit_invert:     LB      A, r6                  ; 00DD 0 110 ??? 7E
-                RORB    A                      ; 00DE 0 110 ??? 43
-                XORB    A, #0ffh               ; 00DF 0 110 ??? F6FF
-                J       timer0_bit_output             ; 00E1 0 110 ??? 03D200
+timer0_bit_invert:     LB      A, r6
+                RORB    A
+                XORB    A, #0ffh
+                J       timer0_bit_output
 
-timer0_return:     RTI                            ; 00E4 0 110 ??? 02
+timer0_return:     RTI
 
-timer0_bit_accumulate:     ADD     TMR0, A                ; 00E5 1 110 ??? B53281
-                LB      A, r6                  ; 00E8 0 110 ??? 7E
-                ANDB    A, #00fh               ; 00E9 0 110 ??? D60F
-                ORB     r7, A                  ; 00EB 0 110 ??? 27E1
-                ORB     off(00197h), A         ; 00ED 0 110 ??? C497E1
-                LB      A, r6                  ; 00F0 0 110 ??? 7E
-                SLLB    A                      ; 00F1 0 110 ??? 53
-                ROLB    r6                     ; 00F2 0 110 ??? 26B7
-                MOV     er0, er1               ; 00F4 0 110 ??? 4548
-                MOV     er1, er2               ; 00F6 0 110 ??? 4649
-                L       A, #00001h             ; 00F8 1 110 ??? 670100
-                J       timer0_bitshift_loop             ; 00FB 1 110 ??? 03C600
+timer0_bit_accumulate:     ADD     TMR0, A
+                LB      A, r6
+                ANDB    A, #00fh
+                ORB     r7, A
+                ORB     off(00197h), A
+                LB      A, r6
+                SLLB    A
+                ROLB    r6
+                MOV     er0, er1
+                MOV     er1, er2
+                L       A, #00001h
+                J       timer0_bitshift_loop
 
-timer0_final_bit_check:     L       A, er2                 ; 00FE 1 110 ??? 36
-                JEQ     timer0_sequence_done             ; 00FF 1 110 ??? C91F
-                ADD     TMR0, A                ; 0101 1 110 ??? B53281
-                LB      A, r6                  ; 0104 0 110 ??? 7E
-                MB      C, ACC.0               ; 0105 0 110 ??? C50628
-                RORB    A                      ; 0108 0 110 ??? 43
-                STB     A, r6                  ; 0109 0 110 ??? 8E
-                XORB    A, #0ffh               ; 010A 0 110 ??? F6FF
-                ANDB    A, #00fh               ; 010C 0 110 ??? D60F
-                ORB     r7, A                  ; 010E 0 110 ??? 27E1
-                ORB     off(00197h), A         ; 0110 0 110 ??? C497E1
-                LB      A, r6                  ; 0113 0 110 ??? 7E
-                ANDB    A, #00fh               ; 0114 0 110 ??? D60F
+timer0_final_bit_check:     L       A, er2
+                JEQ     timer0_sequence_done
+                ADD     TMR0, A
+                LB      A, r6
+                MB      C, ACC.0
+                RORB    A
+                STB     A, r6
+                XORB    A, #0ffh
+                ANDB    A, #00fh
+                ORB     r7, A
+                ORB     off(00197h), A
+                LB      A, r6
+                ANDB    A, #00fh
 
-timer0_sequence_reset:     ORB     P2, A                  ; 0116 0 110 ??? C524E1
-                L       A, #00001h             ; 0119 1 110 ??? 670100
-                ST      A, er0                 ; 011C 1 110 ??? 88
-                ST      A, er1                 ; 011D 1 110 ??? 89
-                ST      A, er2                 ; 011E 1 110 ??? 8A
-                RTI                            ; 011F 1 110 ??? 02
+timer0_sequence_reset:     ORB     P2, A
+                L       A, #00001h
+                ST      A, er0
+                ST      A, er1
+                ST      A, er2
+                RTI
 
-timer0_sequence_done:     LB      A, #00fh               ; 0120 0 110 ??? 770F
-                STB     A, r7                  ; 0122 0 110 ??? 8F
-                STB     A, off(00197h)         ; 0123 0 110 ??? D497
-                SJ      timer0_sequence_reset             ; 0125 0 110 ??? CBEF
+timer0_sequence_done:     LB      A, #00fh
+                STB     A, r7
+                STB     A, off(00197h)
+                SJ      timer0_sequence_reset
 ;--------------------------------------------------------------------------------------------------
 ;			Timer 1 match ISR (vector 0016h, IRQ bit7)
 ;
@@ -239,115 +239,115 @@ timer0_sequence_done:     LB      A, #00fh               ; 0120 0 110 ??? 770F
 ;	second phase word exceeds 64Ah. Consumer unconfirmed -- mechanism-level naming kept.
 ;--------------------------------------------------------------------------------------------------
 
-int_timer_1_match: MOV    LRB, #00013h           ; 0127 0 098 ??? 571300
-                JBR     off(TCON1).3, timer1_tmr1_reload ; 012A 0 098 ??? DB4124
-                RB      off(000b6h).5          ; 012D 0 098 ??? C4B60D
-                JNE     timer1_check_start             ; 0130 0 098 ??? CE13
-                CMP     er1, #0064ah           ; 0132 0 098 ??? 45C04A06
-                JLT     timer1_check_start             ; 0136 0 098 ??? CA0D
-                ORB     off(000b6h), #020h     ; 0138 0 098 ??? C4B6E020
-                L       A, #003b6h             ; 013C 1 098 ??? 67B603
-                SUB     er1, A                 ; 013F 1 098 ??? 45A1
-                ADD     off(TMR1), A           ; 0141 1 098 ??? B43681
-                RTI                            ; 0144 1 098 ??? 02
+int_timer_1_match: MOV    LRB, #00013h
+                JBR     off(TCON1).3, timer1_tmr1_reload
+                RB      off(000b6h).5
+                JNE     timer1_check_start
+                CMP     er1, #0064ah
+                JLT     timer1_check_start
+                ORB     off(000b6h), #020h
+                L       A, #003b6h
+                SUB     er1, A
+                ADD     off(TMR1), A
+                RTI
 
-timer1_check_start:     ANDB    off(TCON1), #0f7h      ; 0145 0 098 ??? C441D0F7
-                L       A, off(ADCR4)          ; 0149 1 098 ??? E468
-                ST      A, er2                 ; 014B 1 098 ??? 8A
-                ADD     off(TMR1), off(0009ah) ; 014C 1 098 ??? B436839A
-                RTI                            ; 0150 1 098 ??? 02
+timer1_check_start:     ANDB    off(TCON1), #0f7h
+                L       A, off(ADCR4)
+                ST      A, er2
+                ADD     off(TMR1), off(0009ah)
+                RTI
 
-timer1_tmr1_reload:     ORB     off(TCON1), #008h      ; 0151 0 098 ??? C441E008
-                INCB    r6                     ; 0155 0 098 ??? AE
-                L       A, #00a00h             ; 0156 1 098 ??? 67000A
-                SUB     A, er0                 ; 0159 1 098 ??? 28
-                ST      A, er1                 ; 015A 1 098 ??? 89
-                ADD     off(TMR1), off(00098h) ; 015B 1 098 ??? B4368398
-                RTI                            ; 015F 1 098 ??? 02
+timer1_tmr1_reload:     ORB     off(TCON1), #008h
+                INCB    r6
+                L       A, #00a00h
+                SUB     A, er0
+                ST      A, er1
+                ADD     off(TMR1), off(00098h)
+                RTI
 ;--------------------------------------------------------------------------------------------------
 ;			Timer 2 capture ISR (vector 001Ah, IRQ bit9: crank CKP tooth edge on P3.6)
 ;--------------------------------------------------------------------------------------------------
 
-int_timer_2_capture: MOV  LRB, #00014h           ; 0160 0 0A0 ??? 571400
+int_timer_2_capture: MOV  LRB, #00014h
 ; --- Timer2-capture ISR (0x160-0x1E9+): fires on every CKP edge. It snapshots the MAP converter
 ; (ADCR6 -> 000BAh), tracks a small state counter (r0/r2, states 0-4/5) and TCON3 bits, and
 ; reschedules TMR3 (the ignition-output timer) from the measured tooth period, alongside
 ; int_INT1's tooth-decode logic (references TRNSIT and sysFlags_b7.2, both touched there too).
-                LB      A, r2                  ; 0163 0 0A0 ??? 7A
-                CMPB    A, #003h               ; 0164 0 0A0 ??? C603
-                JGE     timer2_state1_check             ; 0166 0 0A0 ??? CD2A
-                ADDB    A, #001h               ; 0168 0 0A0 ??? 8601
-                JBS     off(ACC).0, timer2_state_dispatch ; 016A 0 0A0 ??? E80604
-                MOV     off(000bah), off(ADCR6) ; 016D 0 0A0 ??? B46C7CBA
+                LB      A, r2
+                CMPB    A, #003h
+                JGE     timer2_state1_check
+                ADDB    A, #001h
+                JBS     off(ACC).0, timer2_state_dispatch
+                MOV     off(000bah), off(ADCR6)
 
-timer2_state_dispatch:     CMPB    A, r0                  ; 0171 0 0A0 ??? 48
-                JEQ     timer3_reload_add             ; 0172 0 0A0 ??? C950
-                JLT     timer3_reload_dec             ; 0174 0 0A0 ??? CA04
+timer2_state_dispatch:     CMPB    A, r0
+                JEQ     timer3_reload_add
+                JLT     timer3_reload_dec
 
-timer2_tcon3_clear:     ANDB    off(TCON3), #0fbh      ; 0176 0 0A0 ??? C443D0FB
+timer2_tcon3_clear:     ANDB    off(TCON3), #0fbh
 
-timer3_reload_dec:     L       A, off(TM3)            ; 017A 1 0A0 ??? E43C
-                SUB     A, #00001h             ; 017C 1 0A0 ??? A60100
-                ST      A, off(TMR3)           ; 017F 1 0A0 ??? D43E
+timer3_reload_dec:     L       A, off(TM3)
+                SUB     A, #00001h
+                ST      A, off(TMR3)
 
-timer2_irq_clear:     ANDB    off(IRQH), #0f7h       ; 0181 1 0A0 ??? C419D0F7
-                ORB     off(IRQ), #008h        ; 0185 1 0A0 ??? C418E008
-                RB      off(TRNSIT).0          ; 0189 1 0A0 ??? C44608
-                JEQ     timer2_return             ; 018C 1 0A0 ??? C903
-                SB      off(sysFlags_b7).2          ; 018E 1 0A0 ??? C4B71A
+timer2_irq_clear:     ANDB    off(IRQH), #0f7h
+                ORB     off(IRQ), #008h
+                RB      off(TRNSIT).0
+                JEQ     timer2_return
+                SB      off(sysFlags_b7).2
 
-timer2_return:     RTI                            ; 0191 1 0A0 ??? 02
+timer2_return:     RTI
 
-timer2_state1_check:     JEQ     timer2_state2_check             ; 0192 0 0A0 ??? C910
-                JBR     off(ACC).0, timer2_tcon3_check2 ; 0194 0 0A0 ??? D80639
-                JBS     off(000a0h).3, timer2_tcon3_clear ; 0197 0 0A0 ??? EBA0DC
-                CLRB    A                      ; 019A 0 0A0 ??? FA
-                JBS     off(000e6h).0, timer2_state_dispatch ; 019B 0 0A0 ??? E8E6D3
-                ORB     off(TCON3), #004h      ; 019E 0 0A0 ??? C443E004
-                SJ      timer2_state_dispatch             ; 01A2 0 0A0 ??? CBCD
+timer2_state1_check:     JEQ     timer2_state2_check
+                JBR     off(ACC).0, timer2_tcon3_check2
+                JBS     off(000a0h).3, timer2_tcon3_clear
+                CLRB    A
+                JBS     off(000e6h).0, timer2_state_dispatch
+                ORB     off(TCON3), #004h
+                SJ      timer2_state_dispatch
 
-timer2_state2_check:     LB      A, r0                  ; 01A4 0 0A0 ??? 78
-                ADDB    A, #001h               ; 01A5 0 0A0 ??? 8601
-                CMPB    A, #005h               ; 01A7 0 0A0 ??? C605
-                JGE     timer2_er3_calc             ; 01A9 0 0A0 ??? CD15
-                ANDB    off(TCON3), #0fbh      ; 01AB 0 0A0 ??? C443D0FB
-                L       A, er2                 ; 01AF 1 0A0 ??? 36
-                CMP     A, #0001fh             ; 01B0 1 0A0 ??? C61F00
-                JGE     timer2_tmr2_add             ; 01B3 1 0A0 ??? CD03
-                L       A, #0001fh             ; 01B5 1 0A0 ??? 671F00
+timer2_state2_check:     LB      A, r0
+                ADDB    A, #001h
+                CMPB    A, #005h
+                JGE     timer2_er3_calc
+                ANDB    off(TCON3), #0fbh
+                L       A, er2
+                CMP     A, #0001fh
+                JGE     timer2_tmr2_add
+                L       A, #0001fh
 
-timer2_tmr2_add:     ADD     A, off(TMR2)           ; 01B8 1 0A0 ??? 873A
-                J       timer3_reload_store             ; 01BA 1 0A0 ??? 03E701
+timer2_tmr2_add:     ADD     A, off(TMR2)
+                J       timer3_reload_store
 
-timer2_tcon3_check:     JBS     off(TCON3).3, timer3_reload_dec ; 01BD 0 0A0 ??? EB43BA
+timer2_tcon3_check:     JBS     off(TCON3).3, timer3_reload_dec
 
-timer2_er3_calc:     L       A, off(TMR2)           ; 01C0 1 0A0 ??? E43A
-                ADD     A, er2                 ; 01C2 1 0A0 ??? 0A
-                ST      A, er3                 ; 01C3 1 0A0 ??? 8B
+timer2_er3_calc:     L       A, off(TMR2)
+                ADD     A, er2
+                ST      A, er3
 
-timer3_reload_add:     L       A, off(TMR2)           ; 01C4 1 0A0 ??? E43A
-                ADD     A, off(000e8h)         ; 01C6 1 0A0 ??? 87E8
-                ST      A, off(TMR3)           ; 01C8 1 0A0 ??? D43E
-                ANDB    off(TCON3), #0f7h      ; 01CA 1 0A0 ??? C443D0F7
-                SJ      timer2_irq_clear             ; 01CE 1 0A0 ??? CBB1
+timer3_reload_add:     L       A, off(TMR2)
+                ADD     A, off(000e8h)
+                ST      A, off(TMR3)
+                ANDB    off(TCON3), #0f7h
+                SJ      timer2_irq_clear
 
-timer2_tcon3_check2:     JBS     off(TCON3).2, timer2_tcon3_check ; 01D0 0 0A0 ??? EA43EA
-                L       A, off(TM3)            ; 01D3 1 0A0 ??? E43C
-                SUB     A, off(TMR2)           ; 01D5 1 0A0 ??? A73A
-                ADD     A, #00006h             ; 01D7 1 0A0 ??? 860600
-                CMP     A, er2                 ; 01DA 1 0A0 ??? 4A
-                JGE     timer3_reload_alt             ; 01DB 1 0A0 ??? CD05
-                L       A, off(TMR2)           ; 01DD 1 0A0 ??? E43A
-                ADD     A, er2                 ; 01DF 1 0A0 ??? 0A
-                SJ      timer3_reload_store             ; 01E0 1 0A0 ??? CB05
+timer2_tcon3_check2:     JBS     off(TCON3).2, timer2_tcon3_check
+                L       A, off(TM3)
+                SUB     A, off(TMR2)
+                ADD     A, #00006h
+                CMP     A, er2
+                JGE     timer3_reload_alt
+                L       A, off(TMR2)
+                ADD     A, er2
+                SJ      timer3_reload_store
 
-timer3_reload_alt:     L       A, off(TM3)            ; 01E2 1 0A0 ??? E43C
-                ADD     A, #00004h             ; 01E4 1 0A0 ??? 860400
+timer3_reload_alt:     L       A, off(TM3)
+                ADD     A, #00004h
 
-timer3_reload_store:     ST      A, off(TMR3)           ; 01E7 1 0A0 ??? D43E
-                JBS     off(000e6h).0, timer2_irq_clear ; 01E9 1 0A0 ??? E8E695
-                ORB     off(TCON3), #008h      ; 01EC 1 0A0 ??? C443E008
-                SJ      timer2_irq_clear             ; 01F0 1 0A0 ??? CB8F
+timer3_reload_store:     ST      A, off(TMR3)
+                JBS     off(000e6h).0, timer2_irq_clear
+                ORB     off(TCON3), #008h
+                SJ      timer2_irq_clear
 ;--------------------------------------------------------------------------------------------------
 ;			Ext. Interrupt 0 Service Routine
 ;--------------------------------------------------------------------------------------------------				
@@ -361,57 +361,57 @@ int_int0_vss:   L       A, 0fah
                 ST      A, IE
                 L       A, TM2
                 ORB     PSWH, #001h
-                MOV     LRB, #00015h           ; 01FB 1 0A8 ??? 571500
-                JBS     off(ACCH).7, int_int0_edge_check ; 01FE 1 0A8 ??? EF0708
-                JBR     off(IRQH).0, int_int0_edge_check ; 0201 1 0A8 ??? D81905
-                INCB    r3                     ; 0204 1 0A8 ??? AB
-                ORB     off(000b6h), #002h     ; 0205 1 0A8 ??? C4B6E002
+                MOV     LRB, #00015h
+                JBS     off(ACCH).7, int_int0_edge_check
+                JBR     off(IRQH).0, int_int0_edge_check
+                INCB    r3
+                ORB     off(000b6h), #002h
 
-int_int0_edge_check:     XCHG    A, er0                 ; 0209 1 0A8 ??? 4410
-                ST      A, er2                 ; 020B 1 0A8 ??? 8A
-                CLRB    A                      ; 020C 0 0A8 ??? FA
-                XCHGB   A, r3                  ; 020D 0 0A8 ??? 2310
-                STB     A, r2                  ; 020F 0 0A8 ??? 8A
-                ORB     off(000b6h), #004h     ; 0210 0 0A8 ??? C4B6E004
-                L       A, off(000f8h)         ; 0214 1 0A8 ??? E4F8
-                ANDB    PSWH, #0feh            ; 0216 1 0A8 ??? A2D0FE
-                ST      A, off(IE)             ; 0219 1 0A8 ??? D41A
-                RTI                            ; 021B 1 0A8 ??? 02
+int_int0_edge_check:     XCHG    A, er0
+                ST      A, er2
+                CLRB    A
+                XCHGB   A, r3
+                STB     A, r2
+                ORB     off(000b6h), #004h
+                L       A, off(000f8h)
+                ANDB    PSWH, #0feh
+                ST      A, off(IE)
+                RTI
 
 int_timer_2_overflow: L       A, 0fah
                 ST      A, IE
                 ORB     PSWH, #001h
-                MOV     LRB, #00015h           ; 0223 1 0A8 ??? 571500
-                RB      off(000b6h).0          ; 0226 1 0A8 ??? C4B608
-                JNE     timer2ovf_edge_check2             ; 0229 1 0A8 ??? CE01
-                INCB    r6                     ; 022B 1 0A8 ??? AE
+                MOV     LRB, #00015h
+                RB      off(000b6h).0
+                JNE     timer2ovf_edge_check2
+                INCB    r6
 
-timer2ovf_edge_check2:     RB      off(000b6h).1          ; 022C 1 0A8 ??? C4B609
-                JNE     timer2ovf_return             ; 022F 1 0A8 ??? CE01
-                INCB    r3                     ; 0231 1 0A8 ??? AB
+timer2ovf_edge_check2:     RB      off(000b6h).1
+                JNE     timer2ovf_return
+                INCB    r3
 
-timer2ovf_return:     L       A, 0f8h                ; 0232 1 0A8 ??? E5F8
-                ANDB    PSWH, #0feh            ; 0234 1 0A8 ??? A2D0FE
-                ST      A, IE                  ; 0237 1 0A8 ??? D51A
-                RTI                            ; 0239 1 0A8 ??? 02
+timer2ovf_return:     L       A, 0f8h
+                ANDB    PSWH, #0feh
+                ST      A, IE
+                RTI
 
 int_timer_3_match: L     A, 0fah
                 ST      A, IE
                 ORB     PSWH, #001h
-                MOV     LRB, #00014h           ; 0241 1 0A0 ??? 571400
-                LB      A, r0                  ; 0244 0 0A0 ??? 78
-                ADDB    A, #001h               ; 0245 0 0A0 ??? 8601
-                CMPB    A, #005h               ; 0247 0 0A0 ??? C605
-                JLT     timer3isr_return             ; 0249 0 0A0 ??? CA0D
-                JBS     off(TCON3).2, timer3isr_return ; 024B 0 0A0 ??? EA430A
-                MOV     off(TMR3), er3         ; 024E 0 0A0 ??? 477C3E
-                JBS     off(000e6h).0, timer3isr_return ; 0251 0 0A0 ??? E8E604
-                ORB     off(TCON3), #008h      ; 0254 0 0A0 ??? C443E008
+                MOV     LRB, #00014h
+                LB      A, r0
+                ADDB    A, #001h
+                CMPB    A, #005h
+                JLT     timer3isr_return
+                JBS     off(TCON3).2, timer3isr_return
+                MOV     off(TMR3), er3
+                JBS     off(000e6h).0, timer3isr_return
+                ORB     off(TCON3), #008h
 
-timer3isr_return:     L       A, off(000f8h)         ; 0258 1 0A0 ??? E4F8
-                ANDB    PSWH, #0feh            ; 025A 1 0A0 ??? A2D0FE
-                ST      A, IE                  ; 025D 1 0A0 ??? D51A
-                RTI                            ; 025F 1 0A0 ??? 02
+timer3isr_return:     L       A, off(000f8h)
+                ANDB    PSWH, #0feh
+                ST      A, IE
+                RTI
 
 int_PWM_timer:  L       A, 0fah
 ; --- PWM timer ISR: the actual hardware PWM generator for the boost/wastegate duty cycle
@@ -420,82 +420,82 @@ int_PWM_timer:  L       A, 0fah
 ; writes PWMR0 as the timer reload value.
                 ST      A, IE
                 ORB     PSWH, #001h
-                MOV     LRB, #00081h           ; 0267 1 408 ??? 578100
-                L       A, er2                 ; 026A 1 408 ??? 36
-                JNE     pwm_period_countdown             ; 026B 1 408 ??? CE04
-                LC      A, bstPWMHZ            ; 026D 1 408 ??? 909CF95F
+                MOV     LRB, #00081h
+                L       A, er2
+                JNE     pwm_period_countdown
+                LC      A, bstPWMHZ
 
-pwm_period_countdown:     SUB     A, #00001h             ; 0271 1 408 ??? A60100
-                ST      A, er2                 ; 0274 1 408 ??? 8A
-                CMP     A, er1                 ; 0275 1 408 ??? 49
-                LCB     A, bstPWMMode            ; 0276 1 408 ??? 909D9761
-                JEQ     pwm_mode_check             ; 027A 1 408 ??? C903
-                XORB    PSWH, #080h            ; 027C 1 408 ??? A2F080
+pwm_period_countdown:     SUB     A, #00001h
+                ST      A, er2
+                CMP     A, er1
+                LCB     A, bstPWMMode
+                JEQ     pwm_mode_check
+                XORB    PSWH, #080h
 
-pwm_mode_check:     LCB     A, bstPWMOutput            ; 027F 1 408 ??? 909D9861
-                JEQ     pwm_output_clamp_check             ; 0283 1 408 ??? C905
-                MB      P4.3, C                ; 0285 1 408 ??? C52C3B
-                SJ      pwm_isr_return             ; 0288 1 408 ??? CB0C
+pwm_mode_check:     LCB     A, bstPWMOutput
+                JEQ     pwm_output_clamp_check
+                MB      P4.3, C
+                SJ      pwm_isr_return
 
-pwm_output_clamp_check:     L       A, ACC                 ; 028A 1 408 ??? E506
-                L       A, #0ffffh             ; 028C 1 408 ??? 67FFFF
-                JGE     pwm_output_store             ; 028F 1 408 ??? CD03
-                L       A, #00001h             ; 0291 1 408 ??? 670100
+pwm_output_clamp_check:     L       A, ACC
+                L       A, #0ffffh
+                JGE     pwm_output_store
+                L       A, #00001h
 
-pwm_output_store:     ST      A, PWMR0               ; 0294 1 408 ??? D572
+pwm_output_store:     ST      A, PWMR0
 
-pwm_isr_return:     L       A, 0f8h                ; 0296 1 408 ??? E5F8
-                ANDB    PSWH, #0feh            ; 0298 1 408 ??? A2D0FE
-                ST      A, IE                  ; 029B 1 408 ??? D51A
-                RTI                            ; 029D 1 408 ??? 02
+pwm_isr_return:     L       A, 0f8h
+                ANDB    PSWH, #0feh
+                ST      A, IE
+                RTI
 
 int_INT1:       L       A, #000a0h
                 ST      A, IE
                 MOV     PSW, #00102h
-                MOV     LRB, #00021h           ; 02A8 1 108 ??? 572100
-                MOV     USP, #00280h           ; 02AB 1 108 280 A1988002
-                CAL     refresh_engine_flags_snapshot             ; 02AF 1 108 280 325A4C
-                SB      off(00128h).4          ; 02B2 1 108 280 C4281C
-                JBS     off(0011ah).7, int1_dispatch_main_cycle ; 02B5 1 108 280 EF1A0F
-                JBS     off(0011ah).3, int1_dispatch_alt1 ; 02B8 1 108 280 EB1A12
-                RB      IRQH.1                 ; 02BB 1 108 280 C51909
-                JEQ     dtc04_ckp_latch             ; 02BE 1 108 280 C90A
-                RB      0b4h.0                 ; 02C0 1 108 280 C5B408
-                MOVB    off(001d1h), #02dh     ; 02C3 1 108 280 C4D1982D
+                MOV     LRB, #00021h
+                MOV     USP, #00280h
+                CAL     refresh_engine_flags_snapshot
+                SB      off(00128h).4
+                JBS     off(0011ah).7, int1_dispatch_main_cycle
+                JBS     off(0011ah).3, int1_dispatch_alt1
+                RB      IRQH.1
+                JEQ     dtc04_ckp_latch
+                RB      0b4h.0
+                MOVB    off(001d1h), #02dh
 
-int1_dispatch_main_cycle:     J       crank_cycle_entry             ; 02C7 1 108 280 03E305
+int1_dispatch_main_cycle:     J       crank_cycle_entry
 
-dtc04_ckp_latch:     SB      0b4h.0                 ; 02CA 1 108 280 C5B418
+dtc04_ckp_latch:     SB      0b4h.0
 
-int1_dispatch_alt1:     L       A, ADCR6               ; 02CD 1 108 280 E56C
-                ST      A, 0bah                ; 02CF 1 108 280 D5BA
-                L       A, TM2                 ; 02D1 1 108 280 E538
-                ST      A, 0f0h                ; 02D3 1 108 280 D5F0
-                MOVB    0a2h, #000h            ; 02D5 1 108 280 C5A29800
-                LB      A, #003h               ; 02D9 0 108 280 7703
-                RB      TRNSIT.0               ; 02DB 0 108 280 C54608
-                JNE     crank_tooth_count_store             ; 02DE 0 108 280 CE0A
-                LB      A, off(00134h)         ; 02E0 0 108 280 F434
-                ADDB    A, #006h               ; 02E2 0 108 280 8606
-                CMPB    A, #018h               ; 02E4 0 108 280 C618
-                JLT     crank_tooth_count_store             ; 02E6 0 108 280 CA02
-                LB      A, #003h               ; 02E8 0 108 280 7703
+int1_dispatch_alt1:     L       A, ADCR6
+                ST      A, 0bah
+                L       A, TM2
+                ST      A, 0f0h
+                MOVB    0a2h, #000h
+                LB      A, #003h
+                RB      TRNSIT.0
+                JNE     crank_tooth_count_store
+                LB      A, off(00134h)
+                ADDB    A, #006h
+                CMPB    A, #018h
+                JLT     crank_tooth_count_store
+                LB      A, #003h
 
-crank_tooth_count_store:     STB     A, off(00134h)         ; 02EA 0 108 280 D434
-                SB      P4.0                   ; 02EC 0 108 280 C52C18
-                MB      C, off(0011bh).6       ; 02EF 0 108 280 C41B2E
-                MB      off(0012ah).1, C       ; 02F2 0 108 280 C42A39
-                JBS     off(00128h).2, int1_exit_jump ; 02F5 0 108 280 EA2817
-                LB      A, off(0013dh)         ; 02F8 0 108 280 F43D
-                JNE     int1_exit_jump             ; 02FA 0 108 280 CE13
-                STB     A, off(0013ch)         ; 02FC 0 108 280 D43C
-                SB      off(00128h).2          ; 02FE 0 108 280 C4281A
-                ANDB    PSWH, #0feh            ; 0301 0 108 280 A2D0FE
-                MOVB    off(00196h), #077h     ; 0304 0 108 280 C4969877
-                MOVB    off(00116h), #011h     ; 0308 0 108 280 C4169811
-                ORB     PSWH, #001h            ; 030C 0 108 280 A2E001
+crank_tooth_count_store:     STB     A, off(00134h)
+                SB      P4.0
+                MB      C, off(0011bh).6
+                MB      off(0012ah).1, C
+                JBS     off(00128h).2, int1_exit_jump
+                LB      A, off(0013dh)
+                JNE     int1_exit_jump
+                STB     A, off(0013ch)
+                SB      off(00128h).2
+                ANDB    PSWH, #0feh
+                MOVB    off(00196h), #077h
+                MOVB    off(00116h), #011h
+                ORB     PSWH, #001h
 
-int1_exit_jump:     J       crank_cycle_dispatch2             ; 030F 0 108 280 03B504
+int1_exit_jump:     J       crank_cycle_dispatch2
 
 int_serial_rx_BRG: L       A, #000a0h
 ; NOTE: despite the vector-table name (inherited from the OKI 66207's default peripheral
@@ -507,436 +507,436 @@ int_serial_rx_BRG: L       A, #000a0h
 ; rather than asserting a replacement name without more certainty.
                 ST      A, IE
                 MOV     PSW, #00102h
-                MOV     LRB, #00021h           ; 031C 1 108 ??? 572100
-                MOV     USP, #00280h           ; 031F 1 108 280 A1988002
-                L       A, (00212h-00280h)[USP] ; 0323 1 108 280 E392
-                ST      A, off(0011ah)         ; 0325 1 108 280 D41A
-                L       A, (00214h-00280h)[USP] ; 0327 1 108 280 E394
-                ST      A, off(0011ch)         ; 0329 1 108 280 D41C
-                L       A, (00216h-00280h)[USP] ; 032B 1 108 280 E396
-                ST      A, off(0011eh)         ; 032D 1 108 280 D41E
-                MOVB    off(001d1h), #02dh     ; 032F 1 108 280 C4D1982D
-                JBR     off(00128h).3, crank_sync_flags_clear_path ; 0333 1 108 280 DB282F
-                JBS     off(0011ah).7, crank_sync_flag_set ; 0336 1 108 280 EF1A16
-                RB      IRQH.7                 ; 0339 1 108 280 C5190F
-                JNE     crank_sync_lost_path             ; 033C 1 108 280 CE3B
-                RB      0b6h.7                 ; 033E 1 108 280 C5B60F
-                JNE     crank_sync_lost_path             ; 0341 1 108 280 CE36
+                MOV     LRB, #00021h
+                MOV     USP, #00280h
+                L       A, (00212h-00280h)[USP]
+                ST      A, off(0011ah)
+                L       A, (00214h-00280h)[USP]
+                ST      A, off(0011ch)
+                L       A, (00216h-00280h)[USP]
+                ST      A, off(0011eh)
+                MOVB    off(001d1h), #02dh
+                JBR     off(00128h).3, crank_sync_flags_clear_path
+                JBS     off(0011ah).7, crank_sync_flag_set
+                RB      IRQH.7
+                JNE     crank_sync_lost_path
+                RB      0b6h.7
+                JNE     crank_sync_lost_path
 
-crank_sync_retry_check:     CMPB    0a2h, #005h            ; 0343 1 108 280 C5A2C005
-                JGE     crank_sync_confirm_check             ; 0347 1 108 280 CD0B
-                INCB    0a2h                   ; 0349 1 108 280 C5A216
-                J       crank_sync_window_check             ; 034C 1 108 280 03A403
+crank_sync_retry_check:     CMPB    0a2h, #005h
+                JGE     crank_sync_confirm_check
+                INCB    0a2h
+                J       crank_sync_window_check
 
-crank_sync_flag_set:     SB      off(00128h).4          ; 034F 1 108 280 C4281C
-                SJ      crank_sync_retry_check             ; 0352 1 108 280 CBEF
+crank_sync_flag_set:     SB      off(00128h).4
+                SJ      crank_sync_retry_check
 
-crank_sync_confirm_check:     JBS     off(0011ah).7, crank_sync_confirmed ; 0354 1 108 280 EF1A06
-dtc08_tdc_latch_2: SB      0b4h.1                 ; 0357 1 108 280 C5B419
-                SB      off(00128h).6          ; 035A 1 108 280 C4281E
+crank_sync_confirm_check:     JBS     off(0011ah).7, crank_sync_confirmed
+dtc08_tdc_latch_2: SB      0b4h.1
+                SB      off(00128h).6
 
-crank_sync_confirmed:     INCB    0a3h                   ; 035D 1 108 280 C5A316
-                CLRB    0a2h                   ; 0360 1 108 280 C5A215
-                SJ      crank_sync_window_check             ; 0363 1 108 280 CB3F
+crank_sync_confirmed:     INCB    0a3h
+                CLRB    0a2h
+                SJ      crank_sync_window_check
 
-crank_sync_flags_clear_path:     RB      IRQH.7                 ; 0365 1 108 280 C5190F
-                RB      0b6h.7                 ; 0368 1 108 280 C5B60F
-                RB      sysFlags_b7.2                 ; 036B 1 108 280 C5B70A
-                MB      C, sysFlags_b7.0              ; 036E 1 108 280 C5B728
-                JGE     crank_sync_exit_jump             ; 0371 1 108 280 CD03
-                SB      off(00128h).4          ; 0373 1 108 280 C4281C
+crank_sync_flags_clear_path:     RB      IRQH.7
+                RB      0b6h.7
+                RB      sysFlags_b7.2
+                MB      C, sysFlags_b7.0
+                JGE     crank_sync_exit_jump
+                SB      off(00128h).4
 
-crank_sync_exit_jump:     J       crank_decode_exit             ; 0376 1 108 280 03A805
+crank_sync_exit_jump:     J       crank_decode_exit
 
-crank_sync_lost_path:     SB      off(00128h).4          ; 0379 1 108 280 C4281C
-                RB      off(00128h).6          ; 037C 1 108 280 C4280E
-                MOVB    off(001d2h), #02dh     ; 037F 1 108 280 C4D2982D
-                L       A, 0a2h                ; 0383 1 108 280 E5A2
-                CMP     A, #00005h             ; 0385 1 108 280 C60500
-                JEQ     crank_tooth_counter_reset             ; 0388 1 108 280 C917
-                SB      off(00125h).7          ; 038A 1 108 280 C4251F
-                JLT     crank_sync_flag_mid             ; 038D 1 108 280 CA0A
-                CMP     A, #00105h             ; 038F 1 108 280 C60501
-                JGE     crank_sync_flag_high             ; 0392 1 108 280 CD0A
-                SB      0b5h.0                 ; 0394 1 108 280 C5B518
-                SJ      crank_tooth_counter_reset             ; 0397 1 108 280 CB08
+crank_sync_lost_path:     SB      off(00128h).4
+                RB      off(00128h).6
+                MOVB    off(001d2h), #02dh
+                L       A, 0a2h
+                CMP     A, #00005h
+                JEQ     crank_tooth_counter_reset
+                SB      off(00125h).7
+                JLT     crank_sync_flag_mid
+                CMP     A, #00105h
+                JGE     crank_sync_flag_high
+                SB      0b5h.0
+                SJ      crank_tooth_counter_reset
 
-crank_sync_flag_mid:     SB      off(00128h).5          ; 0399 1 108 280 C4281D
-                SJ      crank_tooth_counter_reset             ; 039C 1 108 280 CB03
+crank_sync_flag_mid:     SB      off(00128h).5
+                SJ      crank_tooth_counter_reset
 
-crank_sync_flag_high:     SB      0b5h.1                 ; 039E 1 108 280 C5B519
+crank_sync_flag_high:     SB      0b5h.1
 
-crank_tooth_counter_reset:     CLR     0a2h                   ; 03A1 1 108 280 B5A215
+crank_tooth_counter_reset:     CLR     0a2h
 
-crank_sync_window_check:     JBS     off(0011bh).0, crank_window_flag_clear ; 03A4 1 108 280 E81B26
+crank_sync_window_check:     JBS     off(0011bh).0, crank_window_flag_clear
 ; --- Crank/cam trigger-wheel tooth-counting and sync-window state machine (0x379-0x3FF+):
 ; tracks tooth position counters (0x134/0x135, compared against 0x17=23) and sync-confidence
 ; flags (0xB5.0/.1/.2, 0x128.4-7) to detect a valid missing-tooth/sync pattern. Low anchor
 ; density (no calibration fields); named at the mechanism level.
-                RB      sysFlags_b7.2                 ; 03A7 1 108 280 C5B70A
-                JEQ     crank_tooth_seq_check             ; 03AA 1 108 280 C924
-                RB      off(00128h).7          ; 03AC 1 108 280 C4280F
-                MOVB    off(001d3h), #007h     ; 03AF 1 108 280 C4D39807
-                L       A, off(00134h)         ; 03B3 1 108 280 E434
-                CMP     A, #00017h             ; 03B5 1 108 280 C61700
-                JNE     crank_window_flag_check2             ; 03B8 1 108 280 CE33
-                RB      off(00128h).5          ; 03BA 1 108 280 C4280D
-                JNE     crank_sync_flag_low             ; 03BD 1 108 280 CE3A
-                RB      off(00125h).7          ; 03BF 1 108 280 C4250F
-                CMPB    0a2h, #003h            ; 03C2 1 108 280 C5A2C003
-                JEQ     crank_tooth_reset             ; 03C6 1 108 280 C934
+                RB      sysFlags_b7.2
+                JEQ     crank_tooth_seq_check
+                RB      off(00128h).7
+                MOVB    off(001d3h), #007h
+                L       A, off(00134h)
+                CMP     A, #00017h
+                JNE     crank_window_flag_check2
+                RB      off(00128h).5
+                JNE     crank_sync_flag_low
+                RB      off(00125h).7
+                CMPB    0a2h, #003h
+                JEQ     crank_tooth_reset
 
-crank_sync_flag_common:     SB      0b5h.2                 ; 03C8 1 108 280 C5B51A
-                SJ      crank_tooth_reset             ; 03CB 1 108 280 CB2F
+crank_sync_flag_common:     SB      0b5h.2
+                SJ      crank_tooth_reset
 
-crank_window_flag_clear:     RB      off(00125h).7          ; 03CD 1 108 280 C4250F
+crank_window_flag_clear:     RB      off(00125h).7
 
-crank_tooth_seq_check:     CMPB    off(00134h), #017h     ; 03D0 1 108 280 C434C017
-                JGE     crank_tooth_seq_gate             ; 03D4 1 108 280 CD06
-                INCB    off(00134h)            ; 03D6 1 108 280 C43416
-                J       crank_tooth_mod_check             ; 03D9 1 108 280 03FF03
+crank_tooth_seq_check:     CMPB    off(00134h), #017h
+                JGE     crank_tooth_seq_gate
+                INCB    off(00134h)
+                J       crank_tooth_mod_check
 
-crank_tooth_seq_gate:     JBS     off(0011bh).0, crank_tooth_seq_advance ; 03DC 1 108 280 E81B06
-dtc09_cyp_latch: SB      0b4h.2                 ; 03DF 1 108 280 C5B41A
-                SB      off(00128h).7          ; 03E2 1 108 280 C4281F
+crank_tooth_seq_gate:     JBS     off(0011bh).0, crank_tooth_seq_advance
+dtc09_cyp_latch: SB      0b4h.2
+                SB      off(00128h).7
 
-crank_tooth_seq_advance:     INCB    off(00135h)            ; 03E5 1 108 280 C43516
-                CLRB    off(00134h)            ; 03E8 1 108 280 C43415
-                SJ      crank_tooth_mod_check             ; 03EB 1 108 280 CB12
+crank_tooth_seq_advance:     INCB    off(00135h)
+                CLRB    off(00134h)
+                SJ      crank_tooth_mod_check
 
-crank_window_flag_check2:     RB      off(00128h).5          ; 03ED 1 108 280 C4280D
-                JGE     crank_tooth_reset             ; 03F0 1 108 280 CD0A
-                JEQ     crank_sync_flag_common             ; 03F2 1 108 280 C9D4
-                SB      0b5h.0                 ; 03F4 1 108 280 C5B518
-                SJ      crank_tooth_reset             ; 03F7 1 108 280 CB03
+crank_window_flag_check2:     RB      off(00128h).5
+                JGE     crank_tooth_reset
+                JEQ     crank_sync_flag_common
+                SB      0b5h.0
+                SJ      crank_tooth_reset
 
-crank_sync_flag_low:     SB      0b5h.1                 ; 03F9 1 108 280 C5B519
+crank_sync_flag_low:     SB      0b5h.1
 
-crank_tooth_reset:     CLR     off(00134h)            ; 03FC 1 108 280 B43415
+crank_tooth_reset:     CLR     off(00134h)
 
-crank_tooth_mod_check:     JBS     off(0011ah).7, crank_tooth_mod6_calc ; 03FF 1 108 280 EF1A0F
-                JBS     off(00128h).6, crank_tooth_mod6_calc ; 0402 1 108 280 EE280C
+crank_tooth_mod_check:     JBS     off(0011ah).7, crank_tooth_mod6_calc
+                JBS     off(00128h).6, crank_tooth_mod6_calc
 
-crank_tooth_range_check:     JBS     off(0011bh).0, crank_tooth_wrap_calc ; 0405 1 108 280 E81B17
-                JBS     off(00128h).7, crank_tooth_wrap_calc ; 0408 1 108 280 EF2814
+crank_tooth_range_check:     JBS     off(0011bh).0, crank_tooth_wrap_calc
+                JBS     off(00128h).7, crank_tooth_wrap_calc
 
-crank_tooth_carry_clear:     RC                             ; 040B 1 108 280 95
-                JBR     off(0011bh).6, crank_sync_store_flag ; 040C 1 108 280 DE1B2F
-                SJ      crank_sync_confirmed_flag             ; 040F 1 108 280 CB29
+crank_tooth_carry_clear:     RC
+                JBR     off(0011bh).6, crank_sync_store_flag
+                SJ      crank_sync_confirmed_flag
 
-crank_tooth_mod6_calc:     CLR     A                      ; 0411 1 108 280 F9
-                MOVB    r0, #006h              ; 0412 1 108 280 9806
-                LB      A, off(00134h)         ; 0414 0 108 280 F434
-                ADDB    A, #003h               ; 0416 0 108 280 8603
-                DIVB                           ; 0418 0 108 280 A236
-                LB      A, r1                  ; 041A 0 108 280 79
-                STB     A, 0a2h                ; 041B 0 108 280 D5A2
-                SJ      crank_tooth_range_check             ; 041D 0 108 280 CBE6
+crank_tooth_mod6_calc:     CLR     A
+                MOVB    r0, #006h
+                LB      A, off(00134h)
+                ADDB    A, #003h
+                DIVB
+                LB      A, r1
+                STB     A, 0a2h
+                SJ      crank_tooth_range_check
 
-crank_tooth_wrap_calc:     MOVB    r0, #006h              ; 041F 1 108 280 9806
-                LB      A, 0a2h                ; 0421 0 108 280 F5A2
-                ADDB    A, #003h               ; 0423 0 108 280 8603
-                SUBB    A, r0                  ; 0425 0 108 280 28
-                JGE     crank_tooth_wrap_store             ; 0426 0 108 280 CD01
-                ADDB    A, r0                  ; 0428 0 108 280 08
+crank_tooth_wrap_calc:     MOVB    r0, #006h
+                LB      A, 0a2h
+                ADDB    A, #003h
+                SUBB    A, r0
+                JGE     crank_tooth_wrap_store
+                ADDB    A, r0
 
-crank_tooth_wrap_store:     STB     A, r2                  ; 0429 0 108 280 8A
-                CLR     A                      ; 042A 1 108 280 F9
-                LB      A, off(00134h)         ; 042B 0 108 280 F434
-                DIVB                           ; 042D 0 108 280 A236
-                MULB                           ; 042F 0 108 280 A234
-                ADDB    A, r2                  ; 0431 0 108 280 0A
-                STB     A, off(00134h)         ; 0432 0 108 280 D434
-                JBS     off(0011ah).7, crank_sync_confirmed_flag ; 0434 0 108 280 EF1A03
-                JBR     off(00128h).6, crank_tooth_carry_clear ; 0437 0 108 280 DE28D1
+crank_tooth_wrap_store:     STB     A, r2
+                CLR     A
+                LB      A, off(00134h)
+                DIVB
+                MULB
+                ADDB    A, r2
+                STB     A, off(00134h)
+                JBS     off(0011ah).7, crank_sync_confirmed_flag
+                JBR     off(00128h).6, crank_tooth_carry_clear
 
-crank_sync_confirmed_flag:     SC                             ; 043A 0 108 280 85
-                SB      off(00124h).2          ; 043B 0 108 280 C4241A
+crank_sync_confirmed_flag:     SC
+                SB      off(00124h).2
 
-crank_sync_store_flag:     MB      off(0012ah).1, C       ; 043E 0 108 280 C42A39
-                LB      A, off(00134h)         ; 0441 0 108 280 F434
-                EXTND                          ; 0443 1 108 280 F8
-                MOV     X1, A                  ; 0444 1 108 280 50
-                LCB     A, tbl_crank_sync_pattern[X1]        ; 0445 1 108 280 90AB546C
-                ANDB    off(00128h), A         ; 0449 1 108 280 C428D1
-                LB      A, off(00134h)         ; 044C 0 108 280 F434
-                JNE     crank_sync_flag2_check             ; 044E 0 108 280 CE2B
-                JBR     off(00128h).2, crank_resync_reset ; 0450 0 108 280 DA280B
-                JBS     off(0011fh).7, crank_sync_flag2_check ; 0453 0 108 280 EF1F25
-                JBS     off(00128h).0, crank_tooth_alt_flag ; 0456 0 108 280 E82819
-                RB      off(00128h).1          ; 0459 0 108 280 C42809
-                SJ      crank_tooth_alt_store             ; 045C 0 108 280 CB1B
+crank_sync_store_flag:     MB      off(0012ah).1, C
+                LB      A, off(00134h)
+                EXTND
+                MOV     X1, A
+                LCB     A, tbl_crank_sync_pattern[X1]
+                ANDB    off(00128h), A
+                LB      A, off(00134h)
+                JNE     crank_sync_flag2_check
+                JBR     off(00128h).2, crank_resync_reset
+                JBS     off(0011fh).7, crank_sync_flag2_check
+                JBS     off(00128h).0, crank_tooth_alt_flag
+                RB      off(00128h).1
+                SJ      crank_tooth_alt_store
 
-crank_resync_reset:     ANDB    PSWH, #0feh            ; 045E 0 108 280 A2D0FE
-                MOVB    off(00196h), #077h     ; 0461 0 108 280 C4969877
-                MOVB    off(00116h), #011h     ; 0465 0 108 280 C4169811
-                ANDB    off(00128h), #0fch     ; 0469 0 108 280 C428D0FC
-                ORB     PSWH, #001h            ; 046D 0 108 280 A2E001
-                SJ      crank_tooth_alt_store             ; 0470 0 108 280 CB07
+crank_resync_reset:     ANDB    PSWH, #0feh
+                MOVB    off(00196h), #077h
+                MOVB    off(00116h), #011h
+                ANDB    off(00128h), #0fch
+                ORB     PSWH, #001h
+                SJ      crank_tooth_alt_store
 
-crank_tooth_alt_flag:     LB      A, #001h               ; 0472 0 108 280 7701
-                JBR     off(00128h).1, crank_tooth_alt_store ; 0474 0 108 280 D92802
-                LB      A, #002h               ; 0477 0 108 280 7702
+crank_tooth_alt_flag:     LB      A, #001h
+                JBR     off(00128h).1, crank_tooth_alt_store
+                LB      A, #002h
 
-crank_tooth_alt_store:     STB     A, off(0013ch)         ; 0479 0 108 280 D43C
+crank_tooth_alt_store:     STB     A, off(0013ch)
 
 
-crank_sync_flag2_check:     JBS     off(00128h).2, crank_sync_flag2_check2 ; 047B 0 108 280 EA2811
-                CMPB    off(0013dh), #004h     ; 047E 0 108 280 C43DC004
-                JEQ     crank_cycle_exit_early             ; 0482 0 108 280 C92E
-                LB      A, off(0013dh)         ; 0484 0 108 280 F43D
-                JNE     crank_sync_flag2_check2             ; 0486 0 108 280 CE07
-                LB      A, 0a2h                ; 0488 0 108 280 F5A2
-                JNE     crank_sync_flag2_check2             ; 048A 0 108 280 CE03
-                SB      off(00128h).2          ; 048C 0 108 280 C4281A
+crank_sync_flag2_check:     JBS     off(00128h).2, crank_sync_flag2_check2
+                CMPB    off(0013dh), #004h
+                JEQ     crank_cycle_exit_early
+                LB      A, off(0013dh)
+                JNE     crank_sync_flag2_check2
+                LB      A, 0a2h
+                JNE     crank_sync_flag2_check2
+                SB      off(00128h).2
 
-crank_sync_flag2_check2:     JBR     off(0011fh).7, crank_sync_bit_check ; 048F 0 108 280 DF1F06
-                LB      A, 0a2h                ; 0492 0 108 280 F5A2
-                JNE     crank_cycle_exit_early             ; 0494 0 108 280 CE1C
-                SJ      crank_cycle_dispatch2             ; 0496 0 108 280 CB1D
+crank_sync_flag2_check2:     JBR     off(0011fh).7, crank_sync_bit_check
+                LB      A, 0a2h
+                JNE     crank_cycle_exit_early
+                SJ      crank_cycle_dispatch2
 
-crank_sync_bit_check:     LB      A, off(0013ch)         ; 0498 0 108 280 F43C
-                ANDB    A, #001h               ; 049A 0 108 280 D601
-                TRB     off(00128h)            ; 049C 0 108 280 C42813 ; mnemonic was "TBR" (letter transposition)
-                JNE     crank_cycle_exit_early             ; 049F 0 108 280 CE11
-                CLR     A                      ; 04A1 1 108 280 F9
-                LB      A, off(00134h)         ; 04A2 0 108 280 F434
-                JBR     off(0013ch).0, crank_tooth_pattern_lookup ; 04A4 0 108 280 D83C02
-                ADDB    A, #006h               ; 04A7 0 108 280 8606
+crank_sync_bit_check:     LB      A, off(0013ch)
+                ANDB    A, #001h
+                TRB     off(00128h)  ; mnemonic was "TBR" (letter transposition)
+                JNE     crank_cycle_exit_early
+                CLR     A
+                LB      A, off(00134h)
+                JBR     off(0013ch).0, crank_tooth_pattern_lookup
+                ADDB    A, #006h
 
-crank_tooth_pattern_lookup:     MOV     X1, A                  ; 04A9 0 108 280 50
-                LCB     A, tbl_crank_tooth_pattern[X1]        ; 04AA 0 108 280 90AB6C6C
-                CMPB    A, off(0013bh)         ; 04AE 0 108 280 C73B
-                JGE     crank_cycle_dispatch2             ; 04B0 0 108 280 CD03
+crank_tooth_pattern_lookup:     MOV     X1, A
+                LCB     A, tbl_crank_tooth_pattern[X1]
+                CMPB    A, off(0013bh)
+                JGE     crank_cycle_dispatch2
 
-crank_cycle_exit_early:     J       crank_decode_exit             ; 04B2 0 108 280 03A805
+crank_cycle_exit_early:     J       crank_decode_exit
 
-crank_cycle_dispatch2:     LB      A, off(0013ch)         ; 04B5 0 108 280 F43C
-                SLLB    A                      ; 04B7 0 108 280 53
-                EXTND                          ; 04B8 1 108 280 F8
-                MOV     X1, A                  ; 04B9 1 108 280 50
-                JBS     off(00125h).4, injtimer_countdown_check ; 04BA 1 108 280 EC2522
-                CLR     A                      ; 04BD 1 108 280 F9
-                MOV     X2, A                  ; 04BE 1 108 280 51
-                ST      A, 003c2h[X2]          ; 04BF 1 108 280 D1C203
-                ST      A, 003c4h[X2]          ; 04C2 1 108 280 D1C403
-                ST      A, 003c6h[X2]          ; 04C5 1 108 280 D1C603
-                ST      A, 003c8h[X2]          ; 04C8 1 108 280 D1C803
-                CLRB    A                      ; 04CB 0 108 280 FA
-                STB     A, off(001a5h)         ; 04CC 0 108 280 D4A5
-                J       injtimer_bit_clear             ; 04CE 0 108 280 030505
+crank_cycle_dispatch2:     LB      A, off(0013ch)
+                SLLB    A
+                EXTND
+                MOV     X1, A
+                JBS     off(00125h).4, injtimer_countdown_check
+                CLR     A
+                MOV     X2, A
+                ST      A, 003c2h[X2]
+                ST      A, 003c4h[X2]
+                ST      A, 003c6h[X2]
+                ST      A, 003c8h[X2]
+                CLRB    A
+                STB     A, off(001a5h)
+                J       injtimer_bit_clear
 
-injtimer_clear_path1:     SBR     off(001a7h)            ; 04D1 0 108 280 C4A711
-                SB      off(0012ah).7          ; 04D4 0 108 280 C42A1F
-                SB      off(001a3h).0          ; 04D7 0 108 280 C4A318
-                SJ      injbase_calc_start             ; 04DA 0 108 280 CB2C
+injtimer_clear_path1:     SBR     off(001a7h)
+                SB      off(0012ah).7
+                SB      off(001a3h).0
+                SJ      injbase_calc_start
 
-injtimer_clear_path2:     CLR     A                      ; 04DC 1 108 280 F9
-                SJ      injtimer_clamp_store             ; 04DD 1 108 280 CB23
+injtimer_clear_path2:     CLR     A
+                SJ      injtimer_clamp_store
 
-injtimer_countdown_check:     LB      A, off(001a6h)         ; 04DF 0 108 280 F4A6
-                SUBB    A, #001h               ; 04E1 0 108 280 A601
-                JGE     injtimer_countdown_store             ; 04E3 0 108 280 CD02
-                LB      A, #007h               ; 04E5 0 108 280 7707
+injtimer_countdown_check:     LB      A, off(001a6h)
+                SUBB    A, #001h
+                JGE     injtimer_countdown_store
+                LB      A, #007h
 
-injtimer_countdown_store:     STB     A, off(001a6h)         ; 04E7 0 108 280 D4A6
-                CMPB    A, #007h               ; 04E9 0 108 280 C607
-                JGT     injtimer_bit_clear             ; 04EB 0 108 280 C818
-                MBR     C, off(001a5h)         ; 04ED 0 108 280 C4A521
-                JLT     injtimer_clear_path1             ; 04F0 0 108 280 CADF
-                ADDB    A, #004h               ; 04F2 0 108 280 8604
-                RBR     off(001a7h)            ; 04F4 0 108 280 C4A712
-                JNE     injtimer_clear_path2             ; 04F7 0 108 280 CEE3
-                L       A, 003c2h[X1]          ; 04F9 1 108 280 E0C203
-                SUB     A, #00000h             ; 04FC 1 108 280 A60000
-                JGE     injtimer_clamp_store             ; 04FF 1 108 280 CD01
-                CLR     A                      ; 0501 1 108 280 F9
+injtimer_countdown_store:     STB     A, off(001a6h)
+                CMPB    A, #007h
+                JGT     injtimer_bit_clear
+                MBR     C, off(001a5h)
+                JLT     injtimer_clear_path1
+                ADDB    A, #004h
+                RBR     off(001a7h)
+                JNE     injtimer_clear_path2
+                L       A, 003c2h[X1]
+                SUB     A, #00000h
+                JGE     injtimer_clamp_store
+                CLR     A
 
-injtimer_clamp_store:     ST      A, 003c2h[X1]          ; 0502 1 108 280 D0C203
+injtimer_clamp_store:     ST      A, 003c2h[X1]
 
-injtimer_bit_clear:     RB      off(001a3h).0          ; 0505 1 108 280 C4A308
+injtimer_bit_clear:     RB      off(001a3h).0
 
-injbase_calc_start:     CLR     A                      ; 0508 1 108 280 F9
+injbase_calc_start:     CLR     A
 ; --- Base injector pulse-width calc: combines a running accumulator with INJ_MULT
 ; (injector-size multiplier calibration field) via mul_scale_clamp, then adds Deadtime
 ; (injector deadtime compensation), storing the result at off(0019eh) as the base injector
 ; timing value used by the critical-section hardware-timer writes traced earlier.
-                JBS     off(00124h).5, injbase_store ; 0509 1 108 280 ED2428
-                JBS     off(00124h).4, injbase_store ; 050C 1 108 280 EC2425
-                JBS     off(0012ah).1, injbase_store ; 050F 1 108 280 E92A22
-                L       A, 003bah[X1]          ; 0512 1 108 280 E0BA03
-                ADD     A, 003c2h[X1]          ; 0515 1 108 280 B0C20382
-                JGE     injbase_mult_deadtime             ; 0519 1 108 280 CD05
-                L       A, #0ffffh             ; 051B 1 108 280 67FFFF
-                SJ      injbase_store             ; 051E 1 108 280 CB14
+                JBS     off(00124h).5, injbase_store
+                JBS     off(00124h).4, injbase_store
+                JBS     off(0012ah).1, injbase_store
+                L       A, 003bah[X1]
+                ADD     A, 003c2h[X1]
+                JGE     injbase_mult_deadtime
+                L       A, #0ffffh
+                SJ      injbase_store
 
-injbase_mult_deadtime:     L       A, ACC                 ; 0520 1 108 280 E506
-                MOV     er0, A                 ; 0522 1 108 280 448A
-                LC      A, INJ_MULT            ; 0524 1 108 280 909C0161
-                CAL     mul_scale_clamp             ; 0528 1 108 280 328B52
-                MOV     X2, A                  ; 052B 1 108 280 51
-                LC      A, Deadtime            ; 052C 1 108 280 909C0D61
-                ADD     X2, A                  ; 0530 1 108 280 9181
-                MOV     A, X2                  ; 0532 1 108 280 9199
+injbase_mult_deadtime:     L       A, ACC
+                MOV     er0, A
+                LC      A, INJ_MULT
+                CAL     mul_scale_clamp
+                MOV     X2, A
+                LC      A, Deadtime
+                ADD     X2, A
+                MOV     A, X2
 
-injbase_store:     ST      A, off(0019eh)         ; 0534 1 108 280 D49E
-                LB      A, off(0013ch)         ; 0536 0 108 280 F43C
-                ANDB    PSWH, #0feh            ; 0538 0 108 280 A2D0FE
-                TRB     off(00117h)            ; 053B 0 108 280 C41713 ;mnemonic was "TBR" (letter transposition); confirmed as TRB against HondaTuningSuiteRom120.asm, same opcode C41713
-                JNE     tm0_sync_alt             ; 053E 0 108 280 CE23
-                JBR     off(00128h).2, tm0_sync_common ; 0540 0 108 280 DA2814
-                L       A, TM0                 ; 0543 1 108 280 E530
-                SUB     A, TMR0                ; 0545 1 108 280 B532A2
-                JEQ     tm0_sync_common             ; 0548 1 108 280 C90D
-                MB      C, IRQ.5               ; 054A 1 108 280 C5182D
-                JLT     tm0_sync_common             ; 054D 1 108 280 CA08
-                ADD     A, #00005h             ; 054F 1 108 280 860500
-                JLT     tm0_sync_common             ; 0552 1 108 280 CA03
-                ADD     TMR0, A                ; 0554 1 108 280 B53281
+injbase_store:     ST      A, off(0019eh)
+                LB      A, off(0013ch)
+                ANDB    PSWH, #0feh
+                TRB     off(00117h)  ; mnemonic was "TBR" (letter transposition); confirmed as TRB against HondaTuningSuiteRom120.asm, same opcode C41713
+                JNE     tm0_sync_alt
+                JBR     off(00128h).2, tm0_sync_common
+                L       A, TM0
+                SUB     A, TMR0
+                JEQ     tm0_sync_common
+                MB      C, IRQ.5
+                JLT     tm0_sync_common
+                ADD     A, #00005h
+                JLT     tm0_sync_common
+                ADD     TMR0, A
 
-tm0_sync_common:     ORB     PSWH, #001h            ; 0557 1 108 280 A2E001
-                CAL     tm0_resync_helper             ; 055A 1 108 280 328447
-                SB      off(0012ah).3          ; 055D 1 108 280 C42A1B
-                J       crank_tooth_flag_update             ; 0560 1 108 280 038405
+tm0_sync_common:     ORB     PSWH, #001h
+                CAL     tm0_resync_helper
+                SB      off(0012ah).3
+                J       crank_tooth_flag_update
 
-tm0_sync_alt:     L       A, TMR0                ; 0563 1 108 280 E532
-                SUB     A, TM0                 ; 0565 1 108 280 B530A2
-                CMP     A, #00005h             ; 0568 1 108 280 C60500
-                JLT     tm0_sync_flag_clear             ; 056B 1 108 280 CA05
-                CMP     A, #00020h             ; 056D 1 108 280 C62000
-                JLT     tm0_sync_flag_set             ; 0570 1 108 280 CA09
+tm0_sync_alt:     L       A, TMR0
+                SUB     A, TM0
+                CMP     A, #00005h
+                JLT     tm0_sync_flag_clear
+                CMP     A, #00020h
+                JLT     tm0_sync_flag_set
 
-tm0_sync_flag_clear:     ORB     PSWH, #001h            ; 0572 1 108 280 A2E001
-                RB      off(0012ah).3          ; 0575 1 108 280 C42A0B
-                J       crank_tooth_flag_update             ; 0578 1 108 280 038405
+tm0_sync_flag_clear:     ORB     PSWH, #001h
+                RB      off(0012ah).3
+                J       crank_tooth_flag_update
 
-tm0_sync_flag_set:     ORB     PSWH, #001h            ; 057B 1 108 280 A2E001
-                CAL     tm0_resync_helper             ; 057E 1 108 280 328447
-                SB      off(0012ah).3          ; 0581 1 108 280 C42A1B
+tm0_sync_flag_set:     ORB     PSWH, #001h
+                CAL     tm0_resync_helper
+                SB      off(0012ah).3
 
-crank_tooth_flag_update:     CAL     crank_helper2             ; 0584 1 108 280 32BB45
-                LB      A, off(0013ch)         ; 0587 0 108 280 F43C
-                STB     A, r0                  ; 0589 0 108 280 88
-                ANDB    A, #001h               ; 058A 0 108 280 D601
-                SBR     off(00128h)            ; 058C 0 108 280 C42811
-                INCB    r0                     ; 058F 0 108 280 A8
-                LB      A, r0                  ; 0590 0 108 280 78
-                ANDB    A, #003h               ; 0591 0 108 280 D603
-                STB     A, off(0013ch)         ; 0593 0 108 280 D43C
-                JBS     off(0011fh).3, crank_decode_exit ; 0595 0 108 280 EB1F10
-                JBS     off(0011bh).7, crank_decode_exit ; 0598 0 108 280 EF1B0D
-                RB      off(0012ah).0          ; 059B 0 108 280 C42A08
-                JEQ     crank_decode_exit             ; 059E 0 108 280 C908
-                RB      TRNSIT.2               ; 05A0 0 108 280 C5460A
-                JNE     crank_decode_exit             ; 05A3 0 108 280 CE03
-dtc16_injector_latch: SB      0b4h.6                 ; 05A5 0 108 280 C5B41E
+crank_tooth_flag_update:     CAL     crank_helper2
+                LB      A, off(0013ch)
+                STB     A, r0
+                ANDB    A, #001h
+                SBR     off(00128h)
+                INCB    r0
+                LB      A, r0
+                ANDB    A, #003h
+                STB     A, off(0013ch)
+                JBS     off(0011fh).3, crank_decode_exit
+                JBS     off(0011bh).7, crank_decode_exit
+                RB      off(0012ah).0
+                JEQ     crank_decode_exit
+                RB      TRNSIT.2
+                JNE     crank_decode_exit
+dtc16_injector_latch: SB      0b4h.6
 
-crank_decode_exit:     RB      off(0012ah).3          ; 05A8 1 108 280 C42A0B
-                JNE     crank_decode_final_check             ; 05AB 1 108 280 CE03
-                CAL     tm0_resync_helper             ; 05AD 1 108 280 328447
+crank_decode_exit:     RB      off(0012ah).3
+                JNE     crank_decode_final_check
+                CAL     tm0_resync_helper
 
-crank_decode_final_check:     LB      A, 0a2h                ; 05B0 0 108 280 F5A2
-                CMPB    A, #003h               ; 05B2 0 108 280 C603
-                JNE     crank_cycle_dispatch             ; 05B4 0 108 280 CE39
+crank_decode_final_check:     LB      A, 0a2h
+                CMPB    A, #003h
+                JNE     crank_cycle_dispatch
 
-crank_cycle_dispatch_body:     JBS     off(00126h).0, crank_cycle_period_saturate ; 05B6 0 108 280 E82625
-                JBS     off(0011fh).1, crank_cycle_period_saturate ; 05B9 0 108 280 E91F22
-                CMPB    A, #003h               ; 05BC 0 108 280 C603
-                CLR     er2                    ; 05BE 0 108 280 4615
-                JBS     off(0012ah).5, crank_cycle_alt_dp ; 05C0 0 108 280 ED2A08
-                MOV     DP, #00366h            ; 05C3 0 108 280 626603
-                JEQ     crank_cycle_dp_common             ; 05C6 0 108 280 C90A
-                CLR     A                      ; 05C8 1 108 280 F9
-                SJ      crank_cycle_er2_store             ; 05C9 1 108 280 CB16
+crank_cycle_dispatch_body:     JBS     off(00126h).0, crank_cycle_period_saturate
+                JBS     off(0011fh).1, crank_cycle_period_saturate
+                CMPB    A, #003h
+                CLR     er2
+                JBS     off(0012ah).5, crank_cycle_alt_dp
+                MOV     DP, #00366h
+                JEQ     crank_cycle_dp_common
+                CLR     A
+                SJ      crank_cycle_er2_store
 
-crank_cycle_alt_dp:     MOV     DP, #00362h            ; 05CB 0 108 280 626203
-                JNE     crank_cycle_dp_common             ; 05CE 0 108 280 CE02
-                MOV     er2, [DP]              ; 05D0 0 108 280 B24A
+crank_cycle_alt_dp:     MOV     DP, #00362h
+                JNE     crank_cycle_dp_common
+                MOV     er2, [DP]
 
-crank_cycle_dp_common:     L       A, [DP]                ; 05D2 1 108 280 E2
-                CLR     er0                    ; 05D3 1 108 280 4415
-                MOVB    r1, 09fh               ; 05D5 1 108 280 C59F49
-                MUL                            ; 05D8 1 108 280 9035
-                L       A, er2                 ; 05DA 1 108 280 36
-                ADD     A, er1                 ; 05DB 1 108 280 09
-                JGE     crank_cycle_er2_store             ; 05DC 1 108 280 CD03
+crank_cycle_dp_common:     L       A, [DP]
+                CLR     er0
+                MOVB    r1, 09fh
+                MUL
+                L       A, er2
+                ADD     A, er1
+                JGE     crank_cycle_er2_store
 
-crank_cycle_period_saturate:     L       A, #0ffffh             ; 05DE 1 108 280 67FFFF
+crank_cycle_period_saturate:     L       A, #0ffffh
 
-crank_cycle_er2_store:     ST      A, 0a4h                ; 05E1 1 108 280 D5A4
+crank_cycle_er2_store:     ST      A, 0a4h
 
-crank_cycle_entry:     L       A, off(00124h)         ; 05E3 1 108 280 E424
-                ST      A, (0021ch-00280h)[USP] ; 05E5 1 108 280 D39C
-                ANDB    PSWH, #0feh            ; 05E7 1 108 280 A2D0FE
+crank_cycle_entry:     L       A, off(00124h)
+                ST      A, (0021ch-00280h)[USP]
+                ANDB    PSWH, #0feh
 
-int1_rti_epilogue:     L       A, 0f8h                ; 05EA 1 108 280 E5F8
-                ST      A, IE                  ; 05EC 1 108 280 D51A
-                RTI                            ; 05EE 1 108 280 02
+int1_rti_epilogue:     L       A, 0f8h
+                ST      A, IE
+                RTI
 
-crank_cycle_dispatch:     JGE     crank_cycle_dispatch_alt             ; 05EF 0 108 280 CD5D
-                CMPB    A, #001h               ; 05F1 0 108 280 C601
-                JGE     crank_cycle_dispatch_alt2             ; 05F3 0 108 280 CD60
-                JBS     off(0011bh).6, crank_cycle_p4_gate ; 05F5 0 108 280 EE1B0C
-                JBS     off(00125h).7, crank_cycle_p4_gate ; 05F8 0 108 280 EF2509
-                CMP     0c4h, #000e7h          ; 05FB 0 108 280 B5C4C0E700
-                JLT     crank_cycle_p4_gate             ; 0600 0 108 280 CA02
-                SJ      crank_cycle_p4_gate             ; 0602 0 108 280 CB00
+crank_cycle_dispatch:     JGE     crank_cycle_dispatch_alt
+                CMPB    A, #001h
+                JGE     crank_cycle_dispatch_alt2
+                JBS     off(0011bh).6, crank_cycle_p4_gate
+                JBS     off(00125h).7, crank_cycle_p4_gate
+                CMP     0c4h, #000e7h
+                JLT     crank_cycle_p4_gate
+                SJ      crank_cycle_p4_gate
 
-crank_cycle_p4_gate:     RB      0b4h.3                 ; 0604 0 108 280 C5B40B
-                MOVB    off(001d4h), #006h     ; 0607 0 108 280 C4D49806
-                JBS     off(0011fh).2, crank_cycle_gate2 ; 060B 0 108 280 EA1F49
-                JBR     off(0011fh).7, crank_cycle_p4_flag_check ; 060E 0 108 280 DF1F06
-                SB      P4.0                   ; 0611 0 108 280 C52C18
-                J       crank_cycle_entry_gate             ; 0614 0 108 280 035D06
+crank_cycle_p4_gate:     RB      0b4h.3
+                MOVB    off(001d4h), #006h
+                JBS     off(0011fh).2, crank_cycle_gate2
+                JBR     off(0011fh).7, crank_cycle_p4_flag_check
+                SB      P4.0
+                J       crank_cycle_entry_gate
 
-crank_cycle_p4_flag_check:     JBR     off(00129h).1, crank_cycle_f4_check ; 0617 0 108 280 D92902
-                SJ      crank_cycle_result_common             ; 061A 0 108 280 CB27
+crank_cycle_p4_flag_check:     JBR     off(00129h).1, crank_cycle_f4_check
+                SJ      crank_cycle_result_common
 
-crank_cycle_f4_check:     LB      A, #001h               ; 061C 0 108 280 7701
-                CMPB    0f4h, #024h            ; 061E 0 108 280 C5F4C024
-                JNE     crank_cycle_counter_check             ; 0622 0 108 280 CE03
-                SB      off(0012ah).4          ; 0624 0 108 280 C42A1C
+crank_cycle_f4_check:     LB      A, #001h
+                CMPB    0f4h, #024h
+                JNE     crank_cycle_counter_check
+                SB      off(0012ah).4
 
-crank_cycle_counter_check:     CMPB    off(001d2h), #028h     ; 0627 0 108 280 C4D2C028
-                JLE     crank_cycle_result_b             ; 062B 0 108 280 CF13
-                JBS     off(0011fh).4, crank_cycle_result_a ; 062D 0 108 280 EC1F0C
-                JBS     off(0012ah).4, crank_cycle_result_common ; 0630 0 108 280 EC2A10
-                JBS     off(0011ah).5, crank_cycle_result_a ; 0633 0 108 280 ED1A06
-                CMPB    0d9h, #034h            ; 0636 0 108 280 C5D9C034
-                JLT     crank_cycle_result_common             ; 063A 0 108 280 CA07
+crank_cycle_counter_check:     CMPB    off(001d2h), #028h
+                JLE     crank_cycle_result_b
+                JBS     off(0011fh).4, crank_cycle_result_a
+                JBS     off(0012ah).4, crank_cycle_result_common
+                JBS     off(0011ah).5, crank_cycle_result_a
+                CMPB    0d9h, #034h
+                JLT     crank_cycle_result_common
 
-crank_cycle_result_a:     LB      A, #003h               ; 063C 0 108 280 7703
-                SJ      crank_cycle_result_common             ; 063E 0 108 280 CB03
+crank_cycle_result_a:     LB      A, #003h
+                SJ      crank_cycle_result_common
 
-crank_cycle_result_b:     SB      off(00128h).4          ; 0640 0 108 280 C4281C
+crank_cycle_result_b:     SB      off(00128h).4
 
-crank_cycle_result_common:     SRLB    A                      ; 0643 0 108 280 63
-                MB      off(00126h).0, C       ; 0644 0 108 280 C42638
-                SRLB    A                      ; 0647 0 108 280 63
-                MB      P4.0, C                ; 0648 0 108 280 C52C38
+crank_cycle_result_common:     SRLB    A
+                MB      off(00126h).0, C
+                SRLB    A
+                MB      P4.0, C
 
-crank_cycle_bailout:     J       crank_cycle_entry             ; 064B 0 108 280 03E305
+crank_cycle_bailout:     J       crank_cycle_entry
 
-crank_cycle_dispatch_alt:     CMPB    A, #004h               ; 064E 0 108 280 C604
-                JNE     crank_cycle_bailout             ; 0650 0 108 280 CEF9
-                J       crank_cycle_dispatch_body             ; 0652 0 108 280 03B605
+crank_cycle_dispatch_alt:     CMPB    A, #004h
+                JNE     crank_cycle_bailout
+                J       crank_cycle_dispatch_body
 
-crank_cycle_dispatch_alt2:     JEQ     crank_cycle_bailout             ; 0655 0 108 280 C9F4
+crank_cycle_dispatch_alt2:     JEQ     crank_cycle_bailout
 
-crank_cycle_gate2:     JBS     off(0011fh).7, crank_cycle_bailout ; 0657 0 108 280 EF1FF1
-                JBR     off(00128h).4, crank_cycle_bailout ; 065A 0 108 280 DC28EE
+crank_cycle_gate2:     JBS     off(0011fh).7, crank_cycle_bailout
+                JBR     off(00128h).4, crank_cycle_bailout
 
-crank_cycle_entry_gate:     INCB    off(0013eh)            ; 065D 0 108 280 C43E16
-                JBS     off(0012ah).2, crank_cycle_bailout ; 0660 0 108 280 EA2AE8
-                LB      A, off(00124h)         ; 0663 0 108 280 F424
-                ANDB    A, #003h               ; 0665 0 108 280 D603
-                ANDB    off(0013eh), A         ; 0667 0 108 280 C43ED1
-                JNE     crank_cycle_bailout             ; 066A 0 108 280 CEDF
-                SB      off(0012ah).2          ; 066C 0 108 280 C42A1A
-                L       A, 0f8h                ; 066F 1 108 280 E5F8
-                ST      A, IE                  ; 0671 1 108 280 D51A
-                CAL     crank_edge_helper             ; 0673 1 108 280 32514C
-                MOV     PSW, #01101h           ; 0676 1 108 280 B504980111
+crank_cycle_entry_gate:     INCB    off(0013eh)
+                JBS     off(0012ah).2, crank_cycle_bailout
+                LB      A, off(00124h)
+                ANDB    A, #003h
+                ANDB    off(0013eh), A
+                JNE     crank_cycle_bailout
+                SB      off(0012ah).2
+                L       A, 0f8h
+                ST      A, IE
+                CAL     crank_edge_helper
+                MOV     PSW, #01101h
                 MOV     LRB, #00040h
                 MOV     USP, #00180h
                 CAL     crank_cycle_helper1
@@ -4860,152 +4860,152 @@ int_start:      MOVB    trapReasonCode, #046h
 
 int_break:      MOVB    WDT, #03ch
                 MOV     SSP, #0047eh
-                MOV     LRB, #00010h           ; 22BE 0 080 ??? 571000
-                CLR     off(PSW)               ; 22C1 0 080 ??? B40415
-                LB      A, off(trapReasonCode)         ; 22C4 0 080 ??? F4F5
-                STB     A, off(lastTrapReasonCode)         ; 22C6 0 080 ??? D4AF
-                JNE     breset_check_reason_46_47             ; 22C8 0 080 ??? CE06
-                MOVB    off(trapReasonCode), #04eh     ; 22CA 0 080 ??? C4F5984E
-                SJ      fault_retry_check             ; 22CE 0 080 ??? CBD2
+                MOV     LRB, #00010h
+                CLR     off(PSW)
+                LB      A, off(trapReasonCode)
+                STB     A, off(lastTrapReasonCode)
+                JNE     breset_check_reason_46_47
+                MOVB    off(trapReasonCode), #04eh
+                SJ      fault_retry_check
 
-breset_check_reason_46_47:     CMPB    A, #046h               ; 22D0 0 080 ??? C646
-                JEQ     breset_reason_46_or_47_common             ; 22D2 0 080 ??? C904
-                CMPB    A, #047h               ; 22D4 0 080 ??? C647
-                JNE     breset_check_p4_1             ; 22D6 0 080 ??? CE12
+breset_check_reason_46_47:     CMPB    A, #046h
+                JEQ     breset_reason_46_or_47_common
+                CMPB    A, #047h
+                JNE     breset_check_p4_1
 
-breset_reason_46_or_47_common:     CLRB    off(lastTrapReasonCode)            ; 22D8 0 080 ??? C4AF15
-                MOV     DP, #04700h            ; 22DB 0 080 ??? 620047
-                LB      A, [DP]                ; 22DE 0 080 ??? F2
-                SRLB    A                      ; 22DF 0 080 ??? 63
-                MB      off(sysFlags_b7).0, C       ; 22E0 0 080 ??? C4B738
-                JBS     off(sysFlags_b7).1, breset_check_p4_1 ; 22E3 0 080 ??? E9B704
-                MOVB    off(trapRetryCounter), #020h     ; 22E6 0 080 ??? C4F69820
+breset_reason_46_or_47_common:     CLRB    off(lastTrapReasonCode)
+                MOV     DP, #04700h
+                LB      A, [DP]
+                SRLB    A
+                MB      off(sysFlags_b7).0, C
+                JBS     off(sysFlags_b7).1, breset_check_p4_1
+                MOVB    off(trapRetryCounter), #020h
 
-breset_check_p4_1:     JBR     off(P4).1, selftest_reg_stuckbit_check  ; 22EA 0 080 ??? D92C03
-                J       int_NMI                ; 22ED 0 080 ??? 033C00
+breset_check_p4_1:     JBR     off(P4).1, selftest_reg_stuckbit_check
+                J       int_NMI
 
-selftest_reg_stuckbit_check:     L       A, #05555h             ; 22F0 1 080 ??? 675555
-                XCHG    A, SSP                 ; 22F3 1 080 ??? A010
-                XCHG    A, SSP                 ; 22F5 1 080 ??? A010
-                CMP     A, #05555h             ; 22F7 1 080 ??? C65555
-                JNE     selftest_fail_041             ; 22FA 1 080 ??? CE5E
-                ST      A, IE                  ; 22FC 1 080 ??? D51A
-                CMP     A, IE                  ; 22FE 1 080 ??? B51AC2
-                JNE     selftest_fail_041             ; 2301 1 080 ??? CE57
-                L       A, #01555h             ; 2303 1 080 ??? 675515
-                MOV     LRB, A                 ; 2306 1 080 ??? A48A
-                CMP     A, LRB                 ; 2308 1 080 ??? A4C2
-                JNE     selftest_fail_041             ; 230A 1 080 ??? CE4E
-                L       A, #0aaaah             ; 230C 1 080 ??? 67AAAA
-                XCHG    A, SSP                 ; 230F 1 080 ??? A010
-                XCHG    A, SSP                 ; 2311 1 080 ??? A010
-                CMP     A, #0aaaah             ; 2313 1 080 ??? C6AAAA
-                JNE     selftest_fail_041             ; 2316 1 080 ??? CE42
-                ST      A, IE                  ; 2318 1 080 ??? D51A
-                CMP     A, IE                  ; 231A 1 080 ??? B51AC2
-                JNE     selftest_fail_041             ; 231D 1 080 ??? CE3B
-                L       A, #00aaah             ; 231F 1 080 ??? 67AA0A
-                MOV     LRB, A                 ; 2322 1 080 ??? A48A
-                CMP     A, LRB                 ; 2324 1 080 ??? A4C2
-                JNE     selftest_fail_041             ; 2326 1 080 ??? CE32
-                CLR     A                      ; 2328 1 080 ??? F9
-                ST      A, IE                  ; 2329 1 080 ??? D51A
-                ST      A, 0f8h                ; 232B 1 080 ??? D5F8
-                ST      A, 0fah                ; 232D 1 080 ??? D5FA
-                MOV     LRB, #00010h           ; 232F 1 080 ??? 571000
-                LB      A, #055h               ; 2332 0 080 ??? 7755
-                XCHGB   A, PSWL                ; 2334 0 080 ??? A310
-                XCHGB   A, PSWL                ; 2336 0 080 ??? A310
-                CMPB    A, #0ddh               ; 2338 0 080 ??? C6DD
-                JNE     selftest_fail_041             ; 233A 0 080 ??? CE1E
-                LB      A, #0aah               ; 233C 0 080 ??? 77AA
-                XCHGB   A, PSWL                ; 233E 0 080 ??? A310
-                XCHGB   A, PSWL                ; 2340 0 080 ??? A310
-                CMPB    A, #0eah               ; 2342 0 080 ??? C6EA
-                JNE     selftest_fail_041             ; 2344 0 080 ??? CE14
-                SB      PSWH.0                 ; 2346 0 080 ??? A218
-                MB      C, PSWH.0              ; 2348 0 080 ??? A228
-                MB      PSWH.6, C              ; 234A 0 080 ??? A23E
-                JGE     selftest_fail_041             ; 234C 0 080 ??? CD0C
-                JNE     selftest_fail_041             ; 234E 0 080 ??? CE0A
-                RB      PSWH.0                 ; 2350 0 080 ??? A208
-                MB      C, PSWH.0              ; 2352 0 080 ??? A228
-                MB      PSWH.6, C              ; 2354 0 080 ??? A23E
-                JLT     selftest_fail_041             ; 2356 0 080 ??? CA02
-                JNE     periph_init_start             ; 2358 0 080 ??? CE05
+selftest_reg_stuckbit_check:     L       A, #05555h
+                XCHG    A, SSP
+                XCHG    A, SSP
+                CMP     A, #05555h
+                JNE     selftest_fail_041
+                ST      A, IE
+                CMP     A, IE
+                JNE     selftest_fail_041
+                L       A, #01555h
+                MOV     LRB, A
+                CMP     A, LRB
+                JNE     selftest_fail_041
+                L       A, #0aaaah
+                XCHG    A, SSP
+                XCHG    A, SSP
+                CMP     A, #0aaaah
+                JNE     selftest_fail_041
+                ST      A, IE
+                CMP     A, IE
+                JNE     selftest_fail_041
+                L       A, #00aaah
+                MOV     LRB, A
+                CMP     A, LRB
+                JNE     selftest_fail_041
+                CLR     A
+                ST      A, IE
+                ST      A, 0f8h
+                ST      A, 0fah
+                MOV     LRB, #00010h
+                LB      A, #055h
+                XCHGB   A, PSWL
+                XCHGB   A, PSWL
+                CMPB    A, #0ddh
+                JNE     selftest_fail_041
+                LB      A, #0aah
+                XCHGB   A, PSWL
+                XCHGB   A, PSWL
+                CMPB    A, #0eah
+                JNE     selftest_fail_041
+                SB      PSWH.0
+                MB      C, PSWH.0
+                MB      PSWH.6, C
+                JGE     selftest_fail_041
+                JNE     selftest_fail_041
+                RB      PSWH.0
+                MB      C, PSWH.0
+                MB      PSWH.6, C
+                JLT     selftest_fail_041
+                JNE     periph_init_start
 
-selftest_fail_041:     MOVB    trapReasonCode, #041h            ; 235A 0 080 ??? C5F59841
-                BRK                            ; 235E 0 080 ??? FF
+selftest_fail_041:     MOVB    trapReasonCode, #041h
+                BRK
 
-periph_init_start:     CLRB    off(PRPHF)             ; 235F 0 080 ??? C41215
-                LB      A, #0ffh               ; 2362 0 080 ??? 77FF
-                MOVB    off(P0), #0ebh         ; 2364 0 080 ??? C42098EB
-                STB     A, off(P0IO)           ; 2368 0 080 ??? D421
-                MOVB    off(P1), #044h         ; 236A 0 080 ??? C4229844
-                STB     A, off(P1IO)           ; 236E 0 080 ??? D423
-                MOVB    off(P2), #01fh         ; 2370 0 080 ??? C424981F
-                STB     A, off(P2IO)           ; 2374 0 080 ??? D425
-                CLRB    off(P2SF)              ; 2376 0 080 ??? C42615
-                MOVB    off(P3), #0efh         ; 2379 0 080 ??? C42898EF
-                MOVB    off(TCON0), #08bh      ; 237D 0 080 ??? C440988B
-                CLR     A                      ; 2381 1 080 ??? F9
-                ST      A, off(TM0)            ; 2382 1 080 ??? D430
-                ST      A, off(TMR0)           ; 2384 1 080 ??? D432
-                MOVB    off(TCON1), #04fh      ; 2386 1 080 ??? C441984F
-                ST      A, off(TM1)            ; 238A 1 080 ??? D434
-                ST      A, off(TMR1)           ; 238C 1 080 ??? D436
-                MOVB    off(TCON2), #082h      ; 238E 1 080 ??? C4429882
-                ST      A, off(TM2)            ; 2392 1 080 ??? D438
-                ST      A, off(TMR2)           ; 2394 1 080 ??? D43A
-                MOVB    off(TCON3), #08fh      ; 2396 1 080 ??? C443988F
-                MOV     off(TM3), #00001h      ; 239A 1 080 ??? B43C980100
-                ST      A, off(TMR3)           ; 239F 1 080 ??? D43E
-                MOVB    off(P3IO), #0b1h       ; 23A1 1 080 ??? C42998B1
-                MOVB    off(P3SF), #0ffh       ; 23A5 1 080 ??? C42A98FF
-                CLRB    off(EXION)             ; 23A9 1 080 ??? C41C15
-                SB      off(TCON0).2           ; 23AC 1 080 ??? C4401A
-                RB      off(TCON0).2           ; 23AF 1 080 ??? C4400A
-                MOVB    off(P4), #0f7h         ; 23B2 1 080 ??? C42C98F7
-                L       A, #0ff00h             ; 23B6 1 080 ??? 6700FF
-                MOVB    off(PWCON0), #03dh     ; 23B9 1 080 ??? C478983D
-                ST      A, off(PWMC0)          ; 23BD 1 080 ??? D470
-                ST      A, off(PWMR0)          ; 23BF 1 080 ??? D472
-                MOVB    off(PWCON1), #07dh     ; 23C1 1 080 ??? C47A987D
-                ST      A, off(PWMC1)          ; 23C5 1 080 ??? D474
-                ST      A, off(PWMR1)          ; 23C7 1 080 ??? D476
-                MOVB    off(P4IO), #00dh       ; 23C9 1 080 ??? C42D980D
-                MOVB    off(P4SF), #0f4h       ; 23CD 1 080 ??? C42E98F4
-                SB      off(TCON0).4           ; 23D1 1 080 ??? C4401C
-                SB      off(TCON1).4           ; 23D4 1 080 ??? C4411C
-                SB      off(TCON2).4           ; 23D7 1 080 ??? C4421C
-                XCHG    A, ACC                 ; 23DA 1 080 ??? B50610
-                SB      off(TCON3).4           ; 23DD 1 080 ??? C4431C
-                CLR     off(IRQ)               ; 23E0 1 080 ??? B41815
-                MOV     DP, #002e8h            ; 23E3 1 080 ??? 62E802
+periph_init_start:     CLRB    off(PRPHF)
+                LB      A, #0ffh
+                MOVB    off(P0), #0ebh
+                STB     A, off(P0IO)
+                MOVB    off(P1), #044h
+                STB     A, off(P1IO)
+                MOVB    off(P2), #01fh
+                STB     A, off(P2IO)
+                CLRB    off(P2SF)
+                MOVB    off(P3), #0efh
+                MOVB    off(TCON0), #08bh
+                CLR     A
+                ST      A, off(TM0)
+                ST      A, off(TMR0)
+                MOVB    off(TCON1), #04fh
+                ST      A, off(TM1)
+                ST      A, off(TMR1)
+                MOVB    off(TCON2), #082h
+                ST      A, off(TM2)
+                ST      A, off(TMR2)
+                MOVB    off(TCON3), #08fh
+                MOV     off(TM3), #00001h
+                ST      A, off(TMR3)
+                MOVB    off(P3IO), #0b1h
+                MOVB    off(P3SF), #0ffh
+                CLRB    off(EXION)
+                SB      off(TCON0).2
+                RB      off(TCON0).2
+                MOVB    off(P4), #0f7h
+                L       A, #0ff00h
+                MOVB    off(PWCON0), #03dh
+                ST      A, off(PWMC0)
+                ST      A, off(PWMR0)
+                MOVB    off(PWCON1), #07dh
+                ST      A, off(PWMC1)
+                ST      A, off(PWMR1)
+                MOVB    off(P4IO), #00dh
+                MOVB    off(P4SF), #0f4h
+                SB      off(TCON0).4
+                SB      off(TCON1).4
+                SB      off(TCON2).4
+                XCHG    A, ACC
+                SB      off(TCON3).4
+                CLR     off(IRQ)
+                MOV     DP, #002e8h
 
-periph_init_delay_loop:     DEC     DP                     ; 23E6 1 080 ??? 82
-                JNE     periph_init_delay_loop             ; 23E7 1 080 ??? CEFD
-                RB      off(IRQH).5            ; 23E9 1 080 ??? C4190D
-                L       A, #0ffffh             ; 23EC 1 080 ??? 67FFFF
-                ST      A, off(PWMR0)          ; 23EF 1 080 ??? D472
-                ST      A, off(PWMR1)          ; 23F1 1 080 ??? D476
-                L       A, #05555h             ; 23F3 1 080 ??? 675555
-                MOV     X1, A                  ; 23F6 1 080 ??? 50
-                CMP     A, X1                  ; 23F7 1 080 ??? 90C2
-                JNE     selftest_fail_042             ; 23F9 1 080 ??? CE10
-                MOV     X2, A                  ; 23FB 1 080 ??? 51
-                CMP     A, X2                  ; 23FC 1 080 ??? 91C2
-                JNE     selftest_fail_042             ; 23FE 1 080 ??? CE0B
-                SLL     A                      ; 2400 1 080 ??? 53
-                MOV     X1, A                  ; 2401 1 080 ??? 50
-                CMP     A, X1                  ; 2402 1 080 ??? 90C2
-                JNE     selftest_fail_042             ; 2404 1 080 ??? CE05
-                MOV     X2, A                  ; 2406 1 080 ??? 51
-                CMP     A, X2                  ; 2407 1 080 ??? 91C2
-                JEQ     ram_clear_loop1             ; 2409 1 080 ??? C905
+periph_init_delay_loop:     DEC     DP
+                JNE     periph_init_delay_loop
+                RB      off(IRQH).5
+                L       A, #0ffffh
+                ST      A, off(PWMR0)
+                ST      A, off(PWMR1)
+                L       A, #05555h
+                MOV     X1, A
+                CMP     A, X1
+                JNE     selftest_fail_042
+                MOV     X2, A
+                CMP     A, X2
+                JNE     selftest_fail_042
+                SLL     A
+                MOV     X1, A
+                CMP     A, X1
+                JNE     selftest_fail_042
+                MOV     X2, A
+                CMP     A, X2
+                JEQ     ram_clear_loop1
 
-selftest_fail_042:     MOVB    off(trapReasonCode), #042h     ; 240B 1 080 ??? C4F59842
-                BRK                            ; 240F 1 080 ??? FF
+selftest_fail_042:     MOVB    off(trapReasonCode), #042h
+                BRK
 
 ram_clear_loop1:     MOV     LRB, #00040h
                 MOV     X1, #003fah
@@ -5079,58 +5079,58 @@ cfgvariant_check_232h_bits01:     JBR     off(00232h).0, restore_trapstate_after
                 CAL     cfgvariant_ram_init
                 ANDB    off(00232h), #0fch
 
-restore_trapstate_after_ramclear:     MOV     LRB, #00010h           ; 24AF 1 080 ??? 571000
-                MB      C, off(sysFlags_b7).0       ; 24B2 1 080 ??? C4B728
-                MB      r0.0, C                ; 24B5 1 080 ??? 2038
-                MB      C, off(sysFlags_b7).1       ; 24B7 1 080 ??? C4B729
-                MB      r0.1, C                ; 24BA 1 080 ??? 2039
-                MOVB    r1, off(lastTrapReasonCode)        ; 24BC 1 080 ??? C4AF49
-                MOVB    r2, off(trapRetryCounter)        ; 24BF 1 080 ??? C4F64A
-                MOVB    r3, off(trapReasonCode)        ; 24C2 1 080 ??? C4F54B
-                CLR     A                      ; 24C5 1 080 ??? F9
-                MOV     USP, #00356h           ; 24C6 1 080 356 A1985603
-                MOV     DP, #00480h            ; 24CA 1 080 356 628004
+restore_trapstate_after_ramclear:     MOV     LRB, #00010h
+                MB      C, off(sysFlags_b7).0
+                MB      r0.0, C
+                MB      C, off(sysFlags_b7).1
+                MB      r0.1, C
+                MOVB    r1, off(lastTrapReasonCode)
+                MOVB    r2, off(trapRetryCounter)
+                MOVB    r3, off(trapReasonCode)
+                CLR     A
+                MOV     USP, #00356h
+                MOV     DP, #00480h
 
-ram_clear_loop2:     DEC     DP                     ; 24CD 1 080 356 82
-                DEC     DP                     ; 24CE 1 080 356 82
-                ST      A, [DP]                ; 24CF 1 080 356 D2
-                CMP     DP, off(00086h)        ; 24D0 1 080 356 92C386
-                JGT     ram_clear_loop2             ; 24D3 1 080 356 C8F8
-                CMP     DP, #00098h            ; 24D5 1 080 356 92C09800
-                JLE     clear_0x324_high_nibble             ; 24D9 1 080 356 CF0E
-                MOV     USP, #00098h           ; 24DB 1 080 098 A1989800
-                CMPB    r3, #047h              ; 24DF 1 080 098 23C047
-                JNE     ram_clear_loop2             ; 24E2 1 080 098 CEE9
-                MOV     DP, #00300h            ; 24E4 1 080 098 620003
-                SJ      ram_clear_loop2             ; 24E7 1 080 098 CBE4
+ram_clear_loop2:     DEC     DP
+                DEC     DP
+                ST      A, [DP]
+                CMP     DP, off(00086h)
+                JGT     ram_clear_loop2
+                CMP     DP, #00098h
+                JLE     clear_0x324_high_nibble
+                MOV     USP, #00098h
+                CMPB    r3, #047h
+                JNE     ram_clear_loop2
+                MOV     DP, #00300h
+                SJ      ram_clear_loop2
 
-clear_0x324_high_nibble:     MOV     DP, #00324h            ; 24E9 1 080 356 622403
-                LB      A, [DP]                ; 24EC 0 080 356 F2
-                ANDB    A, #0f0h               ; 24ED 0 080 356 D6F0
-                STB     A, [DP]                ; 24EF 0 080 356 D2
-                MB      C, r0.0                ; 24F0 0 080 356 2028
-                MB      off(sysFlags_b7).0, C       ; 24F2 0 080 356 C4B738
-                MB      C, r0.1                ; 24F5 0 080 356 2029
-                MB      off(sysFlags_b7).1, C       ; 24F7 0 080 356 C4B739
-                MOVB    off(lastTrapReasonCode), r1        ; 24FA 0 080 356 217CAF
-                MOVB    off(trapRetryCounter), r2        ; 24FD 0 080 356 227CF6
-                MOVB    off(trapReasonCode), r3        ; 2500 0 080 356 237CF5
-                MOV     LRB, #00041h           ; 2503 0 208 356 574100
-                SC                             ; 2506 0 208 356 85
-                LB      A, lastTrapReasonCode                ; 2507 0 208 356 F5AF
-                JNE     fuelpump_prime_check             ; 2509 0 208 356 CE08
-                LCB     A, FPPrimeT            ; 250B 0 208 356 909D6A60
-                MOVB    off(002c6h), A         ; 250F 0 208 356 C4C68A
-                RC                             ; 2512 0 208 356 95
+clear_0x324_high_nibble:     MOV     DP, #00324h
+                LB      A, [DP]
+                ANDB    A, #0f0h
+                STB     A, [DP]
+                MB      C, r0.0
+                MB      off(sysFlags_b7).0, C
+                MB      C, r0.1
+                MB      off(sysFlags_b7).1, C
+                MOVB    off(lastTrapReasonCode), r1
+                MOVB    off(trapRetryCounter), r2
+                MOVB    off(trapReasonCode), r3
+                MOV     LRB, #00041h
+                SC
+                LB      A, lastTrapReasonCode
+                JNE     fuelpump_prime_check
+                LCB     A, FPPrimeT
+                MOVB    off(002c6h), A
+                RC
 
-fuelpump_prime_check:     MB      off(00230h).5, C       ; 2513 0 208 356 C4303D
+fuelpump_prime_check:     MB      off(00230h).5, C
 ; --- Runtime state init: A/D channel setup, initial sensor snapshot, working-RAM seeding,
 ; and diagnostic-serial baud/config setup, run once during boot after the self-test/RAM-clear
 ; passes above. Ends by jumping to stack_sanity_check (0x3359) before falling into the main loop.
 ; Individual working-RAM addresses here (0xD8-0xE1, 0xDC-0xDF, etc.) are not yet traced to
 ; specific named parameters -- confidently identified: ADCR2H/ADCR4/ADCR6 (A/D conversion
 ; results), tbl_boot_copy_block (a calibration table copied verbatim into 0x1D1-0x1DD), and
-; STTM/STTMR/STTMC/STCON/SRCON (serial timer + control regs -- diagnostic/K-line baud setup).
+; STTM/STTMR/STTMC/STCON/SRCON (serial timer + control regs -- diagnostic link baud setup).
                 MOV     USP, #00180h
                 CLR     A
                 ST      A, IE
@@ -6955,7 +6955,7 @@ regbank_selftest2_start:     L       A, #02bafh
 ; NOTE: the only "from" reference to this label is 0x5EB7 (lowpower_cond_exit, the tail end of
 ; lowpower_abort_cond_scan, restored above). Previously this was assumed to be a disassembler
 ; artifact from scanning dead filler bytes, since that region used to be blanked 0xFFh. Now that
-; lowpower_abort_cond_scan has been restored from bmtune1.15.asm, this IS a real, live call site:
+; lowpower_abort_cond_scan has been restored from the 1.15 source, this IS a real, live call site:
 ; lowpower_abort_cond_scan always falls into this routine (whether or not any of its calibratable
 ; conditions triggered), so this register-bank self-test (same pattern as
 ; selftest_reg_stuckbit_check, but validating the STOP/HALT-entry TM1/IE/X1 reload values here) is
@@ -9076,7 +9076,7 @@ tps2_adc_store:     MOV     DP, #003a4h
 ; of every P0/P1/P4 discrete output and input pin into 3 bytes at 0x3B1-0x3B3, following the
 ; same pattern as the earlier discrete-input packing at 0x4225. Then diag_snapshot_copy_loop
 ; copies a calibration data block (tbl_diag_snapshot_data1-tbl_diag_snapshot_data2) into a RAM buffer at 0x3A8 -- overall
-; this reads as building a full status/calibration snapshot, likely for K-line diagnostic
+; this reads as building a full status/calibration snapshot, likely for the diagnostic link
 ; serial reporting to a scan tool.
                 MB      C, P0.0
                 XORB    PSWH, #080h
@@ -9552,268 +9552,268 @@ lowpower_trap_gate:     JBR     off(00217h).4, lowpower_trap_call
 
 lowpower_trap_call:     J       lowpower_abort_cond_scan
 
-crank_helper2:     JBR     off(00128h).2, injtimer_shift_path ; 45BB 1 108 280 DA283B
+crank_helper2:     JBR     off(00128h).2, injtimer_shift_path
 
-injector_timer_schedule:     MOVB    r0, #0ffh              ; 45BE 1 108 280 98FF
-                L       A, off(0019eh)         ; 45C0 1 108 280 E49E
-                ST      A, er1                 ; 45C2 1 108 280 89
-                CMPB    off(00117h), #00fh     ; 45C3 1 108 280 C417C00F
-                JNE     injtimer_schedule_done             ; 45C7 1 108 280 CE6C
-                L       A, TM0                 ; 45C9 1 108 280 E530
-                SUB     A, #00001h             ; 45CB 1 108 280 A60100
-                ST      A, TMR0                ; 45CE 1 108 280 D532
-                MOV     X1, #00110h            ; 45D0 1 108 280 601001
-                MOV     DP, #00198h            ; 45D3 1 108 280 629801
-                L       A, [DP]                ; 45D6 1 108 280 E2
-                CMP     A, #000c0h             ; 45D7 1 108 280 C6C000
-                JGE     injtimer_bank1_check2             ; 45DA 1 108 280 CD3B
-                CLR     A                      ; 45DC 1 108 280 F9
-                ST      A, [DP]                ; 45DD 1 108 280 D2
-                INC     DP                     ; 45DE 1 108 280 72
-                INC     DP                     ; 45DF 1 108 280 72
-                L       A, [DP]                ; 45E0 1 108 280 E2
-                CMP     A, #000c0h             ; 45E1 1 108 280 C6C000
-                JGE     injtimer_bank2_zero             ; 45E4 1 108 280 CD20
-                CLR     A                      ; 45E6 1 108 280 F9
-                ST      A, [DP]                ; 45E7 1 108 280 D2
-                INC     DP                     ; 45E8 1 108 280 72
-                INC     DP                     ; 45E9 1 108 280 72
-                L       A, [DP]                ; 45EA 1 108 280 E2
-                CMP     A, #000c0h             ; 45EB 1 108 280 C6C000
-                JLT     injtimer_bank3_check             ; 45EE 1 108 280 CA23
-                ST      A, er1                 ; 45F0 1 108 280 89
-                LB      A, off(00116h)         ; 45F1 0 108 280 F416
-                SRLB    A                      ; 45F3 0 108 280 63
-                RORB    off(00116h)            ; 45F4 0 108 280 C416C7
-                SJ      injtimer_schedule_common             ; 45F7 0 108 280 CB36
+injector_timer_schedule:     MOVB    r0, #0ffh
+                L       A, off(0019eh)
+                ST      A, er1
+                CMPB    off(00117h), #00fh
+                JNE     injtimer_schedule_done
+                L       A, TM0
+                SUB     A, #00001h
+                ST      A, TMR0
+                MOV     X1, #00110h
+                MOV     DP, #00198h
+                L       A, [DP]
+                CMP     A, #000c0h
+                JGE     injtimer_bank1_check2
+                CLR     A
+                ST      A, [DP]
+                INC     DP
+                INC     DP
+                L       A, [DP]
+                CMP     A, #000c0h
+                JGE     injtimer_bank2_zero
+                CLR     A
+                ST      A, [DP]
+                INC     DP
+                INC     DP
+                L       A, [DP]
+                CMP     A, #000c0h
+                JLT     injtimer_bank3_check
+                ST      A, er1
+                LB      A, off(00116h)
+                SRLB    A
+                RORB    off(00116h)
+                SJ      injtimer_schedule_common
 
-injtimer_shift_path:     LB      A, off(00196h)         ; 45F9 0 108 280 F496
-                SLLB    A                      ; 45FB 0 108 280 53
-                ROLB    off(00196h)            ; 45FC 0 108 280 C496B7
-                LB      A, off(00116h)         ; 45FF 0 108 280 F416
-                SLLB    A                      ; 4601 0 108 280 53
-                ROLB    off(00116h)            ; 4602 0 108 280 C416B7
-                RT                             ; 4605 0 108 280 01
+injtimer_shift_path:     LB      A, off(00196h)
+                SLLB    A
+                ROLB    off(00196h)
+                LB      A, off(00116h)
+                SLLB    A
+                ROLB    off(00116h)
+                RT
 
-injtimer_bank2_zero:     ST      A, er1                 ; 4606 1 108 280 89
-                LB      A, off(00116h)         ; 4607 0 108 280 F416
-                SRLB    A                      ; 4609 0 108 280 63
-                RORB    off(00116h)            ; 460A 0 108 280 C416C7
-                SRLB    A                      ; 460D 0 108 280 63
-                RORB    off(00116h)            ; 460E 0 108 280 C416C7
-                SJ      injtimer_bank_mask_calc             ; 4611 0 108 280 CB14
+injtimer_bank2_zero:     ST      A, er1
+                LB      A, off(00116h)
+                SRLB    A
+                RORB    off(00116h)
+                SRLB    A
+                RORB    off(00116h)
+                SJ      injtimer_bank_mask_calc
 
-injtimer_bank3_check:     CLR     A                      ; 4613 1 108 280 F9
-                ST      A, [DP]                ; 4614 1 108 280 D2
-                SJ      injtimer_schedule_done             ; 4615 1 108 280 CB1E
+injtimer_bank3_check:     CLR     A
+                ST      A, [DP]
+                SJ      injtimer_schedule_done
 
-injtimer_bank1_check2:     ST      A, er1                 ; 4617 1 108 280 89
-                LB      A, off(00116h)         ; 4618 0 108 280 F416
-                SLLB    A                      ; 461A 0 108 280 53
-                ROLB    off(00116h)            ; 461B 0 108 280 C416B7
-                CAL     inj_wrap_clamp_calc             ; 461E 0 108 280 325F47
-                LB      A, off(00196h)         ; 4621 0 108 280 F496
-                SRLB    A                      ; 4623 0 108 280 63
-                SRLB    A                      ; 4624 0 108 280 63
-                ANDB    r0, A                  ; 4625 0 108 280 20D1
+injtimer_bank1_check2:     ST      A, er1
+                LB      A, off(00116h)
+                SLLB    A
+                ROLB    off(00116h)
+                CAL     inj_wrap_clamp_calc
+                LB      A, off(00196h)
+                SRLB    A
+                SRLB    A
+                ANDB    r0, A
 
-injtimer_bank_mask_calc:     CAL     inj_wrap_clamp_calc             ; 4627 0 108 280 325F47
-                LB      A, off(00196h)         ; 462A 0 108 280 F496
-                SRLB    A                      ; 462C 0 108 280 63
-                ANDB    r0, A                  ; 462D 0 108 280 20D1
+injtimer_bank_mask_calc:     CAL     inj_wrap_clamp_calc
+                LB      A, off(00196h)
+                SRLB    A
+                ANDB    r0, A
 
-injtimer_schedule_common:     CAL     inj_wrap_clamp_calc             ; 462F 0 108 280 325F47
-                ANDB    r0, off(00196h)        ; 4632 0 108 280 20D396
-
-
-injtimer_schedule_done:     LB      A, off(00196h)         ; 4635 0 108 280 F496
-                SLLB    A                      ; 4637 0 108 280 53
-                ROLB    off(00196h)            ; 4638 0 108 280 C496B7
-                LB      A, r0                  ; 463B 0 108 280 78
-                ANDB    A, off(00196h)         ; 463C 0 108 280 D796
-                CMP     off(0019eh), #000c0h   ; 463E 0 108 280 B49EC0C000
-                JLT     injenable_reset_all             ; 4643 0 108 280 CA40
-                MOVB    r1, off(00117h)        ; 4645 0 108 280 C41749
-                ANDB    off(00117h), A         ; 4648 0 108 280 C417D1
-                JBS     off(0012ah).7, injenable_p2_update ; 464B 0 108 280 EF2A0A
-                JBS     off(00124h).5, injenable_p2_update ; 464E 0 108 280 ED2407
-                ANDB    off(00197h), A         ; 4651 0 108 280 C497D1
-                ORB     off(0012ah), #001h     ; 4654 0 108 280 C42AE001
+injtimer_schedule_common:     CAL     inj_wrap_clamp_calc
+                ANDB    r0, off(00196h)
 
 
-injenable_p2_update:     LB      A, off(00197h)         ; 4658 0 108 280 F497
+injtimer_schedule_done:     LB      A, off(00196h)
+                SLLB    A
+                ROLB    off(00196h)
+                LB      A, r0
+                ANDB    A, off(00196h)
+                CMP     off(0019eh), #000c0h
+                JLT     injenable_reset_all
+                MOVB    r1, off(00117h)
+                ANDB    off(00117h), A
+                JBS     off(0012ah).7, injenable_p2_update
+                JBS     off(00124h).5, injenable_p2_update
+                ANDB    off(00197h), A
+                ORB     off(0012ah), #001h
+
+
+injenable_p2_update:     LB      A, off(00197h)
 ; --- Sequential injector enable/scheduling: P2 output port bits act as per-injector enable
 ; signals (confirmed: same port/RAM shadow (0x197) driven by the int_timer_0_match injector
 ; bank-stagger ISR above), rotated via off(00196h)/(00117h) shift chains and scheduled
 ; against TM0/TMR0 hardware timer -- this is the sequential-injection firing-order scheduler.
-                ORB     A, #0f0h               ; 465A 0 108 280 E6F0
-                ANDB    P2, A                  ; 465C 0 108 280 C524D1
-                ANDB    TRNSIT, #0fbh          ; 465F 0 108 280 C546D0FB
-                ANDB    PSWH, #0feh            ; 4663 0 108 280 A2D0FE
-                ORB     TCON0, #004h           ; 4666 0 108 280 C540E004
-                L       A, TM0                 ; 466A 1 108 280 E530
-                ORB     PSWH, #001h            ; 466C 1 108 280 A2E001
-                ANDB    TCON0, #0fbh           ; 466F 1 108 280 C540D0FB
-                CMPB    r1, #00fh              ; 4673 1 108 280 21C00F
-                JEQ     inj_accum2_direct             ; 4676 1 108 280 C92B
-                SUB     A, TMR0                ; 4678 1 108 280 B532A2
-                ADD     A, er1                 ; 467B 1 108 280 09
-                JBR     off(00109h).0, inj_accum_check1 ; 467C 1 108 280 D80929
-                JBR     off(00109h).2, inj_accum_check2 ; 467F 1 108 280 DA0929
-                J       inj_accum_check4             ; 4682 1 108 280 03EA46
+                ORB     A, #0f0h
+                ANDB    P2, A
+                ANDB    TRNSIT, #0fbh
+                ANDB    PSWH, #0feh
+                ORB     TCON0, #004h
+                L       A, TM0
+                ORB     PSWH, #001h
+                ANDB    TCON0, #0fbh
+                CMPB    r1, #00fh
+                JEQ     inj_accum2_direct
+                SUB     A, TMR0
+                ADD     A, er1
+                JBR     off(00109h).0, inj_accum_check1
+                JBR     off(00109h).2, inj_accum_check2
+                J       inj_accum_check4
 
-injenable_reset_all:     LB      A, #00fh               ; 4685 0 108 280 770F
-                STB     A, off(00117h)         ; 4687 0 108 280 D417
-                STB     A, off(00197h)         ; 4689 0 108 280 D497
-                ORB     P2, A                  ; 468B 0 108 280 C524E1
-                SB      TCON0.2                ; 468E 0 108 280 C5401A
-                LB      A, off(00196h)         ; 4691 0 108 280 F496
-                XORB    A, #0ffh               ; 4693 0 108 280 F6FF
-                MB      C, ACC.7               ; 4695 0 108 280 C5062F
-                ROLB    A                      ; 4698 0 108 280 33
-                STB     A, off(00116h)         ; 4699 0 108 280 D416
-                RB      TCON0.2                ; 469B 0 108 280 C5400A
-                L       A, #00001h             ; 469E 1 108 280 670100
-                SJ      inj_accum1_store_new             ; 46A1 1 108 280 CB4F
+injenable_reset_all:     LB      A, #00fh
+                STB     A, off(00117h)
+                STB     A, off(00197h)
+                ORB     P2, A
+                SB      TCON0.2
+                LB      A, off(00196h)
+                XORB    A, #0ffh
+                MB      C, ACC.7
+                ROLB    A
+                STB     A, off(00116h)
+                RB      TCON0.2
+                L       A, #00001h
+                SJ      inj_accum1_store_new
 
-inj_accum2_direct:     ADD     A, er1                 ; 46A3 1 108 280 09
+inj_accum2_direct:     ADD     A, er1
 ; --- Dual-accumulator injector timing calc (0x46A3-0x4723ish): manages two 16-bit
 ; accumulators (0x110/0x112, capped/wrapped at 0x100) feeding TMR0 reschedule -- likely
 ; timing for two injector groups/banks. No calibration anchors; named at the mechanism level.
-                ST      A, TMR0                ; 46A4 1 108 280 D532
-                SJ      inj_p2_calc_start             ; 46A6 1 108 280 CB7D
+                ST      A, TMR0
+                SJ      inj_p2_calc_start
 
-inj_accum_check1:     JBR     off(00109h).2, inj_accum_dispatch ; 46A8 1 108 280 DA0906
+inj_accum_check1:     JBR     off(00109h).2, inj_accum_dispatch
 
-inj_accum_check2:     JBS     off(00109h).3, inj_accum_check5 ; 46AB 1 108 280 EB095C
-                JBS     off(00109h).1, inj_accum_dispatch2 ; 46AE 1 108 280 E9095C
+inj_accum_check2:     JBS     off(00109h).3, inj_accum_check5
+                JBS     off(00109h).1, inj_accum_dispatch2
 
-inj_accum_dispatch:     JGE     inj_accum_direct_add             ; 46B1 1 108 280 CD2C
-                SUB     A, off(00110h)         ; 46B3 1 108 280 A710
-                JLT     inj_accum1_add             ; 46B5 1 108 280 CA11
-                SUB     A, off(00112h)         ; 46B7 1 108 280 A712
-                JGE     inj_accum_check3             ; 46B9 1 108 280 CD1C
-                ADD     A, off(00112h)         ; 46BB 1 108 280 8712
-                CMP     A, #00100h             ; 46BD 1 108 280 C60001
-                JLT     inj_accum2_zero             ; 46C0 1 108 280 CA0F
-                ST      A, off(00112h)         ; 46C2 1 108 280 D412
-                CLR     A                      ; 46C4 1 108 280 F9
-                J       inj_accum_store_114             ; 46C5 1 108 280 032347
+inj_accum_dispatch:     JGE     inj_accum_direct_add
+                SUB     A, off(00110h)
+                JLT     inj_accum1_add
+                SUB     A, off(00112h)
+                JGE     inj_accum_check3
+                ADD     A, off(00112h)
+                CMP     A, #00100h
+                JLT     inj_accum2_zero
+                ST      A, off(00112h)
+                CLR     A
+                J       inj_accum_store_114
 
-inj_accum1_add:     ADD     A, off(00110h)         ; 46C8 1 108 280 8710
-                CMP     A, #00100h             ; 46CA 1 108 280 C60001
-                JLT     inj_accum_both_zero             ; 46CD 1 108 280 CA13
-                ST      A, off(00110h)         ; 46CF 1 108 280 D410
+inj_accum1_add:     ADD     A, off(00110h)
+                CMP     A, #00100h
+                JLT     inj_accum_both_zero
+                ST      A, off(00110h)
 
-inj_accum2_zero:     CLR     A                      ; 46D1 1 108 280 F9
-                ST      A, off(00112h)         ; 46D2 1 108 280 D412
-                J       inj_accum_store_114             ; 46D4 1 108 280 032347
+inj_accum2_zero:     CLR     A
+                ST      A, off(00112h)
+                J       inj_accum_store_114
 
-inj_accum_check3:     CMP     A, #00100h             ; 46D7 1 108 280 C60001
-                JGE     inj_accum_store_114             ; 46DA 1 108 280 CD47
-                CLR     A                      ; 46DC 1 108 280 F9
-                SJ      inj_accum_store_114             ; 46DD 1 108 280 CB44
+inj_accum_check3:     CMP     A, #00100h
+                JGE     inj_accum_store_114
+                CLR     A
+                SJ      inj_accum_store_114
 
-inj_accum_direct_add:     ADD     TMR0, A                ; 46DF 1 108 280 B53281
+inj_accum_direct_add:     ADD     TMR0, A
 
-inj_accum_both_zero:     CLR     A                      ; 46E2 1 108 280 F9
-                ST      A, off(00110h)         ; 46E3 1 108 280 D410
-                ST      A, off(00112h)         ; 46E5 1 108 280 D412
-                J       inj_accum_store_114             ; 46E7 1 108 280 032347
-
-
-inj_accum_check4:     JGE     inj_accum_direct_add2             ; 46EA 1 108 280 CD10
-                CMP     A, #00100h             ; 46EC 1 108 280 C60001
-                JGE     inj_accum1_store_new             ; 46EF 1 108 280 CD01
-                CLR     A                      ; 46F1 1 108 280 F9
+inj_accum_both_zero:     CLR     A
+                ST      A, off(00110h)
+                ST      A, off(00112h)
+                J       inj_accum_store_114
 
 
-inj_accum1_store_new:     ST      A, off(00110h)         ; 46F2 1 108 280 D410
-                L       A, #00001h             ; 46F4 1 108 280 670100
-                ST      A, off(00112h)         ; 46F7 1 108 280 D412
-                J       inj_accum_store_114             ; 46F9 1 108 280 032347
+inj_accum_check4:     JGE     inj_accum_direct_add2
+                CMP     A, #00100h
+                JGE     inj_accum1_store_new
+                CLR     A
 
-inj_accum_direct_add2:     ADD     TMR0, A                ; 46FC 1 108 280 B53281
-                CLR     A                      ; 46FF 1 108 280 F9
-                ST      A, off(00110h)         ; 4700 1 108 280 D410
-                L       A, #00001h             ; 4702 1 108 280 670100
-                ST      A, off(00112h)         ; 4705 1 108 280 D412
-                J       inj_accum_store_114             ; 4707 1 108 280 032347
 
-inj_accum_check5:     JBS     off(00109h).1, inj_accum_check4 ; 470A 1 108 280 E909DD
+inj_accum1_store_new:     ST      A, off(00110h)
+                L       A, #00001h
+                ST      A, off(00112h)
+                J       inj_accum_store_114
 
-inj_accum_dispatch2:     JGE     inj_accum_direct_add3             ; 470D 1 108 280 CD4B
-                SUB     A, off(00110h)         ; 470F 1 108 280 A710
-                JGE     inj_accum1_wrap_check             ; 4711 1 108 280 CD40
-                ADD     A, off(00110h)         ; 4713 1 108 280 8710
-                CMP     A, #00100h             ; 4715 1 108 280 C60001
-                JGE     inj_accum1_store2             ; 4718 1 108 280 CD01
+inj_accum_direct_add2:     ADD     TMR0, A
+                CLR     A
+                ST      A, off(00110h)
+                L       A, #00001h
+                ST      A, off(00112h)
+                J       inj_accum_store_114
 
-inj_accum1_zero2:     CLR     A                      ; 471A 1 108 280 F9
+inj_accum_check5:     JBS     off(00109h).1, inj_accum_check4
 
-inj_accum1_store2:     ST      A, off(00110h)         ; 471B 1 108 280 D410
+inj_accum_dispatch2:     JGE     inj_accum_direct_add3
+                SUB     A, off(00110h)
+                JGE     inj_accum1_wrap_check
+                ADD     A, off(00110h)
+                CMP     A, #00100h
+                JGE     inj_accum1_store2
 
-inj_accum2_zero2:     CLR     A                      ; 471D 1 108 280 F9
+inj_accum1_zero2:     CLR     A
 
-inj_accum2_store2:     ST      A, off(00112h)         ; 471E 1 108 280 D412
-                L       A, #00001h             ; 4720 1 108 280 670100
+inj_accum1_store2:     ST      A, off(00110h)
 
-inj_accum_store_114:     ST      A, off(00114h)         ; 4723 1 108 280 D414
+inj_accum2_zero2:     CLR     A
 
-inj_p2_calc_start:     L       A, off(00110h)         ; 4725 1 108 280 E410
-                JNE     inj_p2_calc_alt             ; 4727 1 108 280 CE0E
-                L       A, off(00112h)         ; 4729 1 108 280 E412
-                JEQ     inj_p2_calc_check114             ; 472B 1 108 280 C90E
-                LB      A, off(00116h)         ; 472D 0 108 280 F416
-                SRLB    A                      ; 472F 0 108 280 63
-                SRLB    A                      ; 4730 0 108 280 63
-                SRLB    A                      ; 4731 0 108 280 63
-                ORB     A, off(00116h)         ; 4732 0 108 280 E716
-                J       inj_p2_calc_or197             ; 4734 0 108 280 034447
+inj_accum2_store2:     ST      A, off(00112h)
+                L       A, #00001h
 
-inj_p2_calc_alt:     LB      A, off(00116h)         ; 4737 0 108 280 F416
-                SJ      inj_p2_calc_or197             ; 4739 0 108 280 CB09
+inj_accum_store_114:     ST      A, off(00114h)
 
-inj_p2_calc_check114:     L       A, off(00114h)         ; 473B 1 108 280 E414
-                JEQ     inj_p2_default_f             ; 473D 1 108 280 C910
-                LB      A, off(00116h)         ; 473F 0 108 280 F416
-                RORB    A                      ; 4741 0 108 280 43
-                XORB    A, #0ffh               ; 4742 0 108 280 F6FF
+inj_p2_calc_start:     L       A, off(00110h)
+                JNE     inj_p2_calc_alt
+                L       A, off(00112h)
+                JEQ     inj_p2_calc_check114
+                LB      A, off(00116h)
+                SRLB    A
+                SRLB    A
+                SRLB    A
+                ORB     A, off(00116h)
+                J       inj_p2_calc_or197
 
-inj_p2_calc_or197:     ORB     A, off(00197h)         ; 4744 0 108 280 E797
-                ANDB    A, #00fh               ; 4746 0 108 280 D60F
+inj_p2_calc_alt:     LB      A, off(00116h)
+                SJ      inj_p2_calc_or197
 
-inj_p2_drive_return:     ORB     P2, A                  ; 4748 0 108 280 C524E1
-                RB      off(0012ah).7          ; 474B 0 108 280 C42A0F
-                RT                             ; 474E 0 108 280 01
+inj_p2_calc_check114:     L       A, off(00114h)
+                JEQ     inj_p2_default_f
+                LB      A, off(00116h)
+                RORB    A
+                XORB    A, #0ffh
 
-inj_p2_default_f:     LB      A, #00fh               ; 474F 0 108 280 770F
-                SJ      inj_p2_drive_return             ; 4751 0 108 280 CBF5
+inj_p2_calc_or197:     ORB     A, off(00197h)
+                ANDB    A, #00fh
 
-inj_accum1_wrap_check:     CMP     A, #00100h             ; 4753 1 108 280 C60001
-                JLT     inj_accum2_zero2             ; 4756 1 108 280 CAC5
-                SJ      inj_accum2_store2             ; 4758 1 108 280 CBC4
+inj_p2_drive_return:     ORB     P2, A
+                RB      off(0012ah).7
+                RT
 
-inj_accum_direct_add3:     ADD     TMR0, A                ; 475A 1 108 280 B53281
-                SJ      inj_accum1_zero2             ; 475D 1 108 280 CBBB
+inj_p2_default_f:     LB      A, #00fh
+                SJ      inj_p2_drive_return
 
-inj_wrap_clamp_calc:     CLR     A                      ; 475F 1 108 280 F9
-                XCHG    A, [DP]                ; 4760 1 108 280 B210
-                MOV     X2, A                  ; 4762 1 108 280 51
-                INC     DP                     ; 4763 1 108 280 72
-                INC     DP                     ; 4764 1 108 280 72
-                L       A, [DP]                ; 4765 1 108 280 E2
-                SUB     A, X2                  ; 4766 1 108 280 91A2
-                JLT     inj_wrap_clamp_zero             ; 4768 1 108 280 CA05
-                CMP     A, #00100h             ; 476A 1 108 280 C60001
-                JGE     inj_wrap_clamp_store             ; 476D 1 108 280 CD01
+inj_accum1_wrap_check:     CMP     A, #00100h
+                JLT     inj_accum2_zero2
+                SJ      inj_accum2_store2
 
-inj_wrap_clamp_zero:     CLR     A                      ; 476F 1 108 280 F9
+inj_accum_direct_add3:     ADD     TMR0, A
+                SJ      inj_accum1_zero2
 
-inj_wrap_clamp_store:     ST      A, 00000h[X1]          ; 4770 1 108 280 D00000
-                INC     X1                     ; 4773 1 108 280 70
-                INC     X1                     ; 4774 1 108 280 70
-                RT                             ; 4775 1 108 280 01
+inj_wrap_clamp_calc:     CLR     A
+                XCHG    A, [DP]
+                MOV     X2, A
+                INC     DP
+                INC     DP
+                L       A, [DP]
+                SUB     A, X2
+                JLT     inj_wrap_clamp_zero
+                CMP     A, #00100h
+                JGE     inj_wrap_clamp_store
+
+inj_wrap_clamp_zero:     CLR     A
+
+inj_wrap_clamp_store:     ST      A, 00000h[X1]
+                INC     X1
+                INC     X1
+                RT
 
 knock_helper1:     MOVB    r6, #077h
                 JEQ     bitreverse_return
@@ -9826,185 +9826,185 @@ bitreverse_loop:     MB      C, r6.7
 bitreverse_return:     LB      A, r6
                 RT
 
-tm0_resync_helper:     L       A, TMR2                ; 4784 1 108 280 E53A
-                JBR     off(0011fh).2, tm0_resync_store_er3 ; 4786 1 108 280 DA1F02
-                L       A, 0f0h                ; 4789 1 108 280 E5F0
+tm0_resync_helper:     L       A, TMR2
+                JBR     off(0011fh).2, tm0_resync_store_er3
+                L       A, 0f0h
 
-tm0_resync_store_er3:     ST      A, er3                 ; 478B 1 108 280 8B
-                JBS     off(0010fh).7, rpm_resync_gate ; 478C 1 108 280 EF0F0B
-                MB      C, IRQH.0              ; 478F 1 108 280 C51928
-                JGE     rpm_resync_gate             ; 4792 1 108 280 CD06
-                INCB    0aeh                   ; 4794 1 108 280 C5AE16
-                SB      0b6h.0                 ; 4797 1 108 280 C5B618
+tm0_resync_store_er3:     ST      A, er3
+                JBS     off(0010fh).7, rpm_resync_gate
+                MB      C, IRQH.0
+                JGE     rpm_resync_gate
+                INCB    0aeh
+                SB      0b6h.0
 
-rpm_resync_gate:     SB      off(00128h).3          ; 479A 1 108 280 C4281B
-                JEQ     rpm_resync_common             ; 479D 1 108 280 C93A
-                SUB     A, 0eeh                ; 479F 1 108 280 B5EEA2
-                JBR     off(0011fh).2, rpm_resync_tcon2_check ; 47A2 1 108 280 DA1F22
-                CLRB    r1                     ; 47A5 1 108 280 2115
-                MOVB    r0, 0aeh               ; 47A7 1 108 280 C5AE48
-                SBCB    r0, #000h              ; 47AA 1 108 280 20B000
-                MOV     er2, #00006h           ; 47AD 1 108 280 46980600
-                DIV                            ; 47B1 1 108 280 9037
-                CMPB    r0, #000h              ; 47B3 1 108 280 20C000
-                JEQ     rpm_period_reset_calc             ; 47B6 1 108 280 C901
-                CLR     A                      ; 47B8 1 108 280 F9
+rpm_resync_gate:     SB      off(00128h).3
+                JEQ     rpm_resync_common
+                SUB     A, 0eeh
+                JBR     off(0011fh).2, rpm_resync_tcon2_check
+                CLRB    r1
+                MOVB    r0, 0aeh
+                SBCB    r0, #000h
+                MOV     er2, #00006h
+                DIV
+                CMPB    r0, #000h
+                JEQ     rpm_period_reset_calc
+                CLR     A
 
-rpm_period_reset_calc:     ST      A, off(00136h)         ; 47B9 1 108 280 D436
-                MOV     X1, #0000ch            ; 47BB 1 108 280 600C00
+rpm_period_reset_calc:     ST      A, off(00136h)
+                MOV     X1, #0000ch
 
-rpm_period_reset_loop:     DEC     X1                     ; 47BE 1 108 280 80
-                DEC     X1                     ; 47BF 1 108 280 80
-                ST      A, 00360h[X1]          ; 47C0 1 108 280 D06003
-                JNE     rpm_period_reset_loop             ; 47C3 1 108 280 CEF9
-                SJ      rpm_resync_common             ; 47C5 1 108 280 CB12
+rpm_period_reset_loop:     DEC     X1
+                DEC     X1
+                ST      A, 00360h[X1]
+                JNE     rpm_period_reset_loop
+                SJ      rpm_resync_common
 
-rpm_resync_tcon2_check:     MB      C, TCON2.2             ; 47C7 1 108 280 C5422A
-                JGE     rpm_resync_store136             ; 47CA 1 108 280 CD01
-                CLR     A                      ; 47CC 1 108 280 F9
+rpm_resync_tcon2_check:     MB      C, TCON2.2
+                JGE     rpm_resync_store136
+                CLR     A
 
-rpm_resync_store136:     ST      A, off(00136h)         ; 47CD 1 108 280 D436
-                LB      A, 0a2h                ; 47CF 0 108 280 F5A2
-                SLLB    A                      ; 47D1 0 108 280 53
-                EXTND                          ; 47D2 1 108 280 F8
-                MOV     X1, A                  ; 47D3 1 108 280 50
-                L       A, off(00136h)         ; 47D4 1 108 280 E436
-                ST      A, 00360h[X1]          ; 47D6 1 108 280 D06003
+rpm_resync_store136:     ST      A, off(00136h)
+                LB      A, 0a2h
+                SLLB    A
+                EXTND
+                MOV     X1, A
+                L       A, off(00136h)
+                ST      A, 00360h[X1]
 
-rpm_resync_common:     L       A, er3                 ; 47D9 1 108 280 37
-                ST      A, 0eeh                ; 47DA 1 108 280 D5EE
-                CLRB    0aeh                   ; 47DC 1 108 280 C5AE15
-                CMPB    0a2h, #005h            ; 47DF 1 108 280 C5A2C005
-                JNE     crank_a3_gate             ; 47E3 1 108 280 CE03
-                SLLB    off(001a3h)            ; 47E5 1 108 280 C4A3D7
+rpm_resync_common:     L       A, er3
+                ST      A, 0eeh
+                CLRB    0aeh
+                CMPB    0a2h, #005h
+                JNE     crank_a3_gate
+                SLLB    off(001a3h)
 
-crank_a3_gate:     JBS     off(001a3h).2, crank_dp_35e ; 47E8 1 108 280 EAA30E
-                MOV     DP, #00358h            ; 47EB 1 108 280 625803
-                MB      C, 0b8h.0              ; 47EE 1 108 280 C5B828
-                SJ      crank_pswl4_store             ; 47F1 1 108 280 CB0C
+crank_a3_gate:     JBS     off(001a3h).2, crank_dp_35e
+                MOV     DP, #00358h
+                MB      C, 0b8h.0
+                SJ      crank_pswl4_store
 
-crank_mul_alt:     MULB                           ; 47F3 0 108 280 A234
+crank_mul_alt:     MULB
 
-crank_mul_common:     MULB                           ; 47F5 0 108 280 A234
-                SJ      crank_a2_advance             ; 47F7 0 108 280 CB2E
+crank_mul_common:     MULB
+                SJ      crank_a2_advance
 
-crank_dp_35e:     MOV     DP, #0035eh            ; 47F9 1 108 280 625E03
-                MB      C, 0b8h.1              ; 47FC 1 108 280 C5B829
+crank_dp_35e:     MOV     DP, #0035eh
+                MB      C, 0b8h.1
 
-crank_pswl4_store:     MB      PSWL.4, C              ; 47FF 1 108 280 A33C
-                LB      A, 0a2h                ; 4801 0 108 280 F5A2
-                CMPB    A, #004h               ; 4803 0 108 280 C604
-                JEQ     crank_mul_alt             ; 4805 0 108 280 C9EC
-                JGE     crank_a0_update             ; 4807 0 108 280 CD12
-                STB     A, r0                  ; 4809 0 108 280 88
-                INCB    r0                     ; 480A 0 108 280 A8
-                LB      A, 0a0h                ; 480B 0 108 280 F5A0
-                ADDB    A, #001h               ; 480D 0 108 280 8601
-                CMPB    A, r0                  ; 480F 0 108 280 48
-                JLE     crank_mul_common             ; 4810 0 108 280 CFE3
-                LB      A, [DP]                ; 4812 0 108 280 F2
-                ADDB    A, #001h               ; 4813 0 108 280 8601
-                CMPB    A, r0                  ; 4815 0 108 280 48
-                JLE     crank_mul_common             ; 4816 0 108 280 CFDD
-                JBR     off(0011fh).0, crank_mul_common ; 4818 0 108 280 D81FDA
+crank_pswl4_store:     MB      PSWL.4, C
+                LB      A, 0a2h
+                CMPB    A, #004h
+                JEQ     crank_mul_alt
+                JGE     crank_a0_update
+                STB     A, r0
+                INCB    r0
+                LB      A, 0a0h
+                ADDB    A, #001h
+                CMPB    A, r0
+                JLE     crank_mul_common
+                LB      A, [DP]
+                ADDB    A, #001h
+                CMPB    A, r0
+                JLE     crank_mul_common
+                JBR     off(0011fh).0, crank_mul_common
 
-crank_a0_update:     L       A, [DP]                ; 481B 1 108 280 E2
-                ST      A, 0a0h                ; 481C 1 108 280 D5A0
-                DEC     DP                     ; 481E 1 108 280 82
-                LB      A, [DP]                ; 481F 0 108 280 F2
-                STB     A, 09fh                ; 4820 0 108 280 D59F
-                MB      C, PSWL.4              ; 4822 0 108 280 A32C
-                MB      off(0012ah).5, C       ; 4824 0 108 280 C42A3D
+crank_a0_update:     L       A, [DP]
+                ST      A, 0a0h
+                DEC     DP
+                LB      A, [DP]
+                STB     A, 09fh
+                MB      C, PSWL.4
+                MB      off(0012ah).5, C
 
-crank_a2_advance:     CLR     A                      ; 4827 1 108 280 F9
-                MOV     er0, 0a0h              ; 4828 1 108 280 B5A048
-                ST      A, er3                 ; 482B 1 108 280 8B
-                LB      A, 0a2h                ; 482C 0 108 280 F5A2
-                ADDB    A, #001h               ; 482E 0 108 280 8601
-                CMPB    A, r0                  ; 4830 0 108 280 48
-                JEQ     crank_mul_common2             ; 4831 0 108 280 C918
-                CMPB    A, #006h               ; 4833 0 108 280 C606
-                JNE     crank_a2_check3             ; 4835 0 108 280 CE06
-                LB      A, r0                  ; 4837 0 108 280 78
-                JEQ     crank_mul_common2             ; 4838 0 108 280 C911
-                SLLB    A                      ; 483A 0 108 280 53
-                JLT     crank_mul_common2             ; 483B 0 108 280 CA0E
+crank_a2_advance:     CLR     A
+                MOV     er0, 0a0h
+                ST      A, er3
+                LB      A, 0a2h
+                ADDB    A, #001h
+                CMPB    A, r0
+                JEQ     crank_mul_common2
+                CMPB    A, #006h
+                JNE     crank_a2_check3
+                LB      A, r0
+                JEQ     crank_mul_common2
+                SLLB    A
+                JLT     crank_mul_common2
 
-crank_a2_check3:     CMPB    0a2h, #003h            ; 483D 0 108 280 C5A2C003
-                JNE     crank_mul_alt2             ; 4841 0 108 280 CE26
-                CMPB    r0, #005h              ; 4843 0 108 280 20C005
-                JNE     crank_mul_alt2             ; 4846 0 108 280 CE21
-                MOV     er3, off(00136h)       ; 4848 0 108 280 B4364B
+crank_a2_check3:     CMPB    0a2h, #003h
+                JNE     crank_mul_alt2
+                CMPB    r0, #005h
+                JNE     crank_mul_alt2
+                MOV     er3, off(00136h)
 
-crank_mul_common2:     CLRB    r0                     ; 484B 0 108 280 2015
-                L       A, off(00136h)         ; 484D 1 108 280 E436
-                MUL                            ; 484F 1 108 280 9035
-                LB      A, 0a0h                ; 4851 0 108 280 F5A0
-                SLLB    A                      ; 4853 0 108 280 53
-                JGE     tmr3_reload_add2             ; 4854 0 108 280 CD2E
-                ANDB    PSWH, #0feh            ; 4856 0 108 280 A2D0FE
-                L       A, TM3                 ; 4859 1 108 280 E53C
-                SUB     A, TMR2                ; 485B 1 108 280 B53AA2
-                ADD     A, #00010h             ; 485E 1 108 280 861000
-                CMP     A, er1                 ; 4861 1 108 280 49
-                JGE     tmr3_reload_dec2             ; 4862 1 108 280 CD0D
-                L       A, TMR2                ; 4864 1 108 280 E53A
-                ADD     A, er1                 ; 4866 1 108 280 09
-                SJ      tmr3_reload_store2             ; 4867 1 108 280 CB10
+crank_mul_common2:     CLRB    r0
+                L       A, off(00136h)
+                MUL
+                LB      A, 0a0h
+                SLLB    A
+                JGE     tmr3_reload_add2
+                ANDB    PSWH, #0feh
+                L       A, TM3
+                SUB     A, TMR2
+                ADD     A, #00010h
+                CMP     A, er1
+                JGE     tmr3_reload_dec2
+                L       A, TMR2
+                ADD     A, er1
+                SJ      tmr3_reload_store2
 
-crank_mul_alt2:     MUL                            ; 4869 0 108 280 9035
-                RB      r0.0                   ; 486B 0 108 280 2008
-                L       A, ACC                 ; 486D 1 108 280 E506
-                SJ      tmr3_reload_clamp_min             ; 486F 1 108 280 CB1F
+crank_mul_alt2:     MUL
+                RB      r0.0
+                L       A, ACC
+                SJ      tmr3_reload_clamp_min
 
-tmr3_reload_dec2:     RB      TCON3.2                ; 4871 1 108 280 C5430A
-                L       A, TM3                 ; 4874 1 108 280 E53C
-                SUB     A, #00001h             ; 4876 1 108 280 A60100
+tmr3_reload_dec2:     RB      TCON3.2
+                L       A, TM3
+                SUB     A, #00001h
 
-tmr3_reload_store2:     ST      A, TMR3                ; 4879 1 108 280 D53E
-                RB      TCON3.3                ; 487B 1 108 280 C5430B
-                ORB     PSWH, #001h            ; 487E 1 108 280 A2E001
-                J       tmr3_reload_clamp_min             ; 4881 1 108 280 039048
+tmr3_reload_store2:     ST      A, TMR3
+                RB      TCON3.3
+                ORB     PSWH, #001h
+                J       tmr3_reload_clamp_min
 
-tmr3_reload_add2:     L       A, er3                 ; 4884 1 108 280 37
-                ADD     A, er1                 ; 4885 1 108 280 09
-                JGE     tmr3_reload_clamp_check             ; 4886 1 108 280 CD03
-                L       A, #0ffffh             ; 4888 1 108 280 67FFFF
+tmr3_reload_add2:     L       A, er3
+                ADD     A, er1
+                JGE     tmr3_reload_clamp_check
+                L       A, #0ffffh
 
-tmr3_reload_clamp_check:     CMP     A, #0001fh             ; 488B 1 108 280 C61F00
-                JGE     tmr3_store_e8             ; 488E 1 108 280 CD03
+tmr3_reload_clamp_check:     CMP     A, #0001fh
+                JGE     tmr3_store_e8
 
-tmr3_reload_clamp_min:     L       A, #0001fh             ; 4890 1 108 280 671F00
+tmr3_reload_clamp_min:     L       A, #0001fh
 
-tmr3_store_e8:     ST      A, 0e8h                ; 4893 1 108 280 D5E8
-                MOV     DP, #00f00h            ; 4895 1 108 280 62000F
-                LB      A, [DP]                ; 4898 0 108 280 F2
-                SRLB    A                      ; 4899 0 108 280 63
-                ROR     off(001aah)            ; 489A 0 108 280 B4AAC7
-                SRLB    A                      ; 489D 0 108 280 63
-                ROR     off(001aah)            ; 489E 0 108 280 B4AAC7
-                LB      A, 0a2h                ; 48A1 0 108 280 F5A2
-                JNE     crank_a2_check4             ; 48A3 0 108 280 CE06
-                CLR     A                      ; 48A5 1 108 280 F9
-                XCHG    A, off(001aah)         ; 48A6 1 108 280 B4AA10
-                ST      A, 0ech                ; 48A9 1 108 280 D5EC
+tmr3_store_e8:     ST      A, 0e8h
+                MOV     DP, #00f00h
+                LB      A, [DP]
+                SRLB    A
+                ROR     off(001aah)
+                SRLB    A
+                ROR     off(001aah)
+                LB      A, 0a2h
+                JNE     crank_a2_check4
+                CLR     A
+                XCHG    A, off(001aah)
+                ST      A, 0ech
 
-crank_a2_check4:     LB      A, 0a2h                ; 48AB 0 108 280 F5A2
-                CMPB    A, #001h               ; 48AD 0 108 280 C601
-                JNE     crank_a8_p1_output             ; 48AF 0 108 280 CE04
-                L       A, 0eah                ; 48B1 1 108 280 E5EA
-                ST      A, off(001a8h)         ; 48B3 1 108 280 D4A8
+crank_a2_check4:     LB      A, 0a2h
+                CMPB    A, #001h
+                JNE     crank_a8_p1_output
+                L       A, 0eah
+                ST      A, off(001a8h)
 
-crank_a8_p1_output:     L       A, off(001a8h)         ; 48B5 1 108 280 E4A8
-                SRL     A                      ; 48B7 1 108 280 63
-                MB      P1.7, C                ; 48B8 1 108 280 C5223F
-                SRL     A                      ; 48BB 1 108 280 63
-                MB      P1.3, C                ; 48BC 1 108 280 C5223B
-                ST      A, off(001a8h)         ; 48BF 1 108 280 D4A8
-                MOV     DP, #02f00h            ; 48C1 1 108 280 62002F
-                LB      A, P1                  ; 48C4 0 108 280 F522
-                STB     A, [DP]                ; 48C6 0 108 280 D2
-                RT                             ; 48C7 0 108 280 01
+crank_a8_p1_output:     L       A, off(001a8h)
+                SRL     A
+                MB      P1.7, C
+                SRL     A
+                MB      P1.3, C
+                ST      A, off(001a8h)
+                MOV     DP, #02f00h
+                LB      A, P1
+                STB     A, [DP]
+                RT
 
 ign_angle_to_timer_convert:     CLRB    A
 ; --- Converts a computed ignition angle/trim (r4) into a hardware timer-compare value
@@ -10631,13 +10631,13 @@ ect_smooth_add_store:     ADDB    A, [DP]
                 STB     A, [DP]
                 RT
 
-crank_edge_helper:     L       A, off(00124h)         ; 4C51 1 108 280 E424
-                ST      A, (0021ch-00280h)[USP] ; 4C53 1 108 280 D39C
-                L       A, off(00126h)         ; 4C55 1 108 280 E426
-                ST      A, (0021eh-00280h)[USP] ; 4C57 1 108 280 D39E
-                RT                             ; 4C59 1 108 280 01
+crank_edge_helper:     L       A, off(00124h)
+                ST      A, (0021ch-00280h)[USP]
+                L       A, off(00126h)
+                ST      A, (0021eh-00280h)[USP]
+                RT
 
-refresh_engine_flags_snapshot:     L       A, (00212h-00280h)[USP] ; 4C5A 1 108 280 E392
+refresh_engine_flags_snapshot:     L       A, (00212h-00280h)[USP]
 ; --- Copies a 5-word input/condition snapshot (captured elsewhere, likely synchronized with
 ; the crank-angle interrupt) into the working flag bytes off(0011Ah)/(0011Ch)/(0011Eh)/
 ; (00120h)/(00122h). These are the same flag bytes tested throughout GIO1/2/3, ignition
@@ -10645,16 +10645,16 @@ refresh_engine_flags_snapshot:     L       A, (00212h-00280h)[USP] ; 4C5A 1 108 
 ; here rather than being live hardware registers -- worth knowing when tracing any of those
 ; bit tests: they reflect the state as of the last refresh_engine_flags_snapshot call, not the
 ; instantaneous pin state.
-                ST      A, off(0011ah)         ; 4C5C 1 108 280 D41A
-                L       A, (00214h-00280h)[USP] ; 4C5E 1 108 280 E394
-                ST      A, off(0011ch)         ; 4C60 1 108 280 D41C
-                L       A, (00216h-00280h)[USP] ; 4C62 1 108 280 E396
-                ST      A, off(0011eh)         ; 4C64 1 108 280 D41E
-                L       A, (00218h-00280h)[USP] ; 4C66 1 108 280 E398
-                ST      A, off(00120h)         ; 4C68 1 108 280 D420
-                L       A, (0021ah-00280h)[USP] ; 4C6A 1 108 280 E39A
-                ST      A, off(00122h)         ; 4C6C 1 108 280 D422
-                RT                             ; 4C6E 1 108 280 01
+                ST      A, off(0011ah)
+                L       A, (00214h-00280h)[USP]
+                ST      A, off(0011ch)
+                L       A, (00216h-00280h)[USP]
+                ST      A, off(0011eh)
+                L       A, (00218h-00280h)[USP]
+                ST      A, off(00120h)
+                L       A, (0021ah-00280h)[USP]
+                ST      A, off(00122h)
+                RT
 
 selftest_regbank_verify:     MOV     X2, A
                 SB      off(00230h).7
@@ -11186,15 +11186,15 @@ int_serial_tx:  L       A, 0fah
 ; ============================================================================================
                 ST      A, IE
                 ORB     PSWH, #001h
-                MOV     LRB, #0007eh           ; 5041 1 3F0 ??? 577E00
-                L       A, DP                  ; 5044 1 3F0 ??? 42
-                PUSHS   A                      ; 5045 1 3F0 ??? 55
-                L       A, er0                 ; 5046 1 3F0 ??? 34
-                JEQ     serialtx_dispatch_zero             ; 5047 1 3F0 ??? C903
-                MOV     DP, A                  ; 5049 1 3F0 ??? 52
-                J       [DP]                   ; 504A 1 3F0 ??? 9222
+                MOV     LRB, #0007eh
+                L       A, DP
+                PUSHS   A
+                L       A, er0
+                JEQ     serialtx_dispatch_zero
+                MOV     DP, A
+                J       [DP]
 
-serialtx_dispatch_zero:     J       serial_isr_return             ; 504C 1 3F0 ??? 030951
+serialtx_dispatch_zero:     J       serial_isr_return
                 DB  07Ch,0C9h,02Fh,045h,07Ah,0BCh,0F2h,045h
                 DB  016h,0CBh,020h,07Ch,0C9h,024h,045h,07Ah
                 DB  0BCh,0FAh,092h,0AAh,045h,016h,0CBh,013h
@@ -11206,100 +11206,100 @@ serialtx_dispatch_zero:     J       serial_isr_return             ; 504C 1 3F0 ?
                 DB  04Ch,044h,098h,096h,050h,0CBh,0E4h,044h
                 DB  098h,067h,050h,07Ch,0CBh,0DDh
 
-serialtx_jumptable_entry1:     J       serialtx_error_ee             ; 509D 0 3F0 ??? 039D51
+serialtx_jumptable_entry1:     J       serialtx_error_ee
                 DB  07Ch,003h,003h,051h
 
 int_serial_rx:  L       A, 0fah
                 ST      A, IE
                 ORB     PSWH, #001h
-                MOV     LRB, #0007eh           ; 50AB 1 3F0 ??? 577E00
-                L       A, DP                  ; 50AE 1 3F0 ??? 42
-                PUSHS   A                      ; 50AF 1 3F0 ??? 55
-                CLR     A                      ; 50B0 1 3F0 ??? F9
-                LB      A, SRBUF               ; 50B1 0 3F0 ??? F555
-                CMPB    r0, #000h              ; 50B3 0 3F0 ??? 20C000
-                JNE     serialrx_range_check             ; 50B6 0 3F0 ??? CE24
-                STB     A, r0                  ; 50B8 0 3F0 ??? 88
-                CMPB    r0, #0c0h              ; 50B9 0 3F0 ??? 20C0C0
-                JGE     serialrx_cmd_dispatch             ; 50BC 0 3F0 ??? CD55
-                ANDB    A, #00fh               ; 50BE 0 3F0 ??? D60F
-                STB     A, r1                  ; 50C0 0 3F0 ??? 89
-                CMPB    A, #005h               ; 50C1 0 3F0 ??? C605
-                JGT     serialtx_jumptable_entry1             ; 50C3 0 3F0 ??? C8D8
-                CMPB    A, #000h               ; 50C5 0 3F0 ??? C600
-                JNE     serial_isr_return             ; 50C7 0 3F0 ??? CE40
+                MOV     LRB, #0007eh
+                L       A, DP
+                PUSHS   A
+                CLR     A
+                LB      A, SRBUF
+                CMPB    r0, #000h
+                JNE     serialrx_range_check
+                STB     A, r0
+                CMPB    r0, #0c0h
+                JGE     serialrx_cmd_dispatch
+                ANDB    A, #00fh
+                STB     A, r1
+                CMPB    A, #005h
+                JGT     serialtx_jumptable_entry1
+                CMPB    A, #000h
+                JNE     serial_isr_return
 
-serialrx_store_loop:     LB      A, r0                  ; 50C9 0 3F0 ??? 78
-                L       A, ACC                 ; 50CA 1 3F0 ??? E506
-                AND     A, #000f0h             ; 50CC 1 3F0 ??? D6F000
-                SRL     A                      ; 50CF 1 3F0 ??? 63
-                SRL     A                      ; 50D0 1 3F0 ??? 63
-                SRL     A                      ; 50D1 1 3F0 ??? 63
-                MOV     DP, #051c1h            ; 50D2 1 3F0 ??? 62C151
-                ADD     DP, A                  ; 50D5 1 3F0 ??? 9281
-                LC      A, [DP]                ; 50D7 1 3F0 ??? 92A8
-                MOV     DP, A                  ; 50D9 1 3F0 ??? 52
-                J       [DP]                   ; 50DA 1 3F0 ??? 9222
+serialrx_store_loop:     LB      A, r0
+                L       A, ACC
+                AND     A, #000f0h
+                SRL     A
+                SRL     A
+                SRL     A
+                MOV     DP, #051c1h
+                ADD     DP, A
+                LC      A, [DP]
+                MOV     DP, A
+                J       [DP]
 
-serialrx_range_check:     CMPB    r0, #0f1h              ; 50DC 0 3F0 ??? 20C0F1
-                JLT     serialrx_store_alt             ; 50DF 0 3F0 ??? CA11
-                STB     A, r7                  ; 50E1 0 3F0 ??? 8F
-                MOV     DP, #00417h            ; 50E2 0 3F0 ??? 621704
-                LB      A, r2                  ; 50E5 0 3F0 ??? 7A
-                ADD     DP, A                  ; 50E6 0 3F0 ??? 9281
-                LB      A, r7                  ; 50E8 0 3F0 ??? 7F
-                STB     A, [DP]                ; 50E9 0 3F0 ??? D2
-                INCB    r2                     ; 50EA 0 3F0 ??? AA
-                LB      A, r1                  ; 50EB 0 3F0 ??? 79
-                CMPB    A, r2                  ; 50EC 0 3F0 ??? 4A
-                JEQ     serialrx_store_loop             ; 50ED 0 3F0 ??? C9DA
-                J       serial_isr_return             ; 50EF 0 3F0 ??? 030951
+serialrx_range_check:     CMPB    r0, #0f1h
+                JLT     serialrx_store_alt
+                STB     A, r7
+                MOV     DP, #00417h
+                LB      A, r2
+                ADD     DP, A
+                LB      A, r7
+                STB     A, [DP]
+                INCB    r2
+                LB      A, r1
+                CMPB    A, r2
+                JEQ     serialrx_store_loop
+                J       serial_isr_return
 
-serialrx_store_alt:     STB     A, r7                  ; 50F2 0 3F0 ??? 8F
-                MOV     DP, #003f1h            ; 50F3 0 3F0 ??? 62F103
-                LB      A, r1                  ; 50F6 0 3F0 ??? 79
-                ADD     DP, A                  ; 50F7 0 3F0 ??? 9281
-                LB      A, r7                  ; 50F9 0 3F0 ??? 7F
-                STB     A, [DP]                ; 50FA 0 3F0 ??? D2
-                MOV     DP, er1                ; 50FB 0 3F0 ??? 457A
-                DECB    r1                     ; 50FD 0 3F0 ??? B9
-                JEQ     serialrx_store_loop             ; 50FE 0 3F0 ??? C9C9
-                J       serial_isr_return             ; 5100 0 3F0 ??? 030951
+serialrx_store_alt:     STB     A, r7
+                MOV     DP, #003f1h
+                LB      A, r1
+                ADD     DP, A
+                LB      A, r7
+                STB     A, [DP]
+                MOV     DP, er1
+                DECB    r1
+                JEQ     serialrx_store_loop
+                J       serial_isr_return
 
-serialrx_reset_state:     CLRB    r0                     ; 5103 0 3F0 ??? 2015
-                CLRB    r1                     ; 5105 0 3F0 ??? 2115
+serialrx_reset_state:     CLRB    r0
+                CLRB    r1
 
-serialtx_send_byte:     STB     A, STBUF               ; 5107 0 3F0 ??? D551
+serialtx_send_byte:     STB     A, STBUF
 
-serial_isr_return:     POPS    A                      ; 5109 1 3F0 ??? 65
-                MOV     DP, A                  ; 510A 1 3F0 ??? 52
-                L       A, 0f8h                ; 510B 1 3F0 ??? E5F8
-                ANDB    PSWH, #0feh            ; 510D 1 3F0 ??? A2D0FE
-                ST      A, IE                  ; 5110 1 3F0 ??? D51A
-                RTI                            ; 5112 1 3F0 ??? 02
+serial_isr_return:     POPS    A
+                MOV     DP, A
+                L       A, 0f8h
+                ANDB    PSWH, #0feh
+                ST      A, IE
+                RTI
 
-serialrx_cmd_dispatch:     LB      A, r0                  ; 5113 0 3F0 ??? 78
-                SUBB    A, #0c0h               ; 5114 0 3F0 ??? A6C0
-                MOV     DP, #0522fh            ; 5116 0 3F0 ??? 622F52
-                L       A, ACC                 ; 5119 1 3F0 ??? E506
-                AND     A, #000ffh             ; 511B 1 3F0 ??? D6FF00
-                ADD     DP, A                  ; 511E 1 3F0 ??? 9281
-                ADD     DP, A                  ; 5120 1 3F0 ??? 9281
-                LC      A, [DP]                ; 5122 1 3F0 ??? 92A8
-                CMP     A, #08000h             ; 5124 1 3F0 ??? C60080
-                JGE     serialrx_cmd_indirect             ; 5127 1 3F0 ??? CD05
-                MOV     DP, A                  ; 5129 1 3F0 ??? 52
-                LB      A, [DP]                ; 512A 0 3F0 ??? F2
-                J       serialrx_reset_state             ; 512B 0 3F0 ??? 030351
+serialrx_cmd_dispatch:     LB      A, r0
+                SUBB    A, #0c0h
+                MOV     DP, #0522fh
+                L       A, ACC
+                AND     A, #000ffh
+                ADD     DP, A
+                ADD     DP, A
+                LC      A, [DP]
+                CMP     A, #08000h
+                JGE     serialrx_cmd_indirect
+                MOV     DP, A
+                LB      A, [DP]
+                J       serialrx_reset_state
 
-serialrx_cmd_indirect:     MOV     DP, #07fffh            ; 512E 1 3F0 ??? 62FF7F
-                AND     A, DP                  ; 5131 1 3F0 ??? 92D2
-                MOV     DP, A                  ; 5133 1 3F0 ??? 52
-                MOV     er0, [DP]              ; 5134 1 3F0 ??? B248
-                LB      A, r0                  ; 5136 0 3F0 ??? 78
-                MOVB    r4, r1                 ; 5137 0 3F0 ??? 214C
-                MOV     er0, #050a0h           ; 5139 0 3F0 ??? 4498A050
-                J       serialtx_send_byte             ; 513D 0 3F0 ??? 030751
+serialrx_cmd_indirect:     MOV     DP, #07fffh
+                AND     A, DP
+                MOV     DP, A
+                MOV     er0, [DP]
+                LB      A, r0
+                MOVB    r4, r1
+                MOV     er0, #050a0h
+                J       serialtx_send_byte
                 DB  077h,0CDh,0CBh,0BFh,062h,01Eh,003h,0F9h
                 DB  0D2h,072h,072h,0D2h,077h,050h,0CBh,0B3h
                 DB  045h,098h,02Fh,052h,044h,098h,067h,050h
@@ -11313,8 +11313,8 @@ serialrx_cmd_indirect:     MOV     DP, #07fffh            ; 512E 1 3F0 ??? 62FF7
                 DB  00Ch,0A3h,01Dh,031h,00Dh,045h,07Ah,07Ch
                 DB  0D2h,0FAh,003h,003h,051h
 
-serialtx_error_ee:     LB      A, #0eeh               ; 519D 0 3F0 ??? 77EE
-                J       serialrx_reset_state             ; 519F 0 3F0 ??? 030351
+serialtx_error_ee:     LB      A, #0eeh
+                J       serialrx_reset_state
                 DB  078h,00Ah,00Bh,0A3h,02Ch,0CDh,003h,04Ch
                 DB  0CBh,00Ah,00Ch,0A3h,02Dh,0CAh,004h,00Dh
                 DB  04Eh,0CBh,001h,04Dh,0CEh,001h,001h,065h
@@ -11346,14 +11346,14 @@ serialtx_error_ee:     LB      A, #0eeh               ; 519D 0 3F0 ??? 77EE
                 DB  001h,0ECh,001h,0E2h,001h,082h,083h,000h
                 DB  000h
 
-mul_scale_clamp:     MUL                            ; 528B 1 108 280 9035
-                ROL     A                      ; 528D 1 108 280 33
-                L       A, er1                 ; 528E 1 108 280 35
-                ROL     A                      ; 528F 1 108 280 33
-                JGE     mul_scale_clamp_return             ; 5290 1 108 280 CD03
-                L       A, #0ffffh             ; 5292 1 108 280 67FFFF
+mul_scale_clamp:     MUL
+                ROL     A
+                L       A, er1
+                ROL     A
+                JGE     mul_scale_clamp_return
+                L       A, #0ffffh
 
-mul_scale_clamp_return:     RT                             ; 5295 1 108 280 01
+mul_scale_clamp_return:     RT
 
 mulb_scale_clamp:     MULB
                 L       A, ACC
@@ -13260,7 +13260,7 @@ ManualBstInput1invert:       DB  000h
 ManualBstchkMil:       DB  000h
 ManualBstchkFtl:       DB  000h
 ManualBst1:                 DW  00753h
-ManualBst2:       DB  01Fh ; 61C6
+ManualBst2:       DB  01Fh
 ManualBst3:       DB  0FFh
 Stage2on:       DB  008h
 Stage3on:       DB  008h

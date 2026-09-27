@@ -6,7 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
     <!-- the feature file lives with the ROM listings it was built from, and ships next to every program -->
-    <None Include="..\..\roms\features.json" Link="features.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\roms\features.json" Link="features.json" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\..\roms\features.json')" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\OkiRomSim.Assembler\OkiRomSim.Assembler.csproj" />

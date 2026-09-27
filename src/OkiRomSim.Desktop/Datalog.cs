@@ -13,7 +13,7 @@ public sealed class SerialLink : IByteLink, IDisposable
     readonly SerialPort _port;
     public string Name => _port.PortName;
 
-    /// Raise DTR and RTS when the port is opened. Most OBD1 cables do not care; a few take their power from those lines and read nothing at all without it (Settings > Datalog).
+    /// Raise DTR and RTS when the port is opened. Most OBD1 cables do not care; a few take their power from those lines and read nothing at all without it (Settings > Emulator & datalog).
     public static bool RaiseDtrRts;
     public static int WriteTimeoutMs = 300;
 
@@ -52,7 +52,32 @@ public sealed class SerialLink : IByteLink, IDisposable
     }
     public void Dispose() { try { _port.Close(); _port.Dispose(); } catch { } }
 
-    public static string[] Ports() => [.. SerialPort.GetPortNames().OrderBy(p => p.Length).ThenBy(p => p)];
+    /// The serial ports on this computer. None (and a line in the log saying why) when the serial library cannot list them - a loose placeholder copy of System.IO.Ports.dll beside the program is the usual reason - so a window that offers ports still opens.
+    public static string[] Ports()
+    {
+        try { return [.. SerialPort.GetPortNames().OrderBy(p => p.Length).ThenBy(p => p)]; }
+        catch (Exception ex) when (ex is PlatformNotSupportedException or IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            if (!_portsWarned)
+            {
+                _portsWarned = true;
+                AppLog.Warn("serial", $"cannot list serial ports: {ex.Message} (System.IO.Ports loaded from " +
+                    $"{(typeof(SerialPort).Assembly.Location is { Length: > 0 } l ? l : "inside the program")}; a loose System.IO.Ports.dll beside the program should not be there)");
+            }
+            return [];
+        }
+    }
+    static bool _portsWarned;
+}
+
+/// The datalog through the emulator's own port (a Demon asks the ECU itself): the port stays the emulator's - it is not closed when logging stops, and an upload waits for the exchange under way to finish.
+public sealed class EmulatorLink(MoatesTrace emulator) : IByteLink
+{
+    public string Name => "emulator" + (emulator.PortName.Length > 0 ? $" ({emulator.PortName})" : "");
+    public void Write(byte[] data) => emulator.LineWrite(data);
+    public int Read(byte[] buffer, int offset, int count, int timeoutMs) => emulator.LineRead(buffer, offset, count, timeoutMs);
+    public void Discard() => emulator.LineDiscard();
+    public IDisposable? Hold() => emulator.Hold();
 }
 
 /// The simulated ROM's own serial port: the datalog talks to the ROM's datalogging code exactly as it would to a car (a "virtual ECU"). Bytes travel at the cable's baud rate in simulated time, so the simulator must be running for answers to come back.
@@ -64,13 +89,13 @@ public sealed class SimLink : IByteLink
     public void Write(byte[] data) => _host.SerialToRom(data);
     public void Discard() => _host.SerialDiscard();
     int _plainBaud;
-    /// The stock tester link is a 9600-baud K-line; back to the logger's own speed when it is switched off.
+    /// The stock tester link is a 9600-baud single wire; back to the logger's own speed when it is switched off.
     public void SetBaud(int baud) { if (_plainBaud == 0) _host.SerialBaud = baud; else _plainBaud = baud; }
-    public void SetKLine(bool on)
+    public void SetEcho(bool on)
     {
         if (on && _plainBaud == 0) { _plainBaud = _host.SerialBaud; _host.SerialBaud = 9600; }
         else if (!on && _plainBaud != 0) { _host.SerialBaud = _plainBaud; _plainBaud = 0; }
-        _host.SerialKLine = on;
+        _host.SerialEcho = on;
     }
 
     public int Read(byte[] buffer, int offset, int count, int timeoutMs)
@@ -216,7 +241,7 @@ public sealed class WidebandReader : IDisposable
     public void Dispose() => Stop();
 }
 
-/// Datalogging from a car (serial) or the simulated ROM (virtual ECU): finds the protocol, polls frames as fast as the ECU answers, adds the wideband and aux channels, keeps every frame and every packet (for the packet monitor), and hands frames to whoever listens. Shared by the Datalog page, Tuner mode and MCP agents.
+/// Datalogging from a car (serial) or the simulated ROM (virtual ECU): finds the protocol, polls frames as fast as the ECU answers, adds the wideband and aux channels, keeps every frame and every packet (for the packet monitor), and hands frames to whoever listens. Shared by the Datalog page, Tuner mode and MCP clients.
 public sealed class DatalogEngine : IDisposable
 {
     readonly SimHost _host;
@@ -229,11 +254,17 @@ public sealed class DatalogEngine : IDisposable
     readonly Queue<Packet> _packets = new();
     long _packetSerial;
     public readonly WidebandReader Wideband = new();
+    /// Spikes out of the values, and the readings blended (Datalogging > Smooth values; Settings > Emulator & datalog).
+    public DatalogSmoother Smooth { get; } = new();
 
     public event Action<LogFrame>? Frame;
     public int Good, Bad;
-    public bool Running => _thread?.IsAlive == true;
+    public bool Running => _thread?.IsAlive == true || External != null;
     public string Status { get; private set; } = "not connected";
+    /// Frames from somewhere else (a plugin reading a scan tool): its name while it is feeding the log, else null.
+    public string? External { get; private set; }
+    /// The external source was stopped from here (Disconnect): the plugin feeding it should stop too.
+    public event Action? ExternalStopped;
     public DatalogProtocol? Protocol { get; private set; }
     public string Source { get; private set; } = "";
     public LogFrame? Latest { get; private set; }
@@ -245,7 +276,43 @@ public sealed class DatalogEngine : IDisposable
     /// A layout worked out from the ROM (DatalogLayout.Detect); used when the protocol is set to its name, and tried after the built-in ones during auto-detection.
     public DetectedProtocol? Detected { get; set; }
 
-    public DatalogEngine(SimHost host) { _host = host; }
+    /// Service commands waiting for the next gap between frames (Command).
+    readonly System.Collections.Concurrent.ConcurrentQueue<(byte Cmd, TaskCompletionSource<(byte? Answer, string Note)> Done)> _commands = new();
+
+    /// Send one service command (TroubleCodes: clear the codes, injectors off...) between frames, and its answer: null when nothing came back (the note says why). The datalog must be logging.
+    public async Task<(byte? Answer, string Note)> Command(byte cmd)
+    {
+        if (!(_thread?.IsAlive == true) || Protocol == null)
+            return (null, External != null ? $"the datalog comes from {External}: it takes no commands" : "the datalog is not connected: connect it first (Datalogging menu)");
+        var done = new TaskCompletionSource<(byte?, string)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _commands.Enqueue((cmd, done));
+        var first = await Task.WhenAny(done.Task, Task.Delay(4000));
+        if (first != done.Task) { done.TrySetResult((null, "no gap between frames to send it in (4 s)")); }
+        var r = await done.Task;
+        AppLog.Write(LogKind.Serial, "datalog", $"command {cmd:X2}: {r.Item2}");
+        return r;
+    }
+
+    /// Brings the link back when it is lost (a cable pulled, the ECU switched off): Settings > Emulator & datalog > Reconnecting.
+    public LinkSupervisor Watch { get; }
+    (string Port, string Protocol, int Baud)? _last;
+    long _startedAt, _lastFrameAt;
+
+    public DatalogEngine(SimHost host)
+    {
+        _host = host;
+        Watch = new LinkSupervisor("datalog", IsUp, () => { if (Watch!.Wanted && _last is { } l) StartLink(l.Port, l.Protocol, l.Baud); });
+    }
+
+    /// Up: frames are coming. Still coming up (null): the handshake is under way, or frames stopped only a moment ago.
+    bool? IsUp()
+    {
+        static double Since(long t) => (Stopwatch.GetTimestamp() - t) / (double)Stopwatch.Frequency;
+        if (!Running) return false;
+        if (_lastFrameAt == 0) return Since(_startedAt) < 15 ? null : false;
+        double quiet = Since(_lastFrameAt);
+        return quiet < 4 ? true : quiet < 8 ? null : false;
+    }
 
     public List<LogFrame> Frames() { lock (_lock) return [.. _frames]; }
     public int FrameCount { get { lock (_lock) return _frames.Count; } }
@@ -283,19 +350,37 @@ public sealed class DatalogEngine : IDisposable
         }
     }
 
-    /// Start logging: port "simulator" talks to the simulated ROM; protocol "auto" detects.
+    /// Start logging: port "simulator" talks to the simulated ROM; protocol "auto" detects. From now on a lost link is tried again.
     public void Start(string port, string protocol, int baud)
     {
-        Stop();
+        StartLink(port, protocol, baud);
+        Watch.Wanted = true;
+    }
+
+    void StartLink(string port, string protocol, int baud)
+    {
+        StopLink();
+        _last = (port, protocol, baud);
+        _startedAt = Stopwatch.GetTimestamp(); _lastFrameAt = 0;
         // a protocol with a line speed of its own (the stock tester link) uses it unless one was set in Settings
         var named = protocol.Equals("auto", StringComparison.OrdinalIgnoreCase) ? null : DatalogProtocol.ByName(protocol);
         if (named != null && named.Baud != 38400 && baud == 38400) baud = named.Baud;
-        _link = port.Equals("simulator", StringComparison.OrdinalIgnoreCase) ? new SimLink(_host) : new SerialLink(port, baud);
+        // the emulator's own port (named, or the one it is connected on: a port cannot be opened twice) goes through it
+        bool viaEmulator = IsEmulatorPort(port);
+        if (viaEmulator && !_host.Emulator.Connected)
+        {
+            Status = "the datalog goes through the emulator: connect the emulator (Emulator menu)";
+            throw new IOException(Status);
+        }
+        _link = port.Equals("simulator", StringComparison.OrdinalIgnoreCase) ? new SimLink(_host)
+              : viaEmulator ? new EmulatorLink(_host.Emulator)
+              : new SerialLink(port, baud);
         Source = _link.Name;
         if (_link is SimLink) { _host.SerialBaud = baud; if (!_host.IsRunning && _host.LoadedPath != null) _host.Control("run"); }
         _stop = false;
         _packetsLogged = 0;
         Good = Bad = 0;
+        Smooth.Reset();
         _clock.Restart();
         var chosen = protocol.Equals("auto", StringComparison.OrdinalIgnoreCase) ? null
                      : Detected is { } det && protocol.Equals(det.Name, StringComparison.OrdinalIgnoreCase) ? det
@@ -305,7 +390,20 @@ public sealed class DatalogEngine : IDisposable
             AppLog.Warn("datalog", $"protocol '{protocol}' is not one of the ones here any more; detecting it instead");
         Status = $"connecting to {Source}...";
         AppLog.Write(LogKind.Serial, "datalog", $"start on {Source} ({protocol}, {baud} baud)");
-        _thread = new Thread(() => Run(chosen)) { IsBackground = true, Name = "datalog" };
+        if (viaEmulator)
+        {
+            // the Demon asks the ECU itself: the ROM's protocol goes through it, reduced to its one request
+            if (chosen != null && chosen.Relay == null)
+            {
+                Status = $"{chosen.Name} cannot go through the emulator (Settings > Emulator & datalog: pick auto, or a multi-byte protocol)";
+                throw new IOException(Status);
+            }
+            chosen = chosen != null ? new EmulatorRelay(chosen) : null;
+            _relayAuto = chosen == null;
+        }
+        else _relayAuto = false;
+        // the datalog comes first in Tuner mode: its thread is not the one kept waiting when the machine is busy
+        _thread = new Thread(() => Run(chosen)) { IsBackground = true, Name = "datalog", Priority = ThreadPriority.AboveNormal };
         _thread.Start();
     }
 
@@ -314,6 +412,20 @@ public sealed class DatalogEngine : IDisposable
         var link = _link!;
         try
         {
+            if (chosen == null && _relayAuto)
+            {
+                // through the Demon: each protocol it can ask the ECU for, in turn
+                Status = "detecting the protocol through the emulator...";
+                var report = new System.Text.StringBuilder();
+                foreach (var inner in EmulatorRelay.Candidates())
+                {
+                    var relay = new EmulatorRelay(inner) { OnPacket = OnPacket };
+                    if (relay.Handshake(link, out var why) && relay.Poll(link, 0, out why) != null) { chosen = relay; break; }
+                    report.AppendLine($"{relay.Name}: {why}");
+                }
+                AppLog.Write(LogKind.Serial, "datalog", "protocol detection through the emulator:\n" + report.ToString().TrimEnd());
+                if (chosen == null) { Status = "no datalog protocol answered through the emulator (see the Debug page)."; return; }
+            }
             if (chosen == null)
             {
                 Status = "detecting the protocol...";
@@ -349,6 +461,13 @@ public sealed class DatalogEngine : IDisposable
             var rate = Stopwatch.StartNew(); int inWindow = 0;
             while (!_stop)
             {
+                while (_commands.TryDequeue(out var c))
+                {
+                    byte? a = null; string cn;
+                    try { a = Protocol.Command(link, c.Cmd, out cn); }
+                    catch (Exception ex) { cn = ex.Message; }
+                    c.Done.TrySetResult((a, cn));
+                }
                 double t = _clock.Elapsed.TotalSeconds;
                 var f = Protocol.Poll(link, t, out var note);
                 if (f == null)
@@ -379,12 +498,14 @@ public sealed class DatalogEngine : IDisposable
                 timeouts = 0;
                 Good++;
                 Enrich(f);
+                Smooth.Apply(f);
                 lock (_lock)
                 {
                     _frames.Add(f);
                     if (_frames.Count > KeepFrames) _frames.RemoveRange(0, _frames.Count - KeepFrames);
                 }
                 Latest = f;
+                _lastFrameAt = Stopwatch.GetTimestamp();
                 inWindow++;
                 if (rate.Elapsed.TotalSeconds >= 1) { FramesPerSecond = inWindow / rate.Elapsed.TotalSeconds; inWindow = 0; rate.Restart(); }
                 try { Frame?.Invoke(f); } catch (Exception ex) { AppLog.Error("datalog", "frame handler failed", ex); }
@@ -410,17 +531,85 @@ public sealed class DatalogEngine : IDisposable
             if (c.Evaluate(f) is double v && !double.IsNaN(v)) f.Extra[c.Name] = Math.Round(v, 4);
     }
 
+    /// Stop logging (the user's stop: the link is not tried again).
     public void Stop()
+    {
+        Watch.Wanted = false;
+        // after any reconnect the watch has under way, which would otherwise open the port again once this has closed it
+        Watch.Exclusive(() => { StopLink(); return true; });
+        EndExternal();
+    }
+
+    /// A plugin is about to feed the log frames of its own (Inject): the page shows and records them like a connection's.
+    public void BeginExternal(string name)
+    {
+        Stop();
+        External = name;
+        Source = name;
+        Status = $"logging from {name}";
+        Good = Bad = 0;
+        Smooth.Reset();
+        _clock.Restart();
+        _startedAt = Stopwatch.GetTimestamp(); _lastFrameAt = 0;
+        _externalRate.Restart(); _externalInWindow = 0;
+        AppLog.Write(LogKind.Serial, "datalog", "logging from " + name);
+    }
+    readonly Stopwatch _externalRate = new();
+    int _externalInWindow;
+
+    /// One frame from the external source (any thread): timed, enriched (wideband, aux channels), kept and handed on.
+    public void Inject(LogFrame f)
+    {
+        if (External == null) return;
+        f.T = _clock.Elapsed.TotalSeconds;
+        f.Protocol ??= External;
+        Good++;
+        Enrich(f);
+        Smooth.Apply(f);
+        lock (_lock)
+        {
+            _frames.Add(f);
+            if (_frames.Count > KeepFrames) _frames.RemoveRange(0, _frames.Count - KeepFrames);
+        }
+        Latest = f;
+        _lastFrameAt = Stopwatch.GetTimestamp();
+        _externalInWindow++;
+        if (_externalRate.Elapsed.TotalSeconds >= 1) { FramesPerSecond = _externalInWindow / _externalRate.Elapsed.TotalSeconds; _externalInWindow = 0; _externalRate.Restart(); }
+        try { Frame?.Invoke(f); } catch (Exception ex) { AppLog.Error("datalog", "frame handler failed", ex); }
+    }
+
+    /// The external source has stopped.
+    public void EndExternal()
+    {
+        if (External == null) return;
+        Status = $"stopped: {Good} frames from {External}";
+        External = null;
+        try { ExternalStopped?.Invoke(); } catch (Exception ex) { AppLog.Error("datalog", "external stop handler failed", ex); }
+    }
+
+    /// Frames came in the last few seconds.
+    public bool Fresh => _lastFrameAt != 0 && (Stopwatch.GetTimestamp() - _lastFrameAt) / (double)Stopwatch.Frequency < 4;
+
+    /// Logging through the emulator with the protocol still to be found.
+    bool _relayAuto;
+
+    /// Does this datalog port mean the emulator's? "emulator", or the port the emulator is connected on.
+    public bool IsEmulatorPort(string port) =>
+        port.Equals("emulator", StringComparison.OrdinalIgnoreCase)
+        || (_host.Emulator.Connected && port.Equals(_host.Emulator.PortName, StringComparison.OrdinalIgnoreCase));
+
+    void StopLink()
     {
         _stop = true;
         try { _thread?.Join(800); } catch { }
         _thread = null;
+        while (_commands.TryDequeue(out var c)) c.Done.TrySetResult((null, "the datalog stopped"));
         // the simulated line goes back to a plain serial port for the next protocol
-        try { _link?.SetKLine(false); } catch { }
+        try { _link?.SetEcho(false); } catch { }
         if (_link is IDisposable d) d.Dispose();
         _link = null;
         if (Status.StartsWith("logging")) Status = $"stopped: {Good} frames, {Bad} missed";
     }
 
-    public void Dispose() { Stop(); Wideband.Stop(); }
+    public void Dispose() { Watch.Dispose(); Stop(); Wideband.Stop(); }
 }

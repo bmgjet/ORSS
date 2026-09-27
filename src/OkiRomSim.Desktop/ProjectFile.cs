@@ -23,6 +23,16 @@ public sealed class ProjectData
     public int SpeedIndex { get; set; }
     public string Package { get; set; } = "";
     public double CrystalMHz { get; set; }
+    /// Tuner mode or the simulator's workbench.
+    public bool TunerMode { get; set; }
+    /// The calibration page: the table or setting open, and its view (0 Table, 1 Line, 2 3D).
+    public string? CalibrationItem { get; set; }
+    public int CalibrationView { get; set; }
+    /// The Trace page's Hit trace box.
+    public bool HitTrace { get; set; }
+    /// The datalog loaded (datalog/log.csv), its name and the frame the slider was on.
+    public string DatalogName { get; set; } = "";
+    public int DatalogPosition { get; set; }
 
     // not in project.json; carried in their own zip entries
     [System.Text.Json.Serialization.JsonIgnore] public SimHost.MachineState? Machine { get; set; }
@@ -34,6 +44,8 @@ public sealed class ProjectData
     [System.Text.Json.Serialization.JsonIgnore] public string? ProcessorJson { get; set; }
     /// settings.json: the settings in use while the ROM was open (no window layout, no secrets).
     [System.Text.Json.Serialization.JsonIgnore] public string? SettingsJson { get; set; }
+    /// datalog/log.csv: the frames that were loaded or recorded, every channel and the raw frames.
+    [System.Text.Json.Serialization.JsonIgnore] public byte[]? DatalogCsv { get; set; }
 }
 
 public sealed class ProjectSource
@@ -76,6 +88,7 @@ public static class ProjectFile
         foreach (var (name, text) in p.Views) Text($"views/{name}", text);
         if (p.ProcessorJson != null) Text("processor.json", p.ProcessorJson);
         if (p.SettingsJson != null) Text("settings.json", p.SettingsJson);
+        if (p.DatalogCsv is { Length: > 0 } log) Bytes("datalog/log.csv", log);
     }
 
     public static ProjectData Load(string path)
@@ -108,6 +121,7 @@ public static class ProjectFile
             p.Views[e.FullName["views/".Length..]] = Text(e.FullName) ?? "";
         p.ProcessorJson = Text("processor.json");
         p.SettingsJson = Text("settings.json");
+        if (zip.GetEntry("datalog/log.csv") != null) p.DatalogCsv = Bytes("datalog/log.csv");
         return p;
     }
 }

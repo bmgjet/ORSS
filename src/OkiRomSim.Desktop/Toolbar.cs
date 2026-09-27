@@ -82,6 +82,25 @@ public static class Toolbar
         return b;
     }
 
+    /// An icon on its own: for the everyday actions whose tooltip says what they do (Back, Undo, Redo), so no screen goes on a label.
+    public static Button IconButton(string icon, string tip, Action run)
+    {
+        var b = new Button { Content = Glyph(icon, 14), Margin = new Thickness(2, 0), Padding = new Thickness(8, 4), MinWidth = 32 };
+        b.Click += (_, _) => run();
+        ToolTip.SetTip(b, tip);
+        return b;
+    }
+
+    /// A menu's label with a coloured dot in front: the state of the link the menu drives.
+    public static Control DotLabel(StatusDot dot, string icon, string text)
+    {
+        var sp = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5 };
+        sp.Children.Add(UiStyles.Adopt(dot));
+        sp.Children.Add(Glyph(icon, 13));
+        sp.Children.Add(new TextBlock { Text = text, VerticalAlignment = VerticalAlignment.Center });
+        return sp;
+    }
+
     /// Put an icon on a button that is already built (its label is kept).
     public static Button WithIcon(this Button b, string icon)
     {

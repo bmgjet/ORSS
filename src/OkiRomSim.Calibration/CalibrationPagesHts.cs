@@ -125,6 +125,12 @@ public static class HtsPages
                 V("injector.crank", "Cranking trim", "%"),
                 V("injector.postfuel", "Post start trim", "%"),
                 V("injector.tipin", "Tip in trim", "%")),
+            G("Injector size scaling (added feature)",
+                S("injector.enable", "Scale the fuel for different injectors",
+                  "Off: the fuel maps as they are. On: every pulse is scaled by the size the maps were written for against the size fitted, and the trim below is added. This never switches the injectors off."),
+                V("injector.stock", "Injectors the maps were written for", "cc", "Size in cc/min of the injectors the fuel maps were tuned on (240 cc on a stock P30)."),
+                V("injector.fitted", "Injectors fitted", "cc", "Size in cc/min of the injectors in the engine now."),
+                V("injector.trim", "Extra fuel trim", "%", "A trim on top of the scaling, richer (+) or leaner (-).")),
             G("Injector lag", T("injector.lag", "Lag vs battery", "ms")),
             G("Injector size",
                 V("injector.coldlow", "Cold, low", "cc"),
@@ -318,12 +324,13 @@ public static class HtsPages
         ]);
 
     public static CalPage AntiStart() => new("antistart", "Anti-start", "Protection",
-        "HTS120: the ECU powers up with fuel and spark cut until the A/C switch is on with the throttle past a point. " +
+        "The ECU powers up with fuel and spark cut until a switch (the A/C switch by default) is on with the throttle past a point. " +
         "Throttle alone would clash with the code-flash request.",
         [
             G("Anti-start protection",
-                S("antistart.enable", "Enable anti-start"),
-                V("antistart.tps", "Unlock with A/C on and TPS at least", "V", "D0h (about 4.1 V) is near full throttle.")),
+                [S("antistart.enable", "Enable anti-start"),
+                 .. Input("antistart.input", "Unlock input", alwaysOn: true, "The switch that unlocks it, with the throttle. Always on: the throttle alone.")],
+                V("antistart.tps", "Unlock with TPS at least", "", "Near full throttle.")),
         ]);
 
     // ---------------------------------------------------------------- boost
@@ -561,6 +568,7 @@ public static class HtsPages
         "system deleted - turning one off on a car that still has the part hides a real fault.",
         [
             G("Sensor / hardware options",
+                S("romoptions.checksum", "ROM checksum check (resets the ECU when the ROM's sum is wrong: leave off for live tuning)"),
                 S("romoptions.dtc13", "Disable code 13 (PA / baro)"),
                 S("romoptions.dtc14", "Disable code 14 (idle air control valve)"),
                 S("romoptions.dtc16", "Disable code 16 (injector test)"),

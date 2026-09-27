@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 
 namespace OkiRomSim.Mcp;
 
-/// MCP over stdio: one JSON-RPC message per line in, one per line out. What local agent launchers (Claude Code, Claude Desktop, Cursor, ...) use.
+/// MCP over stdio: one JSON-RPC message per line in, one per line out. What local client launchers use.
 public static class McpStdio
 {
     public static async Task RunAsync(McpServer server, TextReader input, TextWriter output, CancellationToken ct = default)
@@ -34,7 +34,7 @@ public static class McpStdio
 public sealed class McpHttpOptions
 {
     public int Port { get; set; } = 8765;
-    /// Listen on every interface (remote agents) instead of only this machine.
+    /// Listen on every interface (remote clients) instead of only this machine.
     public bool AllowRemote { get; set; }
     /// Required whenever AllowRemote is on; optional (but honoured) for local use.
     public string Password { get; set; } = "";

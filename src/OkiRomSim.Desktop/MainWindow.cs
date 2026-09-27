@@ -22,13 +22,27 @@ public sealed class MainWindow : Window
     // centre
     readonly TextBlock _docHeader = new() { FontSize = 12, Margin = new Thickness(8, 4), Opacity = 0.85, TextTrimming = TextTrimming.CharacterEllipsis };
     readonly CodeEditor _editor = new();
-    readonly ListBox _problems = new();
+    readonly DataList _problems = new(new("", 26), new("Severity", 80), new("Where", 240), new("Message", 300))
+    {
+        Empty = "Build (Ctrl+B) to check the source: errors and warnings appear here. Click one to go to its line.",
+    };
     readonly TextBox _trace = Readonly();
     readonly TextBox _memory = Readonly();
     readonly TextBox _memAddr = Mono(new TextBox { Text = "0080", Width = 80 });
-    readonly ListBox _bpList = new();
-    readonly TextBox _lookupQ = new() { Watermark = "label, setting or address (3DDE, 0d9h, fuelpump)", Width = 380 };
+    readonly DataList _bpList = new(new("", 26), new("Address", 70), new("Label", 220), new("Source", 260))
+    {
+        Empty = "No breakpoints. Type a label or an address above and press Break, double-click a disassembly line, or F9 on a source line.",
+    };
+    readonly TextBox _lookupQ = new() { Watermark = "label, setting or address (3DDE, 0d9h, fuelpump)", Width = 300 };
     readonly ListBox _lookupList = new();
+    readonly DataList _traceList = new(new("PC", 70), new("Routine", 230), new("Instruction", 300))
+    {
+        Empty = "Run or step the simulator: the instructions it executes appear here, the newest at the bottom.",
+    };
+    readonly DataList _lookupData = new(new("Address", 80), new("Name", 280), new("Kind", 110), new("Instruction", 240), new("Source", 160))
+    {
+        Empty = "Type a label, a setting or an address above: Look up finds it, Find references lists every instruction that uses it.",
+    };
     readonly TabControl _bottom = new();
     readonly CalibrationView _calibration;
     readonly HitTraceView _hitView;
@@ -49,27 +63,27 @@ public sealed class MainWindow : Window
     readonly StackPanel _inputs = new();
 
     // right
-    readonly TextBlock _regs = Mono(new TextBlock { FontSize = 12 });
-    readonly TextBlock _flags = Small("");
-    readonly TextBlock _calls = Mono(new TextBlock { FontSize = 11, TextWrapping = TextWrapping.NoWrap, LineHeight = 15 });
-    const int CallStackLines = 8;
-    readonly ListBox _disasm = new();
-    readonly TextBox _disAddr = Mono(new TextBox { Watermark = "addr/label", Width = 110 });
-    readonly TextBlock _outputs = Mono(new TextBlock { FontSize = 11.5 });
-    readonly TextBlock _ports = Mono(new TextBlock { FontSize = 11 });
-    readonly TextBlock _hot = Small("");
+    readonly CpuView _cpu = new();
+    readonly DataList _callList = new(new("", 44), new("Entry", 52), new("Routine", 210), new("Returns to", 90))
+    {
+        RowHeight = 18, Empty = "top level: no routine entered",
+    };
+    const int CallStackLines = 7;
+    readonly DataList _disList = new(new("", 20), new("Addr", 52), new("Bytes", 86), new("Label", 150), new("Instruction", 250)) { RowHeight = 18 };
+    readonly TextBox _disAddr = Mono(new TextBox { Watermark = "addr/label", Width = 110, FontSize = 11.5, MinHeight = 24, Padding = new Thickness(6, 2) });
+    readonly DataList _outList = new(new("Output", 150), new("Pin", 96), new("State", 84), new("Detail", 230)) { RowHeight = 18 };
+    readonly DataList _portList = new(new("Pin", 52), new("Level", 46), new("Dir", 40), new("Changes/s", 80), new("High ms", 66), new("Low ms", 66), new("Function", 170), new("Driven by", 230)) { RowHeight = 18 };
 
     // toolbar / status
     readonly TextBlock _status = new() { Text = "ready", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0) };
     string _sticky = "";
     readonly bool _ready;
     readonly Button _run, _pause, _step, _over, _into, _out, _reset, _buildBtn;
-    readonly Button _tunerButton;
     AppSettings _settings = AppSettings.Load();
     readonly LayoutTransformControl _scaler = new();
     OkiRomSim.Mcp.McpHttp? _mcpHttp;
     string _mcpState = "off";
-    /// Where an MCP agent on another machine can always put a file, and read one back.
+    /// Where an MCP client on another machine can always put a file, and read one back.
     public static string McpTransferDir => Path.Combine(AppSettings.Dir, "transfer");
 
     readonly Dictionary<string, string> _buffers = [];        // open file -> text as on screen
@@ -123,15 +137,23 @@ public sealed class MainWindow : Window
         _chip.Message += m => SetStatus(m);
         _calibration = new CalibrationView(_host, () => _buffers.Select(kv => (kv.Key, kv.Value)), () => GetTopLevel(this));
         _calibration.GoToAddress += GoToAddress;
-        _hitView = new HitTraceView(_host, f => ReadBuffer(Path.GetFullPath(f)) ?? (File.Exists(f) ? File.ReadAllText(f) : null));
+        // favourites belong to a ROM: kept by its file name (a built ROM and its .bin share it)
+        string FavKey() => Path.GetFileNameWithoutExtension(_host.LoadedPath ?? "").ToLowerInvariant();
+        _calibration.OpenSettingsPage += page => OpenSettings(page);
+        _host.ItemWritten += item => Dispatcher.UIThread.Post(() => KeepInBuildFile(item));
+        _calibration.GetFavourites = () => _settings.Favourites.TryGetValue(FavKey(), out var l) ? l : [];
+        _calibration.SaveFavourites = list => { _settings.Favourites[FavKey()] = list; _settings.Save(); };
+        _calibration.StretchChanged += on => { _settings.TableStretch = on; _settings.Save(); };
+        _hitView = new HitTraceView(_host, _traceList, f => ReadBuffer(Path.GetFullPath(f)) ?? (File.Exists(f) ? File.ReadAllText(f) : null));
         _hitView.GoToAddress += GoToAddress;
-        _datalog = new DatalogView(_host, () => GetTopLevel(this));
+        _datalog = new DatalogView(_host, () => GetTopLevel(this), () => _settings);
         _datalog.GoToAddress += GoToAddress;
         _debug = new DebugView(() => GetTopLevel(this));
         _calibration.ExpandRequested += ToggleExpand;
         _calibration.CompareRequested += OpenCompare;
         _calibration.OverlayFrames = () => _datalog.Frames();
         _calibration.DatalogMenu = (live, setLive) => _datalog.MenuEntries(live, setLive);
+        _calibration.DatalogState = _datalog.LinkStatus;
         _datalog.CurrentFrameChanged += f => { if (_tuner || _datalog.Engine.Running && _datalog.Engine.Source != "simulator") _calibration.SetEngineState(f); };
         // an .rlog carries the ROM the car was running: offer to open it
         _datalog.RomFromLog += async (rom, name) =>
@@ -157,6 +179,7 @@ public sealed class MainWindow : Window
             _external.Dispose();
             _datalog.Gauges.CloseWidgets();
             _hitView.Shutdown(); _datalog.Shutdown(); StopMcp(); _host.EmulatorDisconnect();
+            _plugins?.StopAll();
         };
         // every button pressed goes to the Debug page's action log
         Button.ClickEvent.AddClassHandler<Button>((b, _) =>
@@ -176,7 +199,6 @@ public sealed class MainWindow : Window
             "Follow the jump under the PC even when its condition says otherwise: a conditional branch is forced taken, so you can walk the path the flags are not taking.");
         _out = ToolButton("Out (Shift+F11)", () => Control("stepout"), "Run until the current routine or interrupt handler returns to its caller.");
         _reset = ToolButton("↻ Reset", () => Control("reset"), "Reset the CPU to the reset vector; the loaded image, breakpoints and inputs are kept.");
-        _tunerButton = ToolButton("Tuner mode", () => SetTunerMode(!_tuner), "Switch between the full simulator workbench and Tuner mode: the calibration editor as the main page with datalogging beside it.");
 
         var chrome = DarkChrome.Apply(this, Title!);
         var shell = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
@@ -193,7 +215,28 @@ public sealed class MainWindow : Window
         _editor.WordDoubleClicked += OnWordDoubleClicked;
         _checkTimer.Tick += (_, _) => { _checkTimer.Stop(); CheckBuildNeeded(); };
 
+        // the shipped ROM sources: the formulas of tables Detect places from them
+        DefinitionBuilder.FormulaSources.Add(Path.Combine(AppContext.BaseDirectory, "Templates"));
         ApplySettings(first: true);
+        // the program files an update moved aside are not in use any more
+        Updater.ClearOld();
+        if (_settings.CheckUpdatesAtStart && !UiCheck.Active) CheckUpdatesQuietly();
+        // plugins: made once the window is built, so what they add has somewhere to go
+        _plugins = new PluginManager(this, _host, _calibration, _datalog, () => _settings, m => SetStatus(m),
+            (header, content, tip) =>
+            {
+                var tab = Tab(header, content, tip);
+                _bottom.Items.Add(tab);
+                return () => _bottom.Items.Remove(tab);
+            });
+        _calibration.OpenDownloaded += OpenDownloaded;
+        _calibration.EmulatorClosed += DemonClosed;
+        _calibration.DatalogPortInUse = () => _datalog.Engine.Running && _datalog.Engine.Source is { } src && !src.StartsWith("emulator") && src != "simulator" ? src : null;
+        _plugins.AddBar(_pluginBarSim);
+        _plugins.AddBar(_pluginBarTuner);
+        foreach (var p in _settings.Plugins.Where(p => p.Enabled))
+            if (_plugins.Load(p.Path) is { } why) SetStatus("plugin not loaded: " + why);
+        UpdatePluginsMenu();
         try
         {
             if (openPath == null && _settings.ReopenLastFile && _settings.LastFile is { } last && File.Exists(last)) openPath = last;
@@ -210,7 +253,10 @@ public sealed class MainWindow : Window
             try { File.AppendAllText(Path.Combine(Path.GetTempPath(), "OkiRomSimStudio-errors.log"), $"{DateTime.Now:s} {e.Exception}\n\n"); } catch { }
             SetStatus("internal error (see the Debug page): " + e.Exception.Message);
         };
-        if (_settings.TunerMode) SetTunerMode(true);
+        // the view it opens in: the welcome screen's answer (Settings > General), or whichever was used last
+        bool startTuner = _settings.StartIn switch { "simulator" => false, "tuner" => true, _ => _settings.TunerMode };
+        if (startTuner) SetTunerMode(true);
+        if (!_settings.FirstRunDone && !UiCheck.Active) Opened += (_, _) => Dispatcher.UIThread.Post(Welcome, DispatcherPriority.Background);
 
         _ready = true;
         if (_target == null) UpdateBuildButton(false, "Nothing to build yet: open a .asm or .bin.");
@@ -220,20 +266,45 @@ public sealed class MainWindow : Window
             // nothing to show while minimized; and with the simulator stopped and nothing logging or replaying, the screen only changes when you do something, so it is looked at less often
             if (WindowState == WindowState.Minimized) return;
             SafeRefresh();
+            DemonDatalog();
             bool busy = _host.IsRunning || _host.PlaybackActive || _datalog.Engine.Running;
-            var want = TimeSpan.FromMilliseconds(busy ? 150 : 300);
+            var want = TimeSpan.FromMilliseconds(busy ? Perf.BusyMs : Perf.IdleMs);
             if (timer.Interval != want) timer.Interval = want;
         };
         timer.Start();
     }
 
+    /// The first start: what the app is for, which sets the view it opens in.
+    async void Welcome()
+    {
+        if (_settings.FirstRunDone) return;
+        try
+        {
+            var w = new WelcomeWindow();
+            await Dialogs.ShowModal(w, this);
+            _settings.FirstRunDone = true;
+            if (w.Choice is { } c)
+            {
+                _settings.StartIn = c;
+                SetTunerMode(c == "tuner");
+                SetStatus(c == "tuner"
+                    ? "Tuner: open a .bin (File > Open), Detect its maps, then connect the datalog and the emulator"
+                    : "Simulator: open a .asm or .bin (File > Open), or File > New ROM to start from the skeleton");
+            }
+            _settings.Save();
+            AppLog.Action("app", $"welcome: {w.Choice ?? "decide later"}");
+        }
+        catch (Exception ex) { AppLog.Error("app", "welcome screen failed", ex); }
+    }
+
     /// The File drop-down: the things done once in a while, out of the way of the everyday buttons.
-    Button FileMenu() => Toolbar.Menu("File", Toolbar.Open,
+    Button FileMenu() => Toolbar.Menu("File", Toolbar.Open, () => [
         new Toolbar.Entry(Toolbar.Project, "New ROM…",
             "Start a new ROM: copy a template from the Templates folder (HTS120 and friends) to a file of your own and open it.", NewRom),
         new Toolbar.Entry(Toolbar.Open, "Open…  (Ctrl+O)", "Open a .asm source, a .bin/.rom image (disassembled to source) or a saved project .zip.", OpenFileDialog),
+        Toolbar.Entry.Submenu(Toolbar.Restore, "Recent", "The last ten files opened.", RecentEntries),
         new Toolbar.Entry(Toolbar.Save, "Save  (Ctrl+S)", "Write the source on screen to its file.", SaveCurrent),
-        new Toolbar.Entry(Toolbar.SaveAs, "Save as…", "Write the source on screen to a new file.", SaveAs),
+        new Toolbar.Entry(Toolbar.SaveAs, "Save as…", "Write the source on screen to a new file - or, picking .bin, the ROM image assembled from it.", SaveAs),
         Toolbar.Entry.Line,
         new Toolbar.Entry(Toolbar.Project, "Save project…  (Ctrl+Shift+S)",
             "Save everything exactly as it is to a .zip: all source buffers (saved or not), the editor position, the full simulator state (registers, RAM, patched ROM, inputs, breakpoints), calibration definitions, and the Trace, Memory, Lookup and Breakpoint views. Open the .zip to carry on.", SaveProject),
@@ -241,9 +312,25 @@ public sealed class MainWindow : Window
             "Open the newest automatic restore point (Settings > General sets how often one is written).", RestoreLastAutoSave),
         Toolbar.Entry.Line,
         new Toolbar.Entry(Toolbar.Clear, "Clear project",
-            "Close the ROM and let go of everything - sources, definitions, machine state, hits, datalog frames and caches - leaving the app idle and using as little memory as possible (handy before handing it to an LLM agent).", ClearProject),
+            "Close the ROM and let go of everything - sources, definitions, machine state, hits, datalog frames and caches - leaving the app idle and using as little memory as possible (handy before handing it to an MCP client).", ClearProject),
+        new Toolbar.Entry(Toolbar.SaveAs, "Bin tool…",
+            "32 KB ROMs and 64 KB (512) chips: pad a ROM into the upper half of a 64 KB image, combine two ROMs on one chip, or split a 64 KB image into its two 32 KB halves.",
+            OpenBinTool),
         new Toolbar.Entry(Toolbar.Compare, "Compare…",
-            "Compare the ROM open here with another .bin or .asm: what changed in the code (routines added, removed, changed) and in the tables.", OpenCompare));
+            "Compare the ROM open here with another .bin or .asm: what changed in the code (routines added, removed, changed) and in the tables.", OpenCompare),
+        Toolbar.Entry.Line,
+        _tuner
+            ? new Toolbar.Entry(Toolbar.Tuner, "Simulator mode", "Back to the full workbench: source, simulator, disassembly and every tab.", () => SetTunerMode(false))
+            : new Toolbar.Entry(Toolbar.Tuner, "Tuner mode", "The calibration editor as the main page with datalogging beside it.", () => SetTunerMode(true)),
+        new Toolbar.Entry(Toolbar.Settings, "Settings…",
+            "UI scale, panel zoom, colours, hot keys, simulation speed, datalogging, the emulator, the processor profile, plugins and the MCP server for other programs.", OpenSettings),
+    ]);
+
+    void OpenBinTool()
+    {
+        var w = new BinToolWindow(() => _host.LoadedPath == null ? null : _host.RomCopy(), Path.GetFileName(_host.LoadedPath ?? ""));
+        _ = Dialogs.ShowModal(w, this);
+    }
 
     Button ToolButton(string text, Action onClick, string tip)
     {
@@ -259,14 +346,16 @@ public sealed class MainWindow : Window
     {
         var toolbar = new WrapPanel { Margin = new Thickness(6, 4) };
         toolbar.Children.Add(FileMenu());
+        toolbar.Children.Add(_pluginsMenuSim);
         toolbar.Children.Add(new Separator { Width = 8 });
         toolbar.Children.Add(_buildBtn.WithIcon(Toolbar.Build));
+        toolbar.Children.Add(ToolButton("⚡ Patch live (Ctrl+Shift+B)", () => PatchLive(false),
+            "Assemble the source on screen and put only the bytes that changed into the ROM that is running - no reset: the program carries on, " +
+            "RAM and all, with the new code and tables at once. With the emulator uploading changes, the car gets them too."));
         toolbar.Children.Add(new Separator { Width = 8 });
         toolbar.Children.Add(_run); toolbar.Children.Add(_pause); toolbar.Children.Add(_step);
         toolbar.Children.Add(_over); toolbar.Children.Add(_into); toolbar.Children.Add(_out); toolbar.Children.Add(_reset);
-        toolbar.Children.Add(new Separator { Width = 8 });
-        toolbar.Children.Add(_tunerButton.WithIcon(Toolbar.Tuner));
-        toolbar.Children.Add(Toolbar.Button(Toolbar.Settings, "Settings", "UI scale, panel zoom, colours, hot keys, simulation speed, datalogging, the emulator, the processor profile and the MCP server for LLM agents.", OpenSettings));
+        toolbar.Children.Add(_pluginBarSim);
 
         // ---- left: chip + engine inputs
         _package.ItemsSource = new[] { "64-pin shrink DIP (SDIP)", "64-pin QFP (SMD)" };
@@ -302,24 +391,24 @@ public sealed class MainWindow : Window
         left.Children.Add(_zInputs);
 
         // ---- centre
-        _problems.SelectionChanged += (_, _) =>
-        {
-            int i = _problems.SelectedIndex;
-            if (i >= 0 && i < _problemLoc.Count) ShowSourceLine(_problemLoc[i].file, _problemLoc[i].line);
-        };
+        _problems.Picked += r => { if (r.Tag is ValueTuple<string, int> at) ShowSourceLine(at.Item1, at.Item2); };
         Tip(_problems, "Build errors and warnings. Click one to jump to its line (it is highlighted in the editor).");
         Tip(_trace, "The last instructions executed, oldest first.");
         Tip(_editor, "The source being simulated. Ctrl+B builds, F9 toggles a breakpoint on the caret line.");
-        _bottom.Items.Add(Tab("Problems", Zoomable("Problems", _problems), "Build errors and warnings"));
-        _bottom.Items.Add(Tab("Trace", Zoomable("Trace", _trace), "Recently executed instructions"));
+        // no padding round the pages: the theme's left a strip down the left of every page, the calibration list pushed in from its edge
+        _bottom.Padding = new Thickness(0);
+        _bottom.Items.Add(Tab("Problems", Zoomable("Problems", ProblemsPanel()), "Build errors and warnings"));
+        _traceList.Activated += r => { if (r.Address >= 0) GoToAddress(r.Address); };
+        ToolTip.SetTip(_traceList, "The last instructions executed, oldest first. Double-click one to go to it in the source.");
+        _bottom.Items.Add(Tab("Trace", Zoomable("Trace", _hitView),
+            "Recently executed instructions; tick Hit trace for the ROM bytes fetched as well (simulator, or a real ECU through a Moates Ostrich 2.0 / Demon)"));
         _bottom.Items.Add(Tab("Memory", Zoomable("Memory", MemoryPanel()), "RAM / ROM hex view"));
         _zCalibration = Zoomable("Calibration", _calibration);
         _bottom.Items.Add(Tab("Calibration", _zCalibration, "Settings and tables: define, detect, edit, export, emulator"));
-        _bottom.Items.Add(Tab("Lookup / xref", Zoomable("Lookup", LookupPanel()), "Find labels, settings and every instruction that references an address"));
-        _bottom.Items.Add(Tab("Breakpoints", Zoomable("Breakpoints", BreakpointPanel()), "Breakpoints"));
+        _bottom.Items.Add(Tab("Lookup & breakpoints", Zoomable("Lookup", LookupPanel()),
+            "Find labels, settings and every instruction that references an address, and set breakpoints on them"));
         _zDatalog = Zoomable("Datalog", _datalog);
         _bottom.Items.Add(Tab("Datalog", _zDatalog, "Log a car (any of the OBD1 protocols) or the simulated ROM, load a datalog, and drive the simulator with it"));
-        _bottom.Items.Add(Tab("Hit trace", Zoomable("Hit trace", _hitView), "Which ROM addresses are fetched (simulator, or a real ECU through a Moates Ostrich 2.0 / Demon)"));
         _bottom.Items.Add(Tab("Debug", Zoomable("Debug", _debug), "Everything that happened: actions, errors, MCP calls (and where they came from), serial traffic"));
         // SelectionChanged bubbles: lists inside the tabs raise it too, so react only to the tab strip itself
         _bottom.SelectionChanged += (_, e) => { if (ReferenceEquals(e.Source, _bottom) && SelectedTab() == "Calibration") _calibration.Refresh(); };
@@ -336,56 +425,35 @@ public sealed class MainWindow : Window
         // ---- right
         _disAddr.KeyDown += (_, e) => { if (e.Key == Key.Enter) RefreshDisassembly(true); };
         Tip(_disAddr, "Address or label to disassemble from; empty follows the PC.");
-        _disasm.DoubleTapped += (_, _) =>
+        _disList.Activated += r =>
         {
-            int i = _disasm.SelectedIndex;
-            if (i >= 0 && i < _disasmAddrs.Count)
-            {
-                _host.ToggleBreakpoint(Hex(_disasmAddrs[i]));
-                RefreshDisassembly(true);
-            }
+            if (r.Address < 0) return;
+            _host.ToggleBreakpoint(Hex(r.Address));
+            RefreshDisassembly(true);
         };
-        _disasm.SelectionChanged += (_, _) =>
-        {
-            if (_updatingLists.Contains(_disasm)) return;
-            int i = _disasm.SelectedIndex;
-            if (i >= 0 && i < _disasmAddrs.Count && _host.Assembly?.Lookup(_disasmAddrs[i]) is { } src) ShowSourceLine(src.File, src.Line, select: false);
-        };
-        Tip(_disasm, "Instructions around the PC (▶) with breakpoints (●). Click a line to show it in the source; double-click to toggle a breakpoint.");
-        Tip(_regs, "CPU registers.");
-        Tip(_flags, "PSW flags, interrupt request (IRQ) and enable (IE) masks.");
-        Tip(_calls, "Call stack, innermost first: routines entered with CAL/VCAL and interrupt handlers, with where each returns to.");
-        Tip(_outputs, "What the ROM is driving: fuel pump, VTEC, injectors (pulse, rate, duty), ignition timer events, watchdog, mux, PWM.");
-        Tip(_ports, "Every port pin: level, direction (in/out/sf = on-chip peripheral), changes per second, last high/low time, board function, and the routine that last wrote it.");
-        var right = new StackPanel { Margin = new Thickness(6) };
-        right.Children.Add(Header("CPU"));
-        right.Children.Add(_regs);
-        right.Children.Add(_flags);
-        right.Children.Add(_hot);
-        right.Children.Add(Header("Call stack"));
+        _disList.Picked += r => { if (r.Address >= 0 && _host.Assembly?.Lookup(r.Address) is { } src) ShowSourceLine(src.File, src.Line, select: false); };
+        _callList.Activated += r => { if (r.Address >= 0) GoToAddress(r.Address); };
+        Tip(_disList, "Instructions around the PC (highlighted) with breakpoints (●). Click a line to show it in the source; double-click to toggle a breakpoint.");
+        Tip(_cpu, "The PC and the routine it is in, the registers (orange: changed by the last step), the PSW flags (lit when set), the interrupt request (IRQ) and enable (IE) masks.");
+        Tip(_callList, "Call stack, innermost first: routines entered with CAL/VCAL and interrupt handlers, with where each returns to. Double-click one to go to it.");
+        Tip(_outList, "What the ROM is driving: fuel pump, VTEC, injectors (pulse, rate, duty), ignition timer events, watchdog, mux, PWM.");
+        Tip(_portList, "Every port pin: level, direction (in/out/sf = on-chip peripheral), changes per second, last high/low time, board function, and the routine that last wrote it.");
+        var right = new StackPanel { Margin = new Thickness(8, 8, 8, 0) };
+        right.Children.Add(Panels.Card("CPU", _cpu));
         // fixed height, so the panels below do not jump as calls come and go
-        right.Children.Add(new ScrollViewer
-        {
-            Content = _calls, Height = (CallStackLines * 15) + 4,
-            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
-            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
-        });
-        var disHeader = new StackPanel { Orientation = Orientation.Horizontal };
-        disHeader.Children.Add(Header("Disassembly"));
-        disHeader.Children.Add(_disAddr);
-        disHeader.Children.Add(ToolButton("Go", () => RefreshDisassembly(true), "Disassemble from the address or label typed."));
-        right.Children.Add(disHeader);
-        _disasm.Height = 260;
-        _disasm.FontFamily = MonoFont;
-        right.Children.Add(_disasm);
-        right.Children.Add(Header("Outputs"));
-        right.Children.Add(_outputs);
-        right.Children.Add(Header("Ports (level · direction · changes/s · last high/low · driven by)"));
-        right.Children.Add(_ports);
+        _callList.Height = (CallStackLines * 18) + 26;
+        right.Children.Add(Panels.Card("Call stack", _callList));
+        _disList.Height = 300;
+        var go = Panels.Button("Go", () => RefreshDisassembly(true), "Disassemble from the address or label typed (empty follows the PC).");
+        go.Padding = new Thickness(8, 1);
+        right.Children.Add(Panels.Card("Disassembly", _disList, _disAddr, go));
+        right.Children.Add(Panels.Card("Outputs", _outList));
+        right.Children.Add(Panels.Card("Ports", _portList));
 
         var main = _mainGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("3*,4,4*,4,3*") };
         var leftScroll = _leftPane = new ScrollViewer { Content = left };
-        var rightScroll = _rightPane = new ScrollViewer { Content = Zoomable("Right", right), HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto };
+        // the tables in it scroll sideways on their own: the panel itself keeps to its width
+        var rightScroll = _rightPane = new ScrollViewer { Content = Zoomable("Right", right), HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled };
         Grid.SetColumn(leftScroll, 0); main.Children.Add(leftScroll);
         // expanded view: a narrow strip keeps the engine inputs at hand
         var miniScroll = new ScrollViewer { Content = _miniInputs };
@@ -438,12 +506,11 @@ public sealed class MainWindow : Window
         var bar = new WrapPanel { Margin = new Thickness(6, 4) };
         bar.Children.Add(FileMenu());
         bar.Children.Add(new Separator { Width = 8 });
-        var back = Toolbar.Button(Toolbar.Tuner, "Simulator mode", "Back to the full workbench: source, simulator, disassembly and every tab.", () => SetTunerMode(false));
-        bar.Children.Add(back);
-        bar.Children.Add(Toolbar.Button(Toolbar.Settings, "Settings", "Datalog port and protocol, wideband, aux channels, emulator port, colours, zoom...", OpenSettings));
-        var tunerStatus = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0), Opacity = 0.8, FontSize = 11 };
-        tunerStatus.Bind(TextBlock.TextProperty, _status.GetObservable(TextBlock.TextProperty));
-        bar.Children.Add(tunerStatus);
+        // the calibration editor's Tools, Emulator, Datalogging, Back, Undo and Redo come onto this line in Tuner mode;
+        // the status goes beside its Definition bar (and to the Debug page's log)
+        bar.Children.Add(_tunerSlot);
+        bar.Children.Add(_pluginsMenuTuner);
+        bar.Children.Add(_pluginBarTuner);
         _zTunerDatalog = new ZoomHost("Tuner datalog", new Panel()) { Zoom = _settings.Zoom("Tuner datalog") };
         _zTunerDatalog.ZoomChanged += RememberZoom;
         _zoom["Tuner datalog"] = _zTunerDatalog;
@@ -459,6 +526,51 @@ public sealed class MainWindow : Window
         return root;
     }
     ContentControl? _tunerCalHost;
+    readonly StackPanel _tunerSlot = new() { Orientation = Orientation.Horizontal };
+    // plugin buttons, one row on each bar
+    readonly StackPanel _pluginBarSim = new() { Orientation = Orientation.Horizontal }, _pluginBarTuner = new() { Orientation = Orientation.Horizontal };
+    PluginManager? _plugins;
+    // the Plugins drop-down on each bar: shown only while a plugin is loaded (Settings > Plugins picks them)
+    Button? _pluginsMenuSimField, _pluginsMenuTunerField;
+    Button _pluginsMenuSim => _pluginsMenuSimField ??= PluginsMenu();
+    Button _pluginsMenuTuner => _pluginsMenuTunerField ??= PluginsMenu();
+    void UpdatePluginsMenu()
+    {
+        bool any = _plugins?.Plugins.Count > 0;
+        _pluginsMenuSim.IsVisible = any;
+        _pluginsMenuTuner.IsVisible = any;
+    }
+
+    /// The Plugins drop-down: what the loaded plugins add, and the Settings page that picks them.
+    Button PluginsMenu() => Toolbar.Menu("Plugins", "🧩", () =>
+    [
+        .. _plugins?.MenuItems ?? [],
+        .. (_plugins?.MenuItems.Count > 0 ? new[] { Toolbar.Entry.Line } : []),
+        new Toolbar.Entry("🧩", "Manage plugins…", "Settings > Plugins: pick the plugin .dlls to load, and switch them on or off.", () => OpenSettings("Plugins")),
+    ]);
+
+    /// Tuner mode: what only the workbench shows is let go - the lists it fills, and in Low performance mode the source editor's copy of the text (the text itself is kept: it comes back into the editor with the workbench) - and the memory handed back, so a small laptop has it for the datalog.
+    void ReleaseWorkbench()
+    {
+        _traceList.SetRows([]); _traceShown = -1;
+        _disList.SetRows([]); _callList.SetRows([]); _outList.SetRows([]); _portList.SetRows([]);
+        _lastPcShown = -1; _lastSourceShown = "";
+        if (Perf.Low && _current != null && !_editorParked)
+        {
+            _buffers[_current] = _editor.Text ?? "";
+            _editorParked = true;
+            _suppressEdit = true; _editor.Text = ""; _suppressEdit = false;
+        }
+        Dispatcher.UIThread.Post(() =>
+        {
+            System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        }, DispatcherPriority.Background);
+    }
+
+    /// The editor's text was let go in Tuner mode (it is in _buffers): what is shown is read from there.
+    bool _editorParked;
+    string EditorText => _editorParked && _current != null && _buffers.TryGetValue(_current, out var t) ? t : _editor.Text ?? "";
 
     void SetTunerMode(bool on)
     {
@@ -479,6 +591,7 @@ public sealed class MainWindow : Window
             _datalog.SetCompact(true);
             _scaler.Child = _tunerRoot;
             if (_host.IsRunning) _host.Control("pause");
+            ReleaseWorkbench();
         }
         else
         {
@@ -489,15 +602,22 @@ public sealed class MainWindow : Window
             UpdateLayout();
             _zDatalog.Child = UiStyles.Adopt(_datalog);
             _datalog.SetCompact(false);
+            // the source back into the editor
+            if (_editorParked && _current != null && _buffers.TryGetValue(_current, out var parked))
+            {
+                _editorParked = false;
+                _suppressEdit = true; _editor.Text = parked; _suppressEdit = false;
+            }
+            _lastPcShown = -1; _lastSourceShown = "";
             SetTabContent("Calibration", UiStyles.Adopt(_zCalibration));
             SetTabContent("Datalog", UiStyles.Adopt(_zDatalog));
             _scaler.Child = _simRoot;
         }
         _calibration.SetTunerMode(on);
+        _calibration.MoveBarItems(on ? _tunerSlot : null);
         _calibration.Refresh();
-        _tunerButton.Content = Toolbar.Label(Toolbar.Tuner, on ? "Simulator mode" : "Tuner mode");
         AppLog.Action("ui", on ? "tuner mode" : "simulator mode");
-        SetStatus(on ? "Tuner mode: open a .bin, Detect its maps, connect the datalog (Settings > Datalog) and the emulator" : "Simulator mode");
+        SetStatus(on ? "Tuner mode: open a .bin, Detect its maps, connect the datalog (Settings > Emulator & datalog) and the emulator" : "Simulator mode");
     }
 
     void SetTabContent(string header, Control? content)
@@ -542,13 +662,15 @@ public sealed class MainWindow : Window
 
     // ------------------------------------------------------------------ settings
 
-    void OpenSettings()
+    void OpenSettings() => OpenSettings(null);
+
+    void OpenSettings(string? page)
     {
         SaveLayout();
         var original = _settings;
         var originalProfile = _profile;
         bool previewed = false;
-        var w = new SettingsWindow(_settings, () => _mcpState, _profile, FuelMapAxes);
+        var w = new SettingsWindow(_settings, () => _mcpState, _profile, FuelMapAxes, _plugins);
         // Apply: show the changes now without writing them to disk; Cancel puts back what was there
         w.Applied += (s, profile) => { previewed = true; UseSettings(s, profile, save: false); SetStatus("settings applied (Save keeps them)"); };
         w.Closed += (_, _) =>
@@ -559,9 +681,20 @@ public sealed class MainWindow : Window
                 return;
             }
             UseSettings(w.Result, w.ResultProfile, save: true);
+            // plugins switched off or removed in the window: stopped and taken off the bars now; switched on: loaded now
+            if (_plugins != null)
+            {
+                foreach (var gone in _plugins.Plugins.Select(l => l.Path).Distinct().ToList()
+                                             .Where(path => !_settings.Plugins.Any(p => p.Enabled && SamePath(p.Path, path))))
+                    _plugins.Unload(gone);
+                foreach (var p in _settings.Plugins.Where(p => p.Enabled && !_plugins.Plugins.Any(l => SamePath(l.Path, p.Path))))
+                    if (_plugins.Load(p.Path) is { } why) SetStatus("plugin not loaded: " + why);
+            }
+            UpdatePluginsMenu();
             SetStatus("settings saved");
             AppLog.Action("settings", "saved");
         };
+        if (page != null) w.ShowPage(page);
         w.ShowDialog(this);
     }
 
@@ -575,6 +708,7 @@ public sealed class MainWindow : Window
             r.WindowWidth = _settings.WindowWidth; r.WindowHeight = _settings.WindowHeight; r.Maximized = _settings.Maximized;
             r.LeftColumn = _settings.LeftColumn; r.CentreColumn = _settings.CentreColumn; r.RightColumn = _settings.RightColumn;
             r.BottomPanel = _settings.BottomPanel; r.SelectedTab = _settings.SelectedTab;
+            r.PanelSizes = _settings.PanelSizes; r.Favourites = _settings.Favourites;
             r.Package = _settings.Package; r.LastFile = _settings.LastFile;
         }
         bool tunerChanged = r.TunerMode != _tuner;
@@ -613,6 +747,7 @@ public sealed class MainWindow : Window
     void ApplySettings(bool first)
     {
         var s = _settings;
+        Perf.Set(s.LowPerformance ?? Perf.Suggested);
         if (first) ApplyLayout();
         ApplyRest(s, first);
     }
@@ -640,16 +775,24 @@ public sealed class MainWindow : Window
         ScreenFit.UiScale = scale;
         _scaler.LayoutTransform = Math.Abs(scale - 1) < 0.001 ? null : new ScaleTransform(scale, scale);
         foreach (var (key, z) in _zoom) z.Zoom = s.Zoom(key);        // the source editor's zoom sets its font size
+        _datalog.ApplyGaugeZoom();
         _host.Speed = s.SpeedIndex switch { 0 => 0.1, 1 => 0.5, 2 => 1, 3 => 4, 4 => 0, _ => 1 };
         TableModel.SetColours(SettingsWindow.Parse(s.TableLow), SettingsWindow.Parse(s.TableMid), SettingsWindow.Parse(s.TableHigh),
             SettingsWindow.Parse(s.TableMax), SettingsWindow.Parse(s.TraceColour), SettingsWindow.Parse(s.TrailColour));
         CodeEditor.SetHitColours(SettingsWindow.Parse(s.HitCodeColour), SettingsWindow.Parse(s.HitDataColour));
         _host.FastBoot = s.FastBoot;
         _calibration.SetOptions(s.LiveTrace, s.FollowReads, s.TrailSeconds);
+        _calibration.TableStretch = s.TableStretch;
+        TouchMode.Set(s.TouchMode);
         _calibration.TargetLow = TargetMap.Parse(s.AfrTargetLow);
         _calibration.TargetHigh = TargetMap.Parse(s.AfrTargetHigh);
         _calibration.WidebandCorrection = LookupCurve.Parse(s.WidebandCorrection);
-        _datalog.Port = s.DatalogPort; _datalog.Baud = s.DatalogBaud; _datalog.Protocol = s.DatalogProtocol;
+        // a Demon datalogs over the emulator's own port: the datalog goes through it (or logs the simulator), whatever port was set before
+        _datalog.Port = s.EmulatorType == "Demon" && s.DatalogPort != "simulator" ? "emulator" : s.DatalogPort;
+        _datalog.Baud = s.DatalogBaud; _datalog.Protocol = s.DatalogProtocol;
+        OkiRomSim.Calibration.ChannelStream.Selected = s.DatalogStreamChannels is { Count: > 0 } sc ? sc : [.. OkiRomSim.Calibration.DatalogChannels.Defaults];
+        _datalog.GetStreamChannels = () => _settings.DatalogStreamChannels;
+        _datalog.SetStreamChannels = list => { _settings.DatalogStreamChannels = list; _settings.Save(); };
         if (s.DetectedLayout is { Length: > 0 } dl)
             try { _datalog.Engine.Detected = System.Text.Json.JsonSerializer.Deserialize<OkiRomSim.Calibration.DetectedProtocol>(dl); }
             catch (Exception ex) { AppLog.Error("datalog", "saved layout could not be read", ex); }
@@ -681,6 +824,11 @@ public sealed class MainWindow : Window
         }
         else if (s.WidebandType == "none") Task.Run(() => { try { eng.Wideband.Stop(); } catch { } });
         _hitView.SetOptions(s.MoatesPort, s.MoatesBase, s.HitSkipRepeats, s.HitColourSource);
+        var sm = eng.Smooth;
+        sm.Frames = s.DatalogSmoothFrames; sm.SpikePercent = s.DatalogSmoothSpikePercent; sm.Blend = s.DatalogSmoothBlend;
+        sm.Skip.Clear();
+        foreach (var c in s.DatalogSmoothSkip.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)) sm.Skip.Add(c);
+        if (sm.Enabled != s.DatalogSmooth) _datalog.SetSmoothing(s.DatalogSmooth);
         // the emulator link: which device, how fast, and how patient to be with the cable
         var emu = _host.Emulator;
         emu.Kind = s.EmulatorType; emu.Baud = s.EmulatorBaud;
@@ -695,8 +843,12 @@ public sealed class MainWindow : Window
         SerialLink.RaiseDtrRts = s.SerialDtrRts;
         SerialLink.WriteTimeoutMs = Math.Clamp(s.SerialWriteTimeoutMs, 50, 10000);
         _calibration.EmulatorPort = s.MoatesPort;
+        _datalog.EmulatorPort = s.MoatesPort;
         if (first) _host.AutoUpload = s.EmulatorAutoUpload;
         _calibration.UpdateEmulator();
+        TableKeys.Use(s.TableHotKeys);
+        LinkSupervisor.Attempts = Math.Clamp(s.ReconnectAttempts, 1, 100);
+        LinkSupervisor.DelayMs = Math.Clamp(s.ReconnectDelayMs, 200, 30000);
         _hotKeys = s.HotKeys.Where(kv => kv.Value.Length > 0)
             .Select(kv => { try { return (kv.Key, Gesture: KeyGesture.Parse(kv.Value)); } catch { return (kv.Key, Gesture: (KeyGesture?)null); } })
             .Where(x => x.Gesture != null).ToDictionary(x => x.Key, x => x.Gesture!);
@@ -719,7 +871,7 @@ public sealed class MainWindow : Window
     }
 
     Dictionary<string, KeyGesture> _hotKeys = [];
-    /// Readings polled from outside the ECU (Settings > Datalog), shown on the gauges.
+    /// Readings polled from outside the ECU (Settings > Emulator & datalog), shown on the gauges.
     readonly ExternalData _external = new();
 
     /// Remember the window and panel layout for next time.
@@ -758,23 +910,23 @@ public sealed class MainWindow : Window
             var roots = s.McpRoots.Where(Directory.Exists).ToList();
             if (roots.Count == 0)
                 roots.Add(Path.GetDirectoryName(_target ?? _current ?? "") is { Length: > 0 } d ? d : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments));
-            // An agent may be on another computer altogether, with no path in common with this one. This folder is always in the workspace and always writable, so such an agent can send a file across with file_upload and then ask for it with app_open, whatever else is or is not configured.
+            // A client may be on another computer altogether, with no path in common with this one. This folder is always in the workspace and always writable, so such a client can send a file across with file_upload and then ask for it with app_open, whatever else is or is not configured.
             var transfer = McpTransferDir;
             try { Directory.CreateDirectory(transfer); if (!roots.Contains(transfer)) roots.Add(transfer); }
             catch (Exception ex) { AppLog.Error("mcp", "could not make the transfer folder", ex); }
             var session = new AppMcpSession(_host, _datalog,
-                () => { if (_current != null) _buffers[_current] = _editor.Text ?? ""; return _buffers.Select(kv => (kv.Key, kv.Value)).ToList(); },
+                () => { if (_current != null) _buffers[_current] = EditorText; return _buffers.Select(kv => (kv.Key, kv.Value)).ToList(); },
                 m => Dispatcher.UIThread.Post(() => SetStatus(m)),
                 () => (_settings.DatalogPort, _settings.DatalogProtocol, _settings.DatalogBaud),
                 (rom, name) => OpenRomImage(rom, name),
                 path => OpenFile(path));
             var workspace = new OkiRomSim.Mcp.Workspace(roots) { ReadOnly = s.McpReadOnly, TransferDir = transfer };
-            // an agent on another machine can ask for a folder here; the user decides
+            // a client on another machine can ask for a folder here; the user decides
             workspace.AskToAddRoot = (folder, why) => Dispatcher.UIThread.Invoke(async () =>
             {
-                bool yes = await Dialogs.Confirm(this, "Let an agent read this folder?",
-                    $"An MCP agent is asking to use files in:\n\n{folder}\n\nWhy: {why}\n\n" +
-                    "Allowing it lets the agent read (and, unless the server is read-only, write) files in that folder until this program is closed.",
+                bool yes = await Dialogs.Confirm(this, "Let a client read this folder?",
+                    $"An MCP client is asking to use files in:\n\n{folder}\n\nWhy: {why}\n\n" +
+                    "Allowing it lets the client read (and, unless the server is read-only, write) files in that folder until this program is closed.",
                     "Allow", "Refuse");
                 AppLog.Write(LogKind.Mcp, "mcp", $"workspace_allow {folder}: {(yes ? "allowed" : "refused")}", why);
                 if (yes) { _settings.McpRoots = [.. _settings.McpRoots.Append(folder).Distinct()]; _settings.Save(); }
@@ -856,67 +1008,92 @@ public sealed class MainWindow : Window
         var g = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
         Grid.SetRow(bar, 0); g.Children.Add(bar);
         Grid.SetRow(_memory, 1); g.Children.Add(_memory);
+        // the map (what each byte is, its value, what writes it) first; the hex dump beside it
+        _memMap = new MemoryMapView(_host);
+        _memMap.GoToCode += GoToAddress;
+        _memMap.Status += m => SetStatus(m);
+        var tabs = new TabControl();
+        tabs.Items.Add(new TabItem { Header = "Map", Content = _memMap });
+        tabs.Items.Add(new TabItem { Header = "Hex", Content = g });
+        foreach (var t in tabs.Items.OfType<TabItem>()) { t.FontSize = 12; t.MinHeight = 24; t.Padding = new Thickness(8, 1); }
+        ToolTip.SetTip((TabItem)tabs.Items[0]!, "Every RAM byte the ROM uses, by name, with its value in real units and the code that writes it. Double-click to change one.");
+        return tabs;
+    }
+    MemoryMapView? _memMap;
+
+    long _traceShown = -1;
+
+    /// Problems: the build's errors and warnings, the worst first.
+    Control ProblemsPanel()
+    {
+        var g = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
+        var bar = Panels.BarAround(_problemSummary);
+        Grid.SetRow(bar, 0); g.Children.Add(bar);
+        Grid.SetRow(_problems, 1); g.Children.Add(_problems);
         return g;
+    }
+    readonly TextBlock _problemSummary = new() { Text = "not built yet", FontSize = 12, Margin = new Thickness(10, 6), Opacity = 0.85 };
+
+    void ShowProblems(List<Diagnostic> ordered)
+    {
+        _problemLoc = [.. ordered.Select(d => (d.File, d.Line))];
+        int errors = ordered.Count(d => d.Severity == Severity.Error), warnings = ordered.Count(d => d.Severity == Severity.Warning);
+        _problemSummary.Text = ordered.Count == 0 ? "✔  the source builds clean: no errors, no warnings"
+            : $"{(errors > 0 ? $"✖  {errors} error{(errors == 1 ? "" : "s")}" : "✔  no errors")}   ·   {warnings} warning{(warnings == 1 ? "" : "s")}" +
+              (ordered.Count - errors - warnings is > 0 and var n ? $"   ·   {n} note{(n == 1 ? "" : "s")}" : "");
+        _problemSummary.Foreground = errors > 0 ? DataList.Error : warnings > 0 ? DataList.Warning : DataList.Good;
+        _problems.Empty = "No errors or warnings: the last build was clean.";
+        _problems.SetRows([.. ordered.Select(d =>
+        {
+            var ink = d.Severity == Severity.Error ? DataList.Error : d.Severity == Severity.Warning ? DataList.Warning : DataList.Data;
+            return new DataList.Row(
+                [new(d.Severity == Severity.Error ? "✖" : d.Severity == Severity.Warning ? "▲" : "i", ink, true), new(d.Severity.ToString().ToLowerInvariant(), ink),
+                 new($"{Path.GetFileName(d.File)}:{d.Line}", DataList.Address), new(d.Message, DataList.Text)],
+                ink, -1, $"{d.File}:{d.Line}\n{d.Message}", Tag: (d.File, d.Line));
+        })]);
     }
 
-    Control BreakpointPanel()
-    {
-        var bar = new WrapPanel { Margin = new Thickness(4) };   // wraps on a narrow panel instead of pushing the buttons out of sight
-        var box = Tip(Mono(new TextBox { Watermark = "label or address (3DDE, 0d9h, fuelpump)", Width = 260 }),
-                      "Type a label or a hex address here, then Add to set a breakpoint on it (or Toggle to set it if it is not there and clear it if it is). Enter does the same as Add.");
-        bar.Children.Add(box);
-        // Add says what it does: Toggle on its own was awkward when the point was simply to put a breakpoint on an address read off a disassembly listing
-        void Add()
-        {
-            var text = (box.Text ?? "").Trim();
-            if (text.Length == 0) { SetStatus("type a label or a hex address first"); return; }
-            var r = _host.AddBreakpoint(text);
-            SetStatus(r.ok
-                ? r.added ? $"breakpoint set at {Hex(r.address)}" : $"there is already a breakpoint at {Hex(r.address)}"
-                : r.error);
-            if (r.ok) { box.Text = ""; RefreshDisassembly(true); }
-        }
-        bar.Children.Add(ToolButton("Add", Add, "Set a breakpoint at the label or address typed (it stays set if it is already there)."));
-        bar.Children.Add(ToolButton("Toggle", () =>
-        {
-            var r = _host.ToggleBreakpoint(box.Text ?? "");
-            SetStatus(r.ok ? $"breakpoint {(r.enabled ? "set" : "cleared")} at {Hex(r.address)}" : r.error);
-            if (r.ok) RefreshDisassembly(true);
-        }, "Set a breakpoint at the label/address typed, or clear it if it is already there."));
-        box.KeyDown += (_, e) => { if (e.Key == Key.Enter) { Add(); e.Handled = true; } };
-        bar.Children.Add(ToolButton("Remove", () =>
-        {
-            var state = _host.State();
-            int i = _bpList.SelectedIndex;
-            if (i < 0 || i >= state.Breakpoints.Count) { SetStatus("pick a breakpoint in the list first"); return; }
-            int addr = state.Breakpoints[i].Address;
-            _host.RemoveBreakpoint(addr);
-            SetStatus($"breakpoint at {Hex(addr)} removed");
-            RefreshDisassembly(true);
-        }, "Remove the breakpoint selected in the list below, leaving the rest alone."));
-        bar.Children.Add(ToolButton("Clear all", () => { _host.ClearBreakpoints(); RefreshDisassembly(true); }, "Remove every breakpoint."));
-        bar.Children.Add(Small("  double-click a disassembly line to toggle, F9 toggles at the caret"));
-        _bpList.DoubleTapped += (_, _) =>
-        {
-            var s = _host.State();
-            int i = _bpList.SelectedIndex;
-            if (i >= 0 && i < s.Breakpoints.Count) GoToAddress(s.Breakpoints[i].Address);
-        };
-        Tip(_bpList, "Breakpoints. Double-click one to show it in the source.");
-        var g = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
-        Grid.SetRow(bar, 0); g.Children.Add(bar);
-        Grid.SetRow(_bpList, 1); g.Children.Add(_bpList);
-        return g;
-    }
+    /// The breakpoint to act on: the one picked in the list, else what is typed, else the lookup result picked.
+    string? BreakTarget() =>
+        (_lookupQ.Text ?? "").Trim() is { Length: > 0 } t ? t
+        : _lookupData.Selected is { Address: >= 0 } r ? Hex(r.Address) : null;
 
     Control LookupPanel()
     {
-        var bar = new WrapPanel { Margin = new Thickness(4) };   // wraps on a narrow panel instead of pushing the buttons out of sight
-        Tip(_lookupQ, "Type a label, a calibration name or an address; Enter looks it up.");
-        bar.Children.Add(_lookupQ);
-        bar.Children.Add(ToolButton("Look up", DoLookup, "Find labels and settings matching the text, or what lives at an address."));
-        bar.Children.Add(ToolButton("Find references", DoXref, "List every instruction that reads or writes the address."));
+        Tip(_lookupQ, "Type a label, a calibration name or an address; Enter looks it up. Break puts a breakpoint on it.");
+        _lookupQ.FontSize = 12; _lookupQ.MinHeight = 26;
         _lookupQ.KeyDown += (_, e) => { if (e.Key == Key.Enter) DoLookup(); };
+        void Break()
+        {
+            if (BreakTarget() is not { } text) { SetStatus("type a label or a hex address, or pick a result, first"); return; }
+            var r = _host.AddBreakpoint(text);
+            SetStatus(r.ok ? r.added ? $"breakpoint set at {Hex(r.address)}" : $"there is already a breakpoint at {Hex(r.address)}" : r.error);
+            if (r.ok) RefreshDisassembly(true);
+        }
+        void Toggle()
+        {
+            if (BreakTarget() is not { } text) { SetStatus("type a label or a hex address, or pick a result, first"); return; }
+            var r = _host.ToggleBreakpoint(text);
+            SetStatus(r.ok ? $"breakpoint {(r.enabled ? "set" : "cleared")} at {Hex(r.address)}" : r.error);
+            if (r.ok) RefreshDisassembly(true);
+        }
+        void Remove()
+        {
+            if (_bpList.Selected is not { Address: >= 0 } row) { SetStatus("pick a breakpoint in the list first"); return; }
+            _host.RemoveBreakpoint(row.Address);
+            SetStatus($"breakpoint at {Hex(row.Address)} removed");
+            RefreshDisassembly(true);
+        }
+        var bar = Panels.Bar(_lookupQ,
+            Panels.Button("Look up", DoLookup, "Find labels and settings matching the text, or what lives at an address.", "🔍"),
+            Panels.Button("Find references", DoXref, "List every instruction that reads or writes the address.", "⇄"),
+            Panels.Divider(),
+            Panels.Button("Break", Break, "Set a breakpoint on the label or address typed (or the result picked below). It stays set if it is already there.", "●"),
+            Panels.Button("Toggle", Toggle, "Set a breakpoint on the label or address typed (or the result picked), or clear it if it is already there."),
+            Panels.Button("Remove", Remove, "Remove the breakpoint picked in the Breakpoints list, leaving the rest alone."),
+            Panels.Button("Clear all", () => { _host.ClearBreakpoints(); RefreshDisassembly(true); }, "Remove every breakpoint."));
+        _bpList.Activated += r => { if (r.Address >= 0) GoToAddress(r.Address); };
+        Tip(_bpList, "Breakpoints. Double-click one to show it in the source; right-click to switch it off (kept, not stopped at) or on again, or remove it. Double-click a disassembly line to toggle one; F9 toggles at the source caret.");
         _lookupList.FontFamily = MonoFont;
         _lookupList.DoubleTapped += (_, _) =>
         {
@@ -924,10 +1101,43 @@ public sealed class MainWindow : Window
             if (i >= 0 && i < _lookupRows.Count) GoToAddress(_lookupRows[i].Address);
             else if (i >= 0 && i < _lookupLines.Count && int.TryParse(_lookupLines[i].Split(' ')[0], NumberStyles.HexNumber, null, out var a)) GoToAddress(a);
         };
-        Tip(_lookupList, "Results. Double-click one to go to it in the source (and the disassembly).");
+        _lookupData.Activated += r => { if (r.Address >= 0) GoToAddress(r.Address); };
+        // right-click: the result as a breakpoint, and the rest of what can be done with it
+        (string, Action) SetBreak(int a) => ($"● Add {Hex(a)} as a breakpoint", () =>
+        {
+            var r = _host.AddBreakpoint(Hex(a));
+            SetStatus(r.ok ? r.added ? $"breakpoint set at {Hex(r.address)}" : $"there is already a breakpoint at {Hex(r.address)}" : r.error);
+            _bpShown = null;
+            if (r.ok) RefreshDisassembly(true);
+        });
+        _lookupData.Menu = r => r.Address < 0 ? [] : new (string, Action)[]
+        {
+            SetBreak(r.Address),
+            ("Go to it in the source", () => GoToAddress(r.Address)),
+            ("Find references to it", () => { _lookupQ.Text = Hex(r.Address); DoXref(); }),
+            ("Copy the address", () => _ = Clipboard?.SetTextAsync(Hex(r.Address))),
+        };
+        _traceList.Menu = r => r.Address < 0 ? [] : new (string, Action)[] { SetBreak(r.Address), ("Go to it in the source", () => GoToAddress(r.Address)) };
+        _disList.Menu = r => r.Address < 0 ? [] : new (string, Action)[] { SetBreak(r.Address), ("Go to it in the source", () => GoToAddress(r.Address)) };
+        _bpList.Menu = r => r.Address < 0 ? [] : new (string, Action)[]
+        {
+            r.Tag is false
+                ? ($"Enable the breakpoint at {Hex(r.Address)}", () => { _host.SetBreakpointEnabled(r.Address, true); _bpShown = null; SetStatus($"breakpoint at {Hex(r.Address)} on"); RefreshDisassembly(true); })
+                : ($"Disable the breakpoint at {Hex(r.Address)}", () => { _host.SetBreakpointEnabled(r.Address, false); _bpShown = null; SetStatus($"breakpoint at {Hex(r.Address)} off: kept, not stopped at"); RefreshDisassembly(true); }),
+            ($"Remove the breakpoint at {Hex(r.Address)}", () => { _host.RemoveBreakpoint(r.Address); _bpShown = null; SetStatus($"breakpoint at {Hex(r.Address)} removed"); RefreshDisassembly(true); }),
+            ("Go to it in the source", () => GoToAddress(r.Address)),
+        };
+        ToolTip.SetTip(_lookupData, "Results. Double-click one to go to it in the source (and the disassembly); pick one and press Break to stop there.");
+        // the results and the breakpoints side by side, the splitter between them
+        var body = new Grid { ColumnDefinitions = new ColumnDefinitions("3*,6,2*"), Margin = new Thickness(8, 8, 8, 0) };
+        var results = Panels.Card("Results", _lookupData);
+        Grid.SetColumn(results, 0); body.Children.Add(results);
+        var gs = new GridSplitter { Width = 6, Background = Brushes.Transparent }; Grid.SetColumn(gs, 1); body.Children.Add(gs);
+        var bps = Panels.Card("Breakpoints", _bpList);
+        Grid.SetColumn(bps, 2); body.Children.Add(bps);
         var g = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
         Grid.SetRow(bar, 0); g.Children.Add(bar);
-        Grid.SetRow(_lookupList, 1); g.Children.Add(_lookupList);
+        Grid.SetRow(body, 1); g.Children.Add(body);
         return g;
     }
 
@@ -1152,9 +1362,71 @@ public sealed class MainWindow : Window
         if (await ConfirmReplaceCurrent(path)) OpenFile(path);
     }
 
-    /// Open a .asm (edit and build it), a .bin/.rom (disassemble it to source, then build that, so the simulator runs exactly the image's bytes with labels and line tracking), or a saved project .zip.
-    void OpenFile(string path)
+    /// Open a .asm (edit and build it), a .bin/.rom (disassemble it to source, then build that, so the simulator runs exactly the image's bytes with labels and line tracking), or a saved project .zip. Open a file: a ROM with an open password set (the watermark module) asks for it first.
+    void OpenFile(string path) => _ = OpenFileChecked(path);
+
+    async Task OpenFileChecked(string path)
     {
+        try
+        {
+            if (!await PasswordAllows(path)) { SetStatus($"{Label(path)} was not opened: it is protected with a password"); return; }
+        }
+        catch (Exception ex)
+        {
+            // could not tell whether it has a password: it stays closed rather than opening without asking
+            AppLog.Error("app", "password check failed", ex);
+            SetStatus($"{Label(path)} was not opened: could not check its password ({ex.Message})");
+            return;
+        }
+        OpenFileNow(path);
+    }
+
+    /// The ROM image a file would open (a .bin, a project's ROM, or a main source assembled quietly) and, when that has a password set, whether it was given.
+    async Task<bool> PasswordAllows(string path)
+    {
+        byte[]? image = null;
+        if (path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) image = ProjectFile.Load(path).Rom;
+        else if (path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".rom", StringComparison.OrdinalIgnoreCase)) image = File.ReadAllBytes(path);
+        else if (path.EndsWith(".asm", StringComparison.OrdinalIgnoreCase) && !SamePath(path, _target)
+                 && !(_host.Assembly?.SourceMap.Any(e => SamePath(e.File, path)) ?? false))
+        {
+            var p = path;
+            var snapshot = _buffers.ToDictionary(kv => Path.GetFullPath(kv.Key), kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+            image = await Task.Run(() =>
+            {
+                try { var r = new OkiAssembler(new AssemblerOptions { ReadFile = f => snapshot.GetValueOrDefault(f) }).AssembleFile(p); return r.Image; }
+                catch { return null; }
+            });
+        }
+        return image == null || image.Length == 0 || await RomPasswordUi.Unlock(this, image, Label(path));
+    }
+
+    /// File > Recent: the last ten files opened, newest first (those no longer there are left out).
+    Toolbar.Entry[] RecentEntries()
+    {
+        var list = _settings.RecentFiles.Where(File.Exists).Take(10).ToList();
+        if (list.Count == 0) return [new Toolbar.Entry("", "(nothing yet)", "Files you open appear here.", () => { })];
+        return [.. list.Select((p, i) => new Toolbar.Entry(i < 9 ? $"{i + 1}" : "0", Path.GetFileName(p), p, () => OpenFile(p))),
+                Toolbar.Entry.Line,
+                new Toolbar.Entry(Toolbar.Clear, "Clear the list", "Forget the files opened lately.", () => { _settings.RecentFiles.Clear(); _settings.Save(); })];
+    }
+
+    void RememberRecent(string path)
+    {
+        try
+        {
+            var full = Path.GetFullPath(path);
+            _settings.RecentFiles.RemoveAll(p => SamePath(p, full));
+            _settings.RecentFiles.Insert(0, full);
+            if (_settings.RecentFiles.Count > 10) _settings.RecentFiles.RemoveRange(10, _settings.RecentFiles.Count - 10);
+            _settings.Save();
+        }
+        catch { }
+    }
+
+    void OpenFileNow(string path)
+    {
+        RememberRecent(path);
         try
         {
             if (path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) { OpenProject(path); return; }
@@ -1175,12 +1447,122 @@ public sealed class MainWindow : Window
                     ApplyProfile(declared);
                 _target = path;
                 Build();
+                _ = AfterOpen(path);
             }
         }
         catch (Exception ex) { SetStatus(ex.Message); }
     }
 
-    /// A ROM image that came from somewhere other than a file the user picked (the PROG entry of an .rlog, or an MCP agent uploading one): keep it beside the log / in the temp folder and open it like any other .bin.
+    readonly HashSet<string> _skeletonUpdateDeclined = new(StringComparer.OrdinalIgnoreCase);
+
+    /// A ROM made by New ROM > Create keeps its name and version and its watermark (with the password) in its build file, so they survive saving the source and building it again: written there as soon as they are changed. The build file is saved at once when it had nothing else unsaved; otherwise it is left marked as changed.
+    void KeepInBuildFile(ItemDef item)
+    {
+        try
+        {
+            if (_target == null || item.Text is not ("watermark" or "password")) return;
+            var text = ReadBuffer(Path.GetFullPath(_target)) ?? (File.Exists(_target) ? File.ReadAllText(_target) : null);
+            if (text == null || !text.Contains("by File > New ROM > Create")) return;
+            var defs = _host.Defs();
+            byte[]? id = null, wm = null;
+            if (defs.Items.FirstOrDefault(i => i.Text == "watermark") is { } w && defs.Items.Any(i => i.Text == "password" && i.Address == w.Address + WatermarkCodec.Bytes))
+                wm = _host.RomBytes(w.Address, WatermarkCodec.Bytes + RomPassword.Bytes);
+            if (id == null && wm == null) return;
+            var updated = Skeleton.WithKept(text, id, defs.Items.FirstOrDefault(i => i.Name == "RomId")?.Address ?? 0x7FE0, wm);
+            if (updated == text) return;
+            var key = _buffers.Keys.FirstOrDefault(k => SamePath(k, _target)) ?? _target;
+            bool clean = !_dirty.Any(d => SamePath(d, _target));
+            _buffers[key] = updated;
+            if (_current != null && SamePath(_current, _target) && !_editorParked) { _suppressEdit = true; _editor.Text = updated; _suppressEdit = false; }
+            if (clean) File.WriteAllText(_target, updated);
+            else _dirty.Add(key);
+            // the image already holds these bytes: the build is still the source's
+            _builtTexts[Path.GetFullPath(_target)] = updated;
+            UpdateDocHeader();
+            AppLog.Action("app", $"{Label(_target)}: {(id != null ? "name and version" : "watermark")} kept in the build file{(clean ? "" : " (unsaved)")}");
+        }
+        catch (Exception ex) { AppLog.Error("app", "could not keep the value in the build file", ex); }
+    }
+
+    /// A ROM just created or opened: bring its skeleton up to date if there is a newer one, then offer to run Detect on it.
+    async Task AfterOpen(string path)
+    {
+        _plugins?.RaiseRomLoaded(path);
+        await OfferSkeletonUpdate(path);
+        await OfferDetect(path);
+    }
+
+    async Task OfferDetect(string path)
+    {
+        try
+        {
+            if (!_settings.AskDetectOnOpen || _host.Assembly == null || _host.LoadedPath is not { } loaded || !SamePath(loaded, path)) return;
+            var defs = _host.Defs();
+            int items = defs.Items.Count, onPages = CalPage.All().SelectMany(p => p.Slots()).Count(s => CalPage.Bound(defs, s) != null);
+            string what = items == 0
+                ? "It has no definitions yet: the calibration list and the feature pages are empty until Detect has found its tables and settings."
+                : $"It has {items} definition(s) from its source already ({onPages} page row(s) filled in). Detect looks for the tables and settings the source does not describe.";
+            var pick = await Dialogs.Ask(this, "Run Detect?",
+                $"{Label(path)} is open. Run Detect on it?\n\n{what}\n\nIt lines the ROM up with the known ROMs and follows the code that reads each table; it takes a few seconds. " +
+                "It can be run again at any time from the calibration editor's Detect button.",
+                "Run Detect", "Not now", "Don't ask again");
+            if (pick == "Don't ask again") { _settings.AskDetectOnOpen = false; _settings.Save(); SetStatus("Detect will not be offered again (Settings > General turns it back on)"); return; }
+            if (pick != "Run Detect") return;
+            SelectTab("Calibration");
+            await _calibration.DetectAsync();
+        }
+        catch (Exception ex) { AppLog.Error("app", "detect offer failed", ex); }
+    }
+
+    /// A ROM made by New ROM > Create builds on its own copy of the skeleton and modules. When the app has a newer skeleton (fixes, new modules, better table names), offer to bring that copy up to date. The old copy is kept in a backup folder; the ROM's choice of functions (its define lines) is not touched.
+    async Task OfferSkeletonUpdate(string path)
+    {
+        try
+        {
+            var text = _buffers.TryGetValue(path, out var t) ? t : File.ReadAllText(path);
+            if (!text.Contains("by File > New ROM > Create")) return;
+            var m = System.Text.RegularExpressions.Regex.Match(text, @"^\s*include\s+""([^""]+)""", System.Text.RegularExpressions.RegexOptions.Multiline);
+            if (!m.Success) return;
+            var local = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(path)!, m.Groups[1].Value));
+            if (!File.Exists(local) || _skeletonUpdateDeclined.Contains(local)) return;
+            var app = Skeleton.Find(NewRomWindow.Templates()).FirstOrDefault(k => Path.GetFileName(k.Path).Equals(Path.GetFileName(local), StringComparison.OrdinalIgnoreCase));
+            if (app == null || Path.GetFullPath(app.Path).Equals(local, StringComparison.OrdinalIgnoreCase)) return;
+            var localFeatures = app.FeaturesDir == null ? null : Path.Combine(Path.GetDirectoryName(local)!, Path.GetFileName(app.FeaturesDir));
+            bool Same(string a, string b) => File.Exists(a) && File.Exists(b) && File.ReadAllBytes(a).AsSpan().SequenceEqual(File.ReadAllBytes(b));
+            bool differs = !Same(app.Path, local) || (app.FeaturesDir != null && localFeatures != null &&
+                Directory.GetFiles(app.FeaturesDir).Any(f => !Same(f, Path.Combine(localFeatures, Path.GetFileName(f)))));
+            if (!differs) return;
+            bool yes = await Dialogs.Confirm(this, "Update the skeleton?",
+                $"{Path.GetFileName(path)} was made from an older copy of {Path.GetFileName(local)} and its modules. The app has a newer one " +
+                "(fixes, new functions, readable table names).\n\nUpdate this ROM's copy? The functions it uses (its define lines) stay as they are. " +
+                "The old copy goes to a backup folder beside it. Tuning saved to a .bin is not affected; values typed into the skeleton's own " +
+                "source by hand would be in the backup.", "Update", "Not now");
+            if (!yes) { _skeletonUpdateDeclined.Add(local); return; }
+            var dir = Path.GetDirectoryName(local)!;
+            var backup = Path.Combine(dir, $"skeleton-backup-{DateTime.Now:yyyyMMdd-HHmmss}");
+            Directory.CreateDirectory(backup);
+            File.Copy(local, Path.Combine(backup, Path.GetFileName(local)));
+            if (localFeatures != null && Directory.Exists(localFeatures))
+            {
+                var bf = Path.Combine(backup, Path.GetFileName(localFeatures));
+                Directory.CreateDirectory(bf);
+                foreach (var f in Directory.GetFiles(localFeatures)) File.Copy(f, Path.Combine(bf, Path.GetFileName(f)));
+            }
+            File.Copy(app.Path, local, overwrite: true);
+            if (app.FeaturesDir != null && localFeatures != null)
+            {
+                Directory.CreateDirectory(localFeatures);
+                foreach (var f in Directory.GetFiles(app.FeaturesDir)) File.Copy(f, Path.Combine(localFeatures, Path.GetFileName(f)), overwrite: true);
+            }
+            foreach (var k in _buffers.Keys.Where(k => k.StartsWith(dir, StringComparison.OrdinalIgnoreCase) && !SamePath(k, path)).ToList()) _buffers.Remove(k);
+            AppLog.Action("new rom", $"skeleton of {path} updated (backup in {backup})");
+            SetStatus($"skeleton updated - the old copy is in {Path.GetFileName(backup)}");
+            Build();
+        }
+        catch (Exception ex) { AppLog.Error("new rom", "skeleton update failed", ex); SetStatus("skeleton update failed: " + ex.Message); }
+    }
+
+    /// A ROM image that came from somewhere other than a file the user picked (the PROG entry of an .rlog, or an MCP client uploading one): keep it beside the log / in the temp folder and open it like any other .bin.
     public void OpenRomImage(byte[] rom, string name)
     {
         try
@@ -1195,9 +1577,24 @@ public sealed class MainWindow : Window
         catch (Exception ex) { SetStatus("could not open the ROM from the log: " + ex.Message); AppLog.Error("app", "ROM from log failed", ex); }
     }
 
-    void OpenBinary(string path)
+    async void OpenBinary(string path)
     {
         var bytes = File.ReadAllBytes(path);
+        // a 64 KB (512) chip image holds two ROMs: open the half the ECU would run
+        if (bytes.Length == Bus.RomSize * 2)
+        {
+            bool lowBlank = bytes[..Bus.RomSize].All(b => b == 0xFF) || bytes[..Bus.RomSize].All(b => b == 0);
+            var pick = lowBlank ? "Upper half" : await Dialogs.Ask(this, "64 KB image",
+                $"{Label(path)} is a 64 KB (512) chip image: two 32 KB ROMs, 0000-7FFF and 8000-FFFF. A board with the top address line tied high runs the upper half. Which one?",
+                "Cancel", "Lower half", "Upper half");
+            if (pick is null or "Cancel") return;
+            bool upper = pick == "Upper half";
+            bytes = upper ? bytes[Bus.RomSize..] : bytes[..Bus.RomSize];
+            var half = Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileNameWithoutExtension(path) + (upper ? "_high" : "_low") + ".bin");
+            File.WriteAllBytes(half, bytes);
+            SetStatus($"{Label(path)}: the {(upper ? "upper" : "lower")} half, saved as {Path.GetFileName(half)} and opened" + (lowBlank ? " (the lower half is blank)" : ""));
+            path = half;
+        }
         ResetForNewRom(path);
         if (bytes.Length == Bus.RomSize + 1 && bytes[^1] == 0) bytes = bytes[..Bus.RomSize];
         if (bytes.Length > Bus.RomSize)
@@ -1207,21 +1604,63 @@ public sealed class MainWindow : Window
         var asmPath = Path.ChangeExtension(path, ".asm");
         if (File.Exists(asmPath)) asmPath = Path.ChangeExtension(path, ".disasm.asm");
         SetStatus("disassembling…");
+        DefinitionSet? saved = null;
+        var sidecar = DefinitionsFileFor(path);
+        if (File.Exists(sidecar))
+            try { saved = DefinitionSet.Load(sidecar); }
+            catch (Exception ex) { AppLog.Error("app", "definitions file unreadable", ex); SetStatus($"{Path.GetFileName(sidecar)} could not be read: {ex.Message}"); }
+        Dictionary<int, string>? names = null;
+        if (saved != null)
+        {
+            names = [];
+            foreach (var (n, a) in saved.Labels ?? []) names.TryAdd(a, n);
+            foreach (var it in saved.Items) names.TryAdd(it.Address, it.Name);
+        }
         var dis = BinDisassembler.Disassemble(bytes, Path.GetFileName(path), text =>
         {
             var r = new OkiAssembler(new AssemblerOptions { ReadFile = f => f == Path.GetFullPath(asmPath) ? text : null })
                 .AssembleText(text, asmPath);
             return (r.Success ? r.Image : null, r.Diagnostics.Where(d => d.Severity == Severity.Error).Select(d => d.Line));
-        });
+        }, names);
         _buffers[asmPath] = dis.Text;
         _dirty.Add(asmPath);
         _target = asmPath;
         ShowBuffer(asmPath);
         Build();
-        SetStatus($"{Label(path)}: {dis.CodeInstructions:N0} instructions found by following the code, " +
-                  $"{dis.DataBytes:N0} bytes kept as data" +
-                  (dis.RoundTrips ? "; rebuilds byte-identical" : " -- " + dis.Note) + note +
-                  $". Unsaved: Ctrl+S writes {Label(asmPath)}", sticky: true);
+        if (saved != null)
+        {
+            _host.ReplaceDefinitions(saved);
+            _calibration.Refresh();
+            SetStatus($"{Label(path)}: names, tables and page bindings put back from {Path.GetFileName(sidecar)} ({saved.Items.Count} definitions)", sticky: true);
+            return;
+        }
+        string opened;
+        if (HtsLayout.Describe(bytes) is { Length: > 0 } kind) { opened = $"{Label(path)} is {kind}"; AppLog.Info("app", opened); }
+        else opened = $"{Label(path)}: {dis.CodeInstructions:N0} instructions found by following the code, " +
+                      $"{dis.DataBytes:N0} bytes kept as data" +
+                      (dis.RoundTrips ? "; rebuilds byte-identical" : " -- " + dis.Note) + note +
+                      $". Unsaved: Ctrl+S writes {Label(asmPath)}";
+        SetStatus(opened, sticky: true);
+        // no definitions file beside it: its maps are found now, the way Detect finds them - a .bin read out of the
+        // emulator or off a chip opens with its tables, not with an empty list that looks as if nothing came back
+        if (_host.Assembly != null && _host.Defs().Items.Count == 0) _ = DetectOnOpen(opened);
+    }
+
+    async Task DetectOnOpen(string opened)
+    {
+        await _calibration.DetectAsync();
+        int n = _host.Defs().Items.Count;
+        SetStatus(n > 0 ? $"{opened}  -  Detect found {n} maps and settings (Calibration page)" : opened + "  -  Detect found no maps in it", sticky: true);
+    }
+
+    /// The .bin Download read out of the emulator: opening it keeps the emulator and the datalog connected.
+    string? _keepLinksFor;
+
+    async void OpenDownloaded(string path)
+    {
+        if (!await ConfirmReplaceCurrent(path)) { SetStatus($"the emulator's ROM is saved as {path}; open it from File when you are ready"); return; }
+        _keepLinksFor = path;
+        OpenFile(path);
     }
 
     /// Opening another ROM: forget the one before it (definitions, undo, hits, traces, its source buffers), so Detect and the Calibration page cannot mix the two.
@@ -1232,15 +1671,26 @@ public sealed class MainWindow : Window
             if (!SamePath(k, keep) && !_dirty.Contains(k)) _buffers.Remove(k);
         _diags.Clear();
         _problemLoc.Clear();
-        SetItems(_problems, []);
+        _problems.SetRows([]); _problemSummary.Text = "not built yet"; _problemSummary.Foreground = DataList.Text;
         _builtTexts = [];
         _builtImage = null;
         _lookupRows = []; _lookupLines = [];
-        SetItems(_lookupList, []);
+        SetItems(_lookupList, []); _lookupData.SetRows([]);
         _lastSourceShown = ""; _lastPcShown = -1;
+        // the emulator and the datalog belong to the ROM that was open: a different project starts with both disconnected -
+        // except the ROM just read out of the emulator, which is the one the car is running
+        _datalog.StopPlayback();
+        if (_keepLinksFor != null && SamePath(_keepLinksFor, path)) _keepLinksFor = null;
+        else
+        {
+            bool linked = _host.Emulator.Connected || _datalog.Engine.Running || _datalog.Engine.Watch.Wanted;
+            _calibration.DisconnectEmulator();
+            if (_datalog.Engine.Running || _datalog.Engine.Watch.Wanted) _datalog.Stop();
+            if (linked) SetStatus("another ROM: the emulator and the datalog were disconnected");
+        }
         _host.ResetRomState();
         _calibration.ResetForNewRom();
-        _trace.Text = "";
+        _trace.Text = ""; _traceList.SetRows([]); _traceShown = -1;
         AppLog.Action("app", "opening " + Path.GetFileName(path) + ": previous ROM state cleared");
     }
 
@@ -1252,18 +1702,20 @@ public sealed class MainWindow : Window
         _dirty.Clear();
         _current = null; _target = null;
         _diags.Clear(); _problemLoc.Clear();
-        SetItems(_problems, []);
+        _problems.SetRows([]); _problemSummary.Text = "not built yet"; _problemSummary.Foreground = DataList.Text;
         _lookupRows = []; _lookupLines = [];
-        SetItems(_lookupList, []);
-        SetItems(_disasm, []);
-        SetItems(_bpList, []);
+        SetItems(_lookupList, []); _lookupData.SetRows([]);
+        _disList.SetRows([]);
+        _bpList.SetRows([]);
+        _problemSummary.Text = "not built yet"; _problemSummary.Foreground = DataList.Text;
         _builtTexts = []; _builtImage = null;
         _suppressEdit = true;
         _editor.Text = "";
+        _editorParked = false;
         _suppressEdit = false;
         _editor.SetDiagnostics(new List<(int, bool)>());
         _editor.SetHits(null);
-        _trace.Text = ""; _memory.Text = "";
+        _trace.Text = ""; _traceList.SetRows([]); _traceShown = -1; _memory.Text = "";
         _calibration.ResetForNewRom();
         _datalog.ClearAll();
         _settings.LastFile = null;
@@ -1274,8 +1726,9 @@ public sealed class MainWindow : Window
 
     void ShowBuffer(string path)
     {
-        if (_current != null && _buffers.ContainsKey(_current)) _buffers[_current] = _editor.Text ?? "";
+        if (_current != null && _buffers.ContainsKey(_current)) _buffers[_current] = EditorText;
         _current = path;
+        _editorParked = false;
         _suppressEdit = true;
         _editor.Text = _buffers[path];
         _suppressEdit = false;
@@ -1317,7 +1770,7 @@ public sealed class MainWindow : Window
     void OnEditorChanged()
     {
         if (_suppressEdit || _current == null) return;
-        _buffers[_current] = _editor.Text ?? "";
+        _buffers[_current] = EditorText;
         _dirty.Add(_current);
         UpdateDocHeader();
         _checkTimer.Stop();
@@ -1343,8 +1796,8 @@ public sealed class MainWindow : Window
     void SaveCurrent()
     {
         if (_current == null) return;
-        _buffers[_current] = _editor.Text;
-        File.WriteAllText(_current, _editor.Text);
+        _buffers[_current] = EditorText;
+        File.WriteAllText(_current, _buffers[_current]);
         _dirty.Remove(_current);
         UpdateDocHeader();
         SetStatus($"saved {_current}");
@@ -1358,11 +1811,16 @@ public sealed class MainWindow : Window
             Title = "Save source as",
             SuggestedFileName = Label(_current),
             DefaultExtension = "asm",
-            FileTypeChoices = new[] { new FilePickerFileType("Assembler source") { Patterns = new[] { "*.asm" } } },
+            FileTypeChoices = new[]
+            {
+                new FilePickerFileType("Assembler source") { Patterns = new[] { "*.asm" } },
+                new FilePickerFileType("ROM image, assembled from the source (32 KB)") { Patterns = new[] { "*.bin" } },
+            },
         });
         var path = file?.TryGetLocalPath();
         if (path == null) return;
-        var text = _editor.Text ?? "";
+        if (path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase)) { SaveAssembledBin(path); return; }
+        var text = EditorText;
         _buffers.Remove(_current);
         _dirty.Remove(_current);
         if (SamePath(_target, _current)) _target = path;
@@ -1374,13 +1832,73 @@ public sealed class MainWindow : Window
         CheckBuildNeeded();
     }
 
+    /// Save As .bin: the ROM image of the source. When the image running now was built from the source as it is on screen, that image is saved (with every calibration change made since, the checksum kept right); otherwise the source is assembled as it is on screen, unsaved changes and all.
+    async void SaveAssembledBin(string path)
+    {
+        if (_current != null) _buffers[_current] = EditorText;
+        var target = _target ?? _current;
+        if (target == null) return;
+        bool upToDate = _builtImage != null && _builtTexts.All(kv => (ReadBuffer(kv.Key) ?? kv.Value) == kv.Value)
+                        && _host.LoadedPath is { } lp && SamePath(lp, target);
+        try
+        {
+            if (upToDate)
+            {
+                _host.SaveRom(path);
+                SetStatus($"saved {path}: the ROM running now, built from {Label(target)}, with the calibration changes made since");
+                await OfferDefinitionsFile(path, _host.Defs(), _host.Assembly);
+                return;
+            }
+            var r = new OkiAssembler(new AssemblerOptions { ReadFile = ReadBuffer }).AssembleFile(target);
+            if (!r.Success)
+            {
+                var first = r.Diagnostics.FirstOrDefault(d => d.Severity == Severity.Error);
+                SetStatus($"not saved: {Label(target)} does not assemble ({first?.Message})");
+                return;
+            }
+            if (File.Exists(path)) File.Copy(path, path + ".bak", overwrite: true);
+            File.WriteAllBytes(path, r.Image);
+            SetStatus($"saved {path}: {Label(target)} assembled ({r.UsedBytes:N0} bytes used)");
+            await OfferDefinitionsFile(path, DefinitionBuilder.FromAssembly(r, Path.GetFileName(path)), r);
+        }
+        catch (Exception ex) { SetStatus("could not save the image: " + ex.Message); }
+    }
+
+    /// The definitions file that goes with a .bin: name.okidef.json beside it.
+    static string DefinitionsFileFor(string bin) => Path.ChangeExtension(bin, null) + ".okidef.json";
+
+    /// A .bin was saved: offer the definitions file that keeps its names. A .bin is only bytes, and opened again it comes back as loc_1234 and unnamed tables; with the definitions file beside it, every label, table, scaling and page binding comes back with it.
+    public async Task OfferDefinitionsFile(string bin, DefinitionSet defs, AssemblyResult? asm)
+    {
+        try
+        {
+            var file = DefinitionsFileFor(bin);
+            var pick = await Dialogs.Ask(this, "Save a definitions file too?",
+                $"{Path.GetFileName(bin)} is saved. Also save {Path.GetFileName(file)} beside it?\n\n" +
+                "A .bin holds only the bytes. Opened again on its own, every label is gone - the code comes back as loc_1234 and sub_5678, the tables " +
+                "and settings have no names, scaling or page bindings, and Detect has to guess them again.\n\n" +
+                $"The definitions file keeps all of that ({defs.Items.Count} definitions, {defs.Symbols.Count} labels). Keep it next to the .bin with the " +
+                "same name, and opening the .bin puts everything back.",
+                "Save definitions too", "Just the .bin");
+            if (pick != "Save definitions too") return;
+            if (File.Exists(file)) File.Copy(file, file + ".bak", overwrite: true);
+            if (asm != null)
+                defs.Labels = asm.Symbols.Values.Where(x => x.Kind == SymbolKind.Label && x.Value >= 0 && x.Value < asm.Image.Length)
+                                 .GroupBy(x => x.Name).ToDictionary(g => g.Key, g => (int)g.First().Value);
+            defs.Save(file);
+            SetStatus($"saved {Path.GetFileName(bin)} and {Path.GetFileName(file)} - open the .bin to get every name back");
+            AppLog.Action("app", "definitions saved to " + file);
+        }
+        catch (Exception ex) { SetStatus("could not save the definitions file: " + ex.Message); AppLog.Error("app", "definitions file failed", ex); }
+    }
+
     // ------------------------------------------------------------------ build
 
     string? ReadBuffer(string fullPath) => _buffers.FirstOrDefault(kv => SamePath(kv.Key, fullPath)).Value;
 
     void Build()
     {
-        if (_current != null) _buffers[_current] = _editor.Text ?? "";
+        if (_current != null) _buffers[_current] = EditorText;
         UpdateDocHeader();
         var target = _target ?? _current;
         if (target == null || !target.EndsWith(".asm", StringComparison.OrdinalIgnoreCase))
@@ -1390,8 +1908,7 @@ public sealed class MainWindow : Window
         var res = _host.Build(target, ReadBuffer);
         _diags = res.Diagnostics;
         var ordered = _diags.OrderByDescending(d => d.Severity).ToList();
-        _problemLoc = [.. ordered.Select(d => (d.File, d.Line))];
-        SetItems(_problems, ordered.Select(d => $"{d.Severity.ToString().ToLowerInvariant(),-7} {Path.GetFileName(d.File)}:{d.Line}  {d.Message}"));
+        ShowProblems(ordered);
         if (res.Success && res.Assembly != null)
         {
             // remember exactly what was built, to tell later whether the screen differs
@@ -1415,6 +1932,44 @@ public sealed class MainWindow : Window
         _editor.SetDiagnostics(_diags.Where(d => SamePath(d.File, _current)).Select(d => (d.Line, d.Severity == Severity.Error)).ToList());
         if (SelectedTab() == "Calibration") _calibration.Refresh();
         _lastSourceShown = "";
+        RefreshDisassembly(true);
+    }
+
+    /// Build and patch the running ROM with what changed (SimHost.PatchBuild): code and tables take effect without a reset.
+    async void PatchLive(bool force)
+    {
+        if (_current != null) _buffers[_current] = EditorText;
+        var target = _target ?? _current;
+        if (target == null || !target.EndsWith(".asm", StringComparison.OrdinalIgnoreCase)) { SetStatus("open a .asm to patch from"); return; }
+        SetStatus("assembling to patch live…");
+        var res = await Task.Run(() => _host.PatchBuild(target, ReadBuffer, force));
+        _diags = res.Diagnostics;
+        var ordered = _diags.OrderByDescending(d => d.Severity).ToList();
+        ShowProblems(ordered);
+        if (res.RunningInside && !res.Success)
+        {
+            var pick = await Dialogs.Ask(this, "Patch the code it is running?",
+                $"The program is running inside code that changes ({res.Note}). Patched under it, it may carry on from the middle of an " +
+                "instruction or return into moved code. Patch it anyway, or reset after patching (the simulator starts again from power-up, the " +
+                "new code throughout)?", "Cancel", "Patch anyway", "Patch and reset");
+            if (pick is null or "Cancel") { SetStatus("not patched"); return; }
+            res = await Task.Run(() => _host.PatchBuild(target, ReadBuffer, true));
+            if (res.Success && pick == "Patch and reset") _host.Control("reset");
+        }
+        if (!res.Success)
+        {
+            SetStatus("not patched: " + res.Note, sticky: true);
+            if (res.Diagnostics.Any(d => d.Severity == Severity.Error)) SelectTab("Problems");
+            return;
+        }
+        var files = res.Assembly!.SourceMap.Select(e => e.File).Append(Path.GetFullPath(target)).Distinct(StringComparer.OrdinalIgnoreCase);
+        _builtTexts = files.ToDictionary(f => f, f => ReadBuffer(f) ?? (File.Exists(f) ? File.ReadAllText(f) : ""), StringComparer.OrdinalIgnoreCase);
+        _builtImage = [.. res.Assembly.Image];
+        UpdateBuildButton(false, "Up to date: the running ROM was patched from the source on screen.");
+        AppLog.Action("build", "patch live: " + res.Note + string.Concat(res.Ranges.Take(12).Select(r => $"\n  {r.Start:X4}-{r.Start + r.Length - 1:X4} {_host.LabelAt(r.Start)}")));
+        SetStatus(res.Note + (_host.Emulator.Connected ? (_host.AutoUpload ? "; the emulator gets the changed blocks" : "; the emulator is not uploading changes (Emulator > Upload on changes)") : ""), sticky: true);
+        _editor.SetDiagnostics(_diags.Where(d => SamePath(d.File, _current)).Select(d => (d.Line, d.Severity == Severity.Error)).ToList());
+        _calibration.Refresh();
         RefreshDisassembly(true);
     }
 
@@ -1462,8 +2017,7 @@ public sealed class MainWindow : Window
                 {
                     _diags = fresh;
                     var ordered2 = _diags.OrderByDescending(d => d.Severity).ToList();
-                    _problemLoc = [.. ordered2.Select(d => (d.File, d.Line))];
-                    SetItems(_problems, ordered2.Select(d => $"{d.Severity.ToString().ToLowerInvariant(),-7} {Path.GetFileName(d.File)}:{d.Line}  {d.Message}"));
+                    ShowProblems(ordered2);
                     _editor.SetDiagnostics(_diags.Where(d => SamePath(d.File, _current)).Select(d => (d.Line, d.Severity == Severity.Error)).ToList());
                 }
             });
@@ -1495,7 +2049,7 @@ public sealed class MainWindow : Window
     ProjectData BuildProject()
     {
         {
-            if (_current != null) _buffers[_current] = _editor.Text ?? "";
+            if (_current != null) _buffers[_current] = EditorText;
             var (machine, ram, rom) = _host.SaveState();
             var s = _host.State();
             RefreshMemory();
@@ -1510,14 +2064,30 @@ public sealed class MainWindow : Window
                 Machine = machine, Ram = ram, Rom = rom, Definitions = _host.Defs(),
                 ProcessorJson = _profile.ToJson(),
                 SettingsJson = System.Text.Json.JsonSerializer.Serialize(_settings.RomScoped(), new System.Text.Json.JsonSerializerOptions { WriteIndented = true }),
+                TunerMode = _tuner, CalibrationItem = _calibration.ViewState.Item, CalibrationView = _calibration.ViewState.View,
+                HitTrace = _hitView.HitMode,
             };
-            p.Views["trace.txt"] = _trace.Text ?? "";
+            // the datalog loaded or recorded, as a CSV (every channel and the raw frames)
+            var (frames, logName, logPos) = _datalog.SavedLog();
+            if (frames.Count > 0)
+            {
+                var tmp = Path.Combine(Path.GetTempPath(), $"okirom-project-{Environment.ProcessId}.csv");
+                try
+                {
+                    LogFile.SaveCsv(tmp, frames);
+                    p.DatalogCsv = File.ReadAllBytes(tmp);
+                    p.DatalogName = logName; p.DatalogPosition = logPos;
+                }
+                catch (Exception ex) { AppLog.Error("project", "the datalog could not be saved with the project", ex); }
+                finally { try { File.Delete(tmp); } catch { } }
+            }
+            p.Views["trace.txt"] = string.Join("\n", s.Trace.Select(t => $"{Hex(t.Pc)}  {t.Label,-22} {t.Text}"));
             p.Views["memory.txt"] = _memory.Text ?? "";
             p.Views["lookup.txt"] = string.Join("\n", _lookupLines);
-            p.Views["breakpoints.txt"] = string.Join("\n", s.Breakpoints.Select(b => $"{Hex(b.Address)}  {b.Label}  {b.Source}"));
+            p.Views["breakpoints.txt"] = string.Join("\n", s.Breakpoints.Select(b => $"{Hex(b.Address)}  {b.Label}  {b.Source}{(b.Enabled ? "" : "  (off)")}"));
             p.Views["problems.txt"] = string.Join("\n", _diags.Select(d => d.ToString()));
-            p.Views["registers.txt"] = (_regs.Text ?? "") + "\n" + (_flags.Text ?? "") + "\n\ncall stack:\n" + (_calls.Text ?? "");
-            p.Views["outputs.txt"] = (_outputs.Text ?? "") + "\n\n" + (_ports.Text ?? "");
+            p.Views["registers.txt"] = RegistersText(s) + "\n\ncall stack:\n" + string.Join("\n", s.Calls);
+            p.Views["outputs.txt"] = OutputsText(s.Outputs) + "\n\n" + PortsText(s);
             return p;
         }
     }
@@ -1627,6 +2197,8 @@ public sealed class MainWindow : Window
         _memAddr.Text = p.MemoryAddress; _disAddr.Text = p.DisassemblyAddress; _lookupQ.Text = p.LookupQuery;
         _lookupLines = p.LookupLines; _lookupRows = [];
         SetItems(_lookupList, _lookupLines);
+        _lookupData.SetRows([.. _lookupLines.Select(l => new DataList.Row([new(l.Length > 4 ? l[..4] : l, DataList.Address), new(l.Length > 6 ? l[6..].Trim() : "", DataList.Text)],
+            null, l.Length >= 4 && int.TryParse(l[..4], NumberStyles.HexNumber, null, out var la) ? la : -1))]);
         _package.SelectedIndex = p.Package == nameof(ChipView.Package.Qfp64) ? 1 : 0;
         if (p.SelectedTab.Length > 0) SelectTab(p.SelectedTab);
         if (show != null && !SamePath(_current, show)) ShowBuffer(show);
@@ -1638,7 +2210,21 @@ public sealed class MainWindow : Window
             _editor.GoToLine(p.CaretLine);
         }, DispatcherPriority.Background);
         RefreshDisassembly(true);
-        SetStatus($"project restored from {Label(path)}: {p.Sources.Count} source file(s), machine state, calibration and views", sticky: true);
+        _hitView.HitMode = p.HitTrace;
+        if (p.DatalogCsv is { Length: > 0 } csv)
+        {
+            var tmp = Path.Combine(Path.GetTempPath(), $"okirom-project-{Environment.ProcessId}.csv");
+            try
+            {
+                File.WriteAllBytes(tmp, csv);
+                _datalog.RestoreLog(LogFile.Load(tmp), p.DatalogName.Length > 0 ? p.DatalogName : "project log", p.DatalogPosition);
+            }
+            catch (Exception ex) { AppLog.Error("project", "the project's datalog could not be read", ex); }
+            finally { try { File.Delete(tmp); } catch { } }
+        }
+        if (p.TunerMode != _tuner) SetTunerMode(p.TunerMode);
+        _calibration.RestoreView(p.CalibrationItem, p.CalibrationView);
+        SetStatus($"project restored from {Label(path)}: {p.Sources.Count} source file(s), machine state, calibration{(p.DatalogCsv != null ? ", datalog" : "")} and views", sticky: true);
     }
     (int First, int Caret)? _restoreView;
 
@@ -1658,6 +2244,7 @@ public sealed class MainWindow : Window
     {
         if (text != _lastLogged) { _lastLogged = text; AppLog.Info("status", text); }
         _status.Text = text;
+        if (_tuner) _calibration.ShowStatus(text);
         ToolTip.SetTip(_status, text);
         _sticky = sticky ? text : "";
     }
@@ -1666,11 +2253,60 @@ public sealed class MainWindow : Window
 
     // for the --ui-check layout pass
     internal SimHost Host => _host;
+    internal DatalogView DatalogPanel => _datalog;
+    internal void LookupForCheck(string q) { _lookupQ.Text = q; DoXref(); }
+    /// A Demon datalogs over the emulator's own port: when the emulator connects, the datalog is connected too (once per connection, so stopping the datalog by hand is left alone), and disconnecting the emulator stops it.
+    int _demonLinked;
+
+    void DemonDatalog()
+    {
+        var emu = _host.Emulator;
+        if (!emu.Connected || emu.Device != "Demon" || emu.Connections == _demonLinked) return;
+        _demonLinked = emu.Connections;
+        // already logging (the simulator, say): left alone
+        if (_datalog.Engine.Running || _datalog.Engine.Watch.Wanted) return;
+        // a Demon found by 'auto' too: its datalog is on its own port, whatever port was set before
+        _datalog.Port = "emulator";
+        _datalog.Start();
+        SetStatus("the Demon is connected: datalogging through it as well (same port)");
+    }
+
+    void DemonClosed()
+    {
+        if (_datalog.Engine.IsEmulatorPort(_datalog.Port) && (_datalog.Engine.Running || _datalog.Engine.Watch.Wanted)) _datalog.Stop();
+    }
+
+    /// At start-up: ask the website whether anything is newer, and only say so (Settings > Updates fetches it).
+    async void CheckUpdatesQuietly()
+    {
+        try
+        {
+            await Task.Delay(4000);
+            var changes = await Updater.Check(_settings.UpdateSite);
+            var offered = changes.Where(c => c.Recommended).ToList();
+            if (offered.Count == 0) return;
+            bool program = offered.Any(c => c.NeedsRestart);
+            SetStatus($"updates are available: {(program ? "a new version of the program" + (offered.Count > 1 ? " and " : "") : "")}" +
+                      $"{(offered.Count(c => !c.NeedsRestart) is int t and > 0 ? $"{t} template file(s)" : "")} - Settings > Updates > Check now", sticky: true);
+        }
+        catch (Exception ex) { AppLog.Info("updates", "start-up check did not reach the website: " + ex.Message); }
+    }
+
+    /// Restarting after an update: unsaved work is saved or let go first (false: stay).
+    internal Task<bool> ReadyToRestart() => ConfirmReplaceCurrent("the updated program");
     internal List<string> TabNames() => [.. _bottom.Items.OfType<TabItem>().Select(t => t.Tag as string ?? "")];
     internal void ShowTab(string header) => SelectTab(header);
+    internal void TunerMode(bool on) => SetTunerMode(on);
+    internal void SaveProjectTo(string path) => ProjectFile.Save(path, BuildProject());
+    internal void OpenProjectFrom(string path) => OpenProject(path);
+    internal bool InTuner => _tuner;
+    internal CalibrationView CalibrationPanel => _calibration;
+    internal HitTraceView TracePanel => _hitView;
 
     void SelectTab(string header)
     {
+        // pages that were merged: a project saved on one of them opens on the page it went into
+        header = header switch { "Hit trace" => "Trace", "Lookup / xref" or "Breakpoints" => "Lookup & breakpoints", _ => header };
         foreach (var item in _bottom.Items)
             if (item is TabItem t && (t.Tag as string) == header) { _bottom.SelectedItem = t; return; }
     }
@@ -1687,34 +2323,36 @@ public sealed class MainWindow : Window
 
     void Refresh()
     {
-        var s = _host.State();
         if (_tuner)
         {
+            // Tuner mode: no simulator to look at. Where the engine is on the map goes straight from each frame
+            // (DatalogView posts it as it arrives); this is the slower rest - values, gauges, the emulator, the overlay
             _datalog.Tick(null);
             _calibration.Tick();
-            _calibration.UpdateEmulator();
-            _calibration.SetOverlayChannels(_datalog.Channels(), _settings.OverlayChannel);
+            if ((DateTime.UtcNow - _lastSlowTuner).TotalMilliseconds >= Perf.SidePanelsMs)
+            {
+                _lastSlowTuner = DateTime.UtcNow;
+                _calibration.UpdateEmulator();
+                _calibration.SetOverlayChannels(_datalog.Channels(), _settings.OverlayChannel);
+            }
             if (_datalog.Engine.Running) _calibration.UpdateOverlay(throttle: true);
             return;
         }
+        var s = _host.State();
         bool sidePanes = !_expanded;
         if (!sidePanes) goto Lower;
-        _regs.Text =
-            $"PC   {Hex(s.Pc)} {s.Label}\n" +
-            $"A    {Hex(s.A)}   DP {Hex(s.Dp)}   X1 {Hex(s.X1)}   X2 {Hex(s.X2)}\n" +
-            $"USP  {Hex(s.Usp)}   SSP {Hex(s.Ssp)}   LRB {Hex(s.Lrb)} -> {Hex(s.Bank, 3)}\n" +
-            $"PSW  {Hex(s.Psw)}   er {string.Join(" ", s.Er.Select(v => Hex(v)))}\n" +
-            $"{s.SimSeconds:F3} s simulated · {s.Instructions:N0} instructions" +
-            (s.Running && s.Rate > 0 ? $" · {s.Rate:N0}/s" : "");
-        _flags.Text = $"CY {(s.Cy ? 1 : 0)}  Z {(s.Z ? 1 : 0)}  HC {(s.Hc ? 1 : 0)}  DD {(s.Dd ? 1 : 0)}  MIE {(s.Mie ? 1 : 0)}  SCB {s.Scb}   IRQ {Hex(s.Irq)}  IE {Hex(s.Ie)}";
-        _hot.Text = s.HotWindow > 0
+        _cpu.Update(s, s.Label.Length > 0 ? s.Label : _host.NearestLabel(s.Pc), s.HotWindow > 0
             ? $"hot {Hex(s.HotAddress)} {_host.NearestLabel(s.HotAddress)} {100.0 * s.HotCount / s.HotWindow:F0}% of the recent window · coverage {s.Coverage} addresses"
-            : "";
-        var calls = s.Calls.Count == 0 ? ["(top level)"] : s.Calls.Take(24).ToList();
-        while (calls.Count < CallStackLines) calls.Add("");
-        _calls.Text = string.Join("\n", calls);
-        _outputs.Text = OutputsText(s.Outputs);
-        _ports.Text = PortsText(s);
+            : "");
+        // the call stack, outputs and ports change less than the registers: a few times a second is plenty (and while
+        // stopped, once per step)
+        if (!s.Running || (DateTime.UtcNow - _lastSidePanels).TotalMilliseconds >= Perf.SidePanelsMs)
+        {
+            _lastSidePanels = DateTime.UtcNow;
+            _callList.SetRows(CallRows(s.Calls));
+            _outList.SetRows(OutputRows(s.Outputs));
+            _portList.SetRows(PortRows(s));
+        }
         _chip.Update(s);
         _status.Text = s.Running
             ? $"running {(_host.Speed == 0 ? "unlimited" : _host.Speed + "x")}"
@@ -1733,8 +2371,22 @@ public sealed class MainWindow : Window
         }
         var tab = SelectedTab();
         // the trace box re-lays out all its text on every change: only while it is on screen
-        if (tab == "Trace") _trace.Text = string.Join("\n", s.Trace.Select(t => $"{Hex(t.Pc)}  {t.Label,-22} {t.Text}"));
-        if (tab == "Breakpoints") SetItems(_bpList, s.Breakpoints.Select(b => $"{Hex(b.Address)}  {b.Label,-24} {b.Source}"));
+        if (tab == "Trace" && !_hitView.HitMode && s.Instructions != _traceShown)
+        {
+            _traceShown = s.Instructions;
+            _traceList.SetRows([.. s.Trace.Select((t, i) => new DataList.Row(
+                [new(Hex(t.Pc), DataList.Address), new(t.Label.Length > 0 ? t.Label : _host.NearestLabel(t.Pc), t.Label.Length > 0 ? DataList.Label : DataList.Dim, t.Label.Length > 0), new(t.Text, DataList.MnemonicInk(t.Text))],
+                DataList.Code, t.Pc, $"{_host.Where((ushort)t.Pc)}\n{t.Text}", Current: i == s.Trace.Count - 1))], follow: true);
+        }
+        if (tab == "Lookup & breakpoints" && string.Join(",", s.Breakpoints.Select(b => $"{b.Address}{b.Enabled}")) is var bpKey && bpKey != _bpShown)
+        {
+            _bpShown = bpKey;
+            // a breakpoint switched off: kept in the list, hollow and grey, not stopped at
+            _bpList.SetRows([.. s.Breakpoints.Select(b => new DataList.Row(
+                [new(b.Enabled ? "●" : "○", b.Enabled ? DataList.Error : DataList.Dim), new(Hex(b.Address), b.Enabled ? DataList.Address : DataList.Dim),
+                 new(b.Label + (b.Enabled ? "" : "  (off)"), b.Enabled ? DataList.Label : DataList.Dim), new(b.Source, DataList.Dim)],
+                b.Enabled ? DataList.Error : DataList.Dim, b.Address, $"{Hex(b.Address)} {b.Label}{(b.Enabled ? "" : " - switched off")}\n{b.Source}", Tag: b.Enabled))]);
+        }
 
         if (!s.Running && _restoreView == null)
         {
@@ -1746,7 +2398,7 @@ public sealed class MainWindow : Window
                 ShowSourceLine(s.SourceFile, s.SourceLine);
             }
         }
-        if (tab == "Memory") RefreshMemory();
+        if (tab == "Memory") { RefreshMemory(); _memMap?.Refresh(); }
         SyncSliders();
 
         // after a step: show the table the instruction read
@@ -1763,18 +2415,19 @@ public sealed class MainWindow : Window
                 _calibration.SetOverlayChannels(_datalog.Channels(), _settings.OverlayChannel);
                 if (_datalog.Engine.Running) _calibration.UpdateOverlay(throttle: true);
                 break;
-            case "Hit trace": _hitView.Tick(s); break;
+            case "Trace" when _hitView.HitMode: _hitView.Tick(s); break;
             case "Datalog": _datalog.Tick(s); break;
             case "Debug": _debug.Tick(); break;
         }
         if ((DateTime.UtcNow - _lastHitPaint).TotalMilliseconds > 500)
         {
             _lastHitPaint = DateTime.UtcNow;
-            _editor.SetHits(_current != null && _hitView.ColourSource && SelectedTab() == "Hit trace" ? _hitView.LineHits(_current) : null);
+            _editor.SetHits(_current != null && _hitView.ColourSource && _hitView.HitMode && SelectedTab() == "Trace" ? _hitView.LineHits(_current) : null);
         }
     }
     int _lastStepSerial;
-    DateTime _lastHitPaint;
+    DateTime _lastHitPaint, _lastSidePanels, _lastSlowTuner;
+    string? _bpShown;
 
     /// Double-click in the source: a label or address of a defined table/setting opens it on the Calibration tab; a code label jumps to it.
     void OnWordDoubleClicked(string word, int line)
@@ -1803,6 +2456,74 @@ public sealed class MainWindow : Window
 
     /// P2.0-P2.3 carry injectors 1, 3, 4, 2 (measured on the board: the firing order).
     static readonly int[] InjectorNumber = { 1, 3, 4, 2 };
+
+    static string RegistersText(SimHost.Snapshot s) =>
+        $"PC   {Hex(s.Pc)} {s.Label}\n" +
+        $"A    {Hex(s.A)}   DP {Hex(s.Dp)}   X1 {Hex(s.X1)}   X2 {Hex(s.X2)}\n" +
+        $"USP  {Hex(s.Usp)}   SSP {Hex(s.Ssp)}   LRB {Hex(s.Lrb)} -> {Hex(s.Bank, 3)}\n" +
+        $"PSW  {Hex(s.Psw)}   er {string.Join(" ", s.Er.Select(v => Hex(v)))}\n" +
+        $"{s.SimSeconds:F3} s simulated · {s.Instructions:N0} instructions\n" +
+        $"CY {(s.Cy ? 1 : 0)}  Z {(s.Z ? 1 : 0)}  HC {(s.Hc ? 1 : 0)}  DD {(s.Dd ? 1 : 0)}  MIE {(s.Mie ? 1 : 0)}  SCB {s.Scb}   IRQ {Hex(s.Irq)}  IE {Hex(s.Ie)}";
+
+    static readonly System.Text.RegularExpressions.Regex CallLine = new(@"^(irq )?([0-9A-Fa-f]{4}) (.*?)\s+\(returns to ([0-9A-Fa-f]{4})\)");
+
+    /// The call stack as rows: an interrupt or a call, where it went in, the routine and where it goes back to.
+    static List<DataList.Row> CallRows(List<string> calls) => [.. calls.Take(24).Select(c =>
+    {
+        var m = CallLine.Match(c);
+        if (!m.Success) return new DataList.Row([new(""), new(""), new(c, DataList.Text)]);
+        bool irq = m.Groups[1].Success;
+        int entry = int.Parse(m.Groups[2].Value, NumberStyles.HexNumber);
+        return new DataList.Row(
+            [new(irq ? "irq" : "call", irq ? DataList.Purple : DataList.Call), new(m.Groups[2].Value, DataList.Address), new(m.Groups[3].Value, DataList.Label), new(m.Groups[4].Value, DataList.Dim)],
+            irq ? DataList.Purple : DataList.Call, entry, c);
+    })];
+
+    static DataList.Cell OnOff(bool on) => new(on ? "ON" : "off", on ? DataList.Good : DataList.Dim, on);
+
+    /// What the ROM is driving, one output a row, the injectors under their own heading.
+    static List<DataList.Row> OutputRows(SimHost.OutputState o)
+    {
+        string Ago(double ms) => ms < 0 ? "never" : ms < 1000 ? $"{ms:F0} ms ago" : $"{ms / 1000:F1} s ago";
+        var rows = new List<DataList.Row>
+        {
+            new([new("Fuel pump relay"), new("8255 PB7", DataList.Address), OnOff(o.FuelPump), new("")], o.FuelPump ? DataList.Good : null),
+            new([new("VTEC solenoid"), new("8255 PC0", DataList.Address), OnOff(o.Vtec), new($"pressure switch {(o.VtecPressure ? "closed" : "open")}", DataList.Dim)], o.Vtec ? DataList.Good : null),
+            new([new("Ignition coil"), new("timer 3", DataList.Address), new($"{o.SparksPerSec:F0} /s", o.SparksPerSec > 0 ? DataList.Good : DataList.Dim), new("dwell start + fire events", DataList.Dim)], o.SparksPerSec > 0 ? DataList.Good : null),
+            new([new("Injectors - firing order 1-3-4-2", DataList.Text)], Heading: true),
+        };
+        const string injTip = "P2.0-3 latch the pattern (firing order 1-3-4-2), the P3.4 gate pulse from timer 0 opens it";
+        for (int n = 0; n < 4; n++)
+        {
+            bool on = o.InjectorMs[n] > 0;
+            rows.Add(new([new($"Injector {InjectorNumber[n]}"), new($"P2.{n}", DataList.Address), new(on ? $"{o.InjectorMs[n]:F2} ms" : "-", on ? DataList.Good : DataList.Dim),
+                          new($"{o.InjectorPerSec[n]:F1}/s · {o.InjectorDutyPct[n]:F1} % duty · {Ago(o.InjectorAgoMs[n])}", DataList.Dim)], on ? DataList.Good : null, Tip: injTip));
+        }
+        rows.Add(new([new("Other outputs", DataList.Text)], Heading: true));
+        rows.Add(new([new("Watchdog heartbeat"), new("P2.4", DataList.Address), new($"{o.WatchdogHz:F1} Hz", o.WatchdogHz > 0 ? DataList.Good : DataList.Warning), new("")]));
+        rows.Add(new([new("Analog mux select"), new("P2.5-7", DataList.Address), new($"ch {o.MuxChannel}"), new("")]));
+        rows.Add(new([new("EGR (PWM0)"), new("P4.2", DataList.Address), new(o.Pwm0Duty < 0 ? "idle" : $"{o.Pwm0Duty:F1} %", o.Pwm0Duty < 0 ? DataList.Dim : DataList.Good), new(o.Pwm0Duty < 0 ? "" : $"at {o.Pwm0Hz:F1} Hz", DataList.Dim)]));
+        rows.Add(new([new("A/T lockup (PWM1)"), new("P4.3", DataList.Address), new(o.Pwm1Duty < 0 ? "idle" : $"{o.Pwm1Duty:F1} %", o.Pwm1Duty < 0 ? DataList.Dim : DataList.Good), new(o.Pwm1Duty < 0 ? "" : $"at {o.Pwm1Hz:F1} Hz", DataList.Dim)]));
+        rows.Add(new([new("8255 PPI"), new("PA · PB · PC", DataList.Address), new($"{o.PpiA:X2} {o.PpiB:X2} {o.PpiC:X2}"), new("PA is the inputs", DataList.Dim)]));
+        return rows;
+    }
+
+    /// Every port pin, under a heading for its port with the port's value.
+    static List<DataList.Row> PortRows(SimHost.Snapshot s)
+    {
+        string Ms(double v) => v <= 0 ? "-" : v < 1000 ? $"{v:F2}" : $"{v / 1000:F1} s";
+        var rows = new List<DataList.Row>();
+        foreach (var r in s.Outputs.Pins)
+        {
+            if (r.Pin.EndsWith(".0")) rows.Add(new([new($"P{r.Pin[1]}", DataList.Text), new($"= {Hex(s.Ports[r.Pin[1] - '0'], 2)}", DataList.Address)], DataList.Data, Heading: true));
+            var dirInk = r.Dir == "out" ? DataList.Code : r.Dir == "in" ? DataList.Data : DataList.Purple;
+            rows.Add(new([new(r.Pin, DataList.Address), new(r.Level.ToString(), r.Level != 0 ? DataList.Good : DataList.Dim, r.Level != 0), new(r.Dir, dirInk),
+                          new(r.ChangesPerSec > 0 ? $"{r.ChangesPerSec:F1}" : "-", r.ChangesPerSec > 0 ? DataList.Text : DataList.Dim),
+                          new(Ms(r.HighMs), DataList.Dim), new(Ms(r.LowMs), DataList.Dim), new(r.Function, DataList.Text), new(r.DrivenBy, DataList.Label)],
+                         dirInk, Tip: $"{r.Pin} {r.Function}" + (r.DrivenBy.Length > 0 ? $"\nlast written by {r.DrivenBy}" : "")));
+        }
+        return rows;
+    }
 
     static string OutputsText(SimHost.OutputState o)
     {
@@ -1846,11 +2567,12 @@ public sealed class MainWindow : Window
         else if (want.Length > 0 && int.TryParse(want.TrimEnd('h', 'H'), NumberStyles.HexNumber, null, out var hx)) from = hx;
         var lines = _host.Disassemble(from, 60);
         _disasmAddrs = [.. lines.Select(l => l.Addr)];
-        SetItems(_disasm, lines.Select(l =>
-            (l.Bp ? "●" : " ") + (l.Current ? "▶" : " ") + $"{Hex(l.Addr)}  {l.Bytes,-10} {(l.Label.Length > 0 ? l.Label + ": " : "")}{l.Text}"));
+        _disList.SetRows([.. lines.Select(l => new DataList.Row(
+            [new(l.Bp ? "●" : l.Current ? "▶" : "", l.Bp ? DataList.Error : DataList.Good, true), new(Hex(l.Addr), DataList.Address), new(l.Bytes, DataList.Dim),
+             new(l.Label, DataList.Label), new(l.Text, DataList.MnemonicInk(l.Text))],
+            l.Bp ? DataList.Error : l.Current ? DataList.Good : null, l.Addr, l.Source is { Length: > 0 } src ? src : null, Current: l.Current))]);
         int cur = lines.FindIndex(l => l.Current);
-        if (cur >= 0 && from == null)
-            Dispatcher.UIThread.Post(() => { try { _disasm.ScrollIntoView(cur); } catch { } }, DispatcherPriority.Background);
+        if (cur >= 0 && from == null) _disList.ScrollTo(cur);
     }
 
     void RefreshMemory()
@@ -1886,6 +2608,10 @@ public sealed class MainWindow : Window
             ? ["nothing matches"]
             : [.. rows.Select(r => $"{Hex(r.Address)}  {r.Name}{(r.Offset != 0 ? " + " + r.Offset : "")}   {r.Kind}")];
         SetItems(_lookupList, _lookupLines);
+        _lookupData.Empty = "Nothing matches.";
+        _lookupData.SetRows([.. rows.Select(r => new DataList.Row(
+            [new(Hex(r.Address), DataList.Address), new(r.Name + (r.Offset != 0 ? " + " + r.Offset : ""), DataList.Label), new(r.Kind, KindInk(r.Kind))],
+            KindInk(r.Kind), r.Address, $"{Hex(r.Address)} {r.Name}: {r.Kind}"))]);
     }
 
     void DoXref()
@@ -1896,7 +2622,18 @@ public sealed class MainWindow : Window
             ? ["no references found (or the target could not be resolved)"]
             : [.. hits.Select(h => $"{Hex(h.Address)}  {h.Label,-22} {h.Text,-32} {h.Source}")];
         SetItems(_lookupList, _lookupLines);
+        _lookupData.Empty = "No references found (or the target could not be resolved).";
+        _lookupData.SetRows([.. hits.Select(h => new DataList.Row(
+            [new(Hex(h.Address), DataList.Address), new(h.Label.Length > 0 ? h.Label : _host.NearestLabel(h.Address), h.Label.Length > 0 ? DataList.Label : DataList.Dim),
+             new(h.Kind.StartsWith("word") ? "word operand" : h.Kind.StartsWith("direct") ? "direct" : h.Kind, DataList.Dim), new(h.Text, DataList.MnemonicInk(h.Text)), new(h.Source ?? "", DataList.Dim)],
+            DataList.Code, h.Address, $"{Hex(h.Address)} {h.Label}\n{h.Text}\n{h.Source}"))]);
     }
+
+    /// What a looked-up name is, as a colour: code, data (a table or a setting), RAM.
+    static IBrush KindInk(string kind) =>
+        kind.Contains("RAM", StringComparison.OrdinalIgnoreCase) || kind.Contains("SFR", StringComparison.OrdinalIgnoreCase) ? DataList.Jump
+        : kind.Contains("label", StringComparison.OrdinalIgnoreCase) || kind.Contains("code", StringComparison.OrdinalIgnoreCase) ? DataList.Code
+        : DataList.Data;
 
     // ------------------------------------------------------------------ keyboard
 
@@ -1913,6 +2650,7 @@ public sealed class MainWindow : Window
             case "Step out": Control("stepout"); break;
             case "Reset": Control("reset"); break;
             case "Build": Build(); break;
+            case "Patch live": PatchLive(false); break;
             case "Open": OpenFileDialog(); break;
             case "Save": SaveCurrent(); break;
             case "Save project": SaveProject(); break;

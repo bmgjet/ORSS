@@ -3,7 +3,7 @@ using OkiRomSim.Mcp;
 
 // okirom-mcp: MCP server for OKI MSM66207 ROM development.
 //
-// okirom-mcp [--root DIR]... stdio (for local agent launchers) okirom-mcp --http [--port 8765] [--remote] [--password PW] [--cert file.pfx --cert-password PW] [--root DIR]... okirom-mcp --read-only ... refuse every write
+// okirom-mcp [--root DIR]... stdio (for local client launchers) okirom-mcp --http [--port 8765] [--remote] [--password PW] [--cert file.pfx --cert-password PW] [--root DIR]... okirom-mcp --read-only ... refuse every write
 //
 // The password can also come from the OKIROMSIM_MCP_PASSWORD environment variable (keeps it out of process listings). --remote listens on all interfaces and requires a password.
 var roots = new List<string>();

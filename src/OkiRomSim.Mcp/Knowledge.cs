@@ -1,7 +1,7 @@
 // Copyright (c) bmgjet. All rights reserved.
 namespace OkiRomSim.Mcp;
 
-/// What an agent needs to know to read and write 66K (MSM66207 / nX-8/200) assembly, by topic. Written from the datasheet, the opcode grammar and what the simulator had to get right to run the stock Honda ROMs.
+/// What a client needs to know to read and write 66K (MSM66207 / nX-8/200) assembly, by topic. Written from the datasheet, the opcode grammar and what the simulator had to get right to run the stock Honda ROMs.
 public static class Knowledge
 {
     public static readonly (string Topic, string Summary, string Text)[] Topics =
@@ -21,7 +21,7 @@ Clock: the P28 board has a 10 MHz crystal. Instruction timing and timers run at 
 the simulator's cycle units, timers /8 = 312.5 kHz: the stock ROMs' rpm word then reads 1,875,000/rpm
 and injector ticks are 3.2 us, exactly the tuning software's scalings.
 
-Workflow for an agent:
+Workflow for a client:
   1. `disassemble` a .bin (or open the .asm) -> `symbols` / `file_search` to find things
   2. `arch` topics dd, addressing, instructions; `opcode` for any mnemonic you are unsure of
   3. `explore` a routine to see what it calls, reads, writes and probably does

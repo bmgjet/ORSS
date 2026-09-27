@@ -10,7 +10,7 @@ using Decoder = OkiRomSim.Core.Decoder;
 
 namespace OkiRomSim.Mcp;
 
-/// The tools. Every result is plain text sized for an agent's context: listings, traces and disassemblies go to files (the result names them) and file_read pages through them.
+/// The tools. Every result is plain text kept small: listings, traces and disassemblies go to files (the result names them) and file_read pages through them.
 public sealed class OkiTools
 {
     readonly Workspace _ws;
@@ -116,7 +116,7 @@ public sealed class OkiTools
             Schema(("path", "string", "file", true), ("content", "string", "full text", true), ("overwrite", "boolean", "allow replacing an existing file", false)), FileWrite, ReadOnly: false);
 
         yield return new McpTool("workspace_roots",
-            "The folders this server can reach, on the machine it runs on. Paths outside them are refused, so check here before passing a path an agent " +
+            "The folders this server can reach, on the machine it runs on. Paths outside them are refused, so check here before passing a path a client " +
             "can see locally - the simulator may be on another computer.",
             Schema(), _ => $"workspace roots ({(_ws.ReadOnly ? "read-only" : "writable")}):\n  " + string.Join("\n  ", _ws.Roots) +
                            "\nAnything outside these: send it with file_upload / rom_upload, or ask for it with workspace_allow.");
@@ -126,11 +126,11 @@ public sealed class OkiTools
             "there but outside the roots; the user sees the folder and the reason and says yes or no. Only the app's own server can ask.",
             Schema(("path", "string", "folder on the machine running the simulator", true),
                    ("reason", "string", "what it is for, shown to the user", false)), a =>
-                _ws.AddRoot(Req(a, "path"), S(a, "reason") ?? "an agent asked to open a file there"), ReadOnly: false);
+                _ws.AddRoot(Req(a, "path"), S(a, "reason") ?? "a client asked to open a file there"), ReadOnly: false);
 
         yield return new McpTool("transfer_dir",
             "The folder on the simulator's machine that this server can always write to, and the path to give file_upload when you have nowhere else to " +
-            "put a file. The whole round trip for an agent on a different computer is: transfer_dir, then file_upload (in chunks) into it, then app_open " +
+            "put a file. The whole round trip for a client on a different computer is: transfer_dir, then file_upload (in chunks) into it, then app_open " +
             "to open what you sent in the desktop app; file_download brings a file back the same way.",
             Schema(), _ => $"transfer folder: {_ws.Transfer}\nupload into it with file_upload path=\"{Path.Combine(_ws.Transfer, "yourfile.bin")}\" " +
                            "(or just \"yourfile.bin\", which is taken as relative to the first workspace root), then open it with app_open.");
@@ -149,20 +149,20 @@ public sealed class OkiTools
             }, ReadOnly: false);
 
         yield return new McpTool("file_download",
-            "Read any file as base64, in chunks - how an agent on another machine gets a .bin, a log or a project out of the workspace. " +
+            "Read any file as base64, in chunks - how a client on another machine gets a .bin, a log or a project out of the workspace. " +
             "The result gives the total size, this chunk's offset and the file's SHA-256, so a transfer can be resumed and checked.",
             Schema(("path", "string", "file", true), ("offset", "integer", "first byte (default 0)", false),
                    ("max_bytes", "integer", "bytes in this chunk (default 262144, max 4 MB)", false)), FileDownload);
 
         yield return new McpTool("file_upload",
-            "Write base64 into a file, in chunks - how an agent on another machine puts a .bin, .asm or definitions into the workspace. " +
+            "Write base64 into a file, in chunks - how a client on another machine puts a .bin, .asm or definitions into the workspace. " +
             "offset=0 (or leaving it out) starts a new file; later chunks append at their offset. Returns the size so far and its SHA-256.",
             Schema(("path", "string", "file", true), ("data", "string", "base64 of this chunk", true),
                    ("offset", "integer", "where this chunk goes (default: the end of the file, 0 for a new one)", false),
                    ("sha256", "string", "expected SHA-256 of the whole file, checked once the last chunk lands", false)), FileUpload, ReadOnly: false);
 
         yield return new McpTool("rom_download",
-            "The ROM image the desktop app has open (with every calibration edit), as base64 - for an agent running on another machine.",
+            "The ROM image the desktop app has open (with every calibration edit), as base64 - for a client running on another machine.",
             Schema(), _ =>
             {
                 var s2 = _server.Session ?? throw new ToolException("no app session: use file_download for a file");
@@ -172,7 +172,7 @@ public sealed class OkiTools
 
         yield return new McpTool("rom_upload",
             "Send a ROM image (base64) to the desktop app and open it there, as if it had been opened from disk: it is disassembled, built and ready for " +
-            "cal_detect, the simulator and the emulator. For an agent working from another machine.",
+            "cal_detect, the simulator and the emulator. For a client working from another machine.",
             Schema(("data", "string", "base64 of the .bin image (leave out when using path)", false),
                    ("path", "string", "a .bin already on the simulator's machine, instead of data (what file_upload wrote)", false),
                    ("name", "string", "name to show it under", false)), a =>

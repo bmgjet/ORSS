@@ -4,7 +4,7 @@ using System.Text.Json.Nodes;
 
 namespace OkiRomSim.Mcp;
 
-/// One tool the server offers: its name, what it does, the JSON schema of its arguments, and the code that runs it. Handlers return text; anything large is written to a file and the text says where (so an agent does not spend its context on bulk output).
+/// One tool the server offers: its name, what it does, the JSON schema of its arguments, and the code that runs it. Handlers return text; anything large is written to a file and the text says where (so a client is not handed bulk output in the reply).
 public sealed record McpTool(string Name, string Description, JsonObject InputSchema, Func<JsonObject, string> Run,
                              bool ReadOnly = true);
 
@@ -175,13 +175,13 @@ public sealed class McpServer
         _tools.TryGetValue(tool, out var t) ? t.Run(args ?? []) : throw new ToolException($"unknown tool '{tool}'");
 }
 
-/// The directories tools may read and write. Every path an agent passes is resolved against the first root (when relative) and must end up inside one of the roots.
+/// The directories tools may read and write. Every path a client passes is resolved against the first root (when relative) and must end up inside one of the roots.
 public sealed class Workspace
 {
     readonly List<string> _roots;
     public IReadOnlyList<string> Roots => _roots;
     public bool ReadOnly { get; init; }
-    /// A folder inside the workspace that an agent on another machine can always write to, for sending a file across and asking for it to be opened. The host sets it (the desktop app keeps one beside its settings and puts it in the workspace); left unset, the first root is used, which is what a head-less server started with --root already means.
+    /// A folder inside the workspace that a client on another machine can always write to, for sending a file across and asking for it to be opened. The host sets it (the desktop app keeps one beside its settings and puts it in the workspace); left unset, the first root is used, which is what a head-less server started with --root already means.
     public string? TransferDir { get; set; }
 
     /// Where an upload lands when no folder was named.
@@ -195,7 +195,7 @@ public sealed class Workspace
         if (_roots.Count == 0) throw new ArgumentException("at least one workspace root is needed");
     }
 
-    /// Take a folder into the workspace for the rest of this run, once the user has said yes. Returns what to tell the agent.
+    /// Take a folder into the workspace for the rest of this run, once the user has said yes. Returns what to tell the client.
     public string AddRoot(string folder, string why)
     {
         var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
@@ -244,7 +244,7 @@ public sealed class Workspace
         catch { return false; }
     }
 
-    /// Path shown back to the agent: relative to the first root when inside it.
+    /// Path shown back to the client: relative to the first root when inside it.
     public string Show(string full)
     {
         var r = Roots[0];

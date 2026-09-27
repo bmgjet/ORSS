@@ -10,7 +10,7 @@ using static OkiRomSim.Mcp.OkiTools;
 
 namespace OkiRomSim.Mcp;
 
-/// Calibration, comparison, datalog, emulator and simulator tools. Every calibration tool works on a file (`path`: a .bin, or a .asm that is assembled) or - inside the desktop app, with `path` left out - on the ROM open there, so the user watches the agent's edits land. File mode keeps definitions next to the ROM as <rom>.okidef.json (created by cal_detect or cal_define). Edits to a .bin are written straight back to it (a .bak is kept once); edits to a .asm image stay in memory until cal_save writes a .bin.
+/// Calibration, comparison, datalog, emulator and simulator tools. Every calibration tool works on a file (`path`: a .bin, or a .asm that is assembled) or - inside the desktop app, with `path` left out - on the ROM open there, so the user watches the client's edits land. File mode keeps definitions next to the ROM as <rom>.okidef.json (created by cal_detect or cal_define). Edits to a .bin are written straight back to it (a .bak is kept once); edits to a .asm image stay in memory until cal_save writes a .bin.
 public sealed class CalTools
 {
     readonly Workspace _ws;
@@ -35,6 +35,8 @@ public sealed class CalTools
         public string? DefsFile;
         public bool Backed;
         public bool Dirty;
+        /// The byte that keeps the image's sum at 0 (RomChecksum), found when it was loaded; re-balanced on every write.
+        public int? ChecksumAt;
     }
 
     // ------------------------------------------------------------------ targets
@@ -67,6 +69,7 @@ public sealed class CalTools
             Name = Path.GetFileName(full), Defs = defs, Rom = [.. prog.Image], Asm = prog.Asm, File = full, DefsFile = defsFile,
             Sources = prog.Sources.Select(kv => (kv.Key, string.Join("\n", kv.Value))).ToList(),
         };
+        t.ChecksumAt = RomChecksum.Site(t.Rom, prog.FromBinary ? null : prog.Asm);
         _files[full] = (stamp, t);
         return t;
     }
@@ -87,6 +90,7 @@ public sealed class CalTools
             return "kept in memory: call cal_save to write a .bin (the .asm source text is not changed)";
         _ws.Resolve(t.File, mustExist: true, forWrite: true);
         if (!t.Backed) { System.IO.File.Copy(t.File, t.File + ".bak", overwrite: true); t.Backed = true; }
+        if (t.ChecksumAt is int at) RomChecksum.Balance(t.Rom, at);
         System.IO.File.WriteAllBytes(t.File, t.Rom);
         _files[t.File] = (System.IO.File.GetLastWriteTimeUtc(t.File), t);
         t.Dirty = false;
@@ -554,7 +558,8 @@ public sealed class CalTools
     {
         var t = Open(a);
         if (t.Asm == null) throw new ToolException("the ROM has no assembly (it did not assemble / disassemble cleanly), so the code cannot be followed");
-        DetectResult Run(DefinitionSet defs) => CalibrationDetector.Detect(defs, t.Asm, t.Rom, t.Sources);
+        var refs = RomReference.ShippedFor(t.Name);
+        DetectResult Run(DefinitionSet defs) => CalibrationDetector.Detect(defs, t.Asm, t.Rom, t.Sources, refs);
         var r = t.Session != null ? t.Session.Edit(Run, "MCP cal_detect") : Run(t.Defs);
         SaveDefs(t);
         var sb = new StringBuilder($"{t.Name}: {r.Summary}.\n");
@@ -657,6 +662,7 @@ public sealed class CalTools
             else
             {
                 if (File.Exists(outPath) && outPath.Equals(t.File, StringComparison.OrdinalIgnoreCase) && !t.Backed) File.Copy(outPath, outPath + ".bak", true);
+                if (t.ChecksumAt is int at) RomChecksum.Balance(t.Rom, at);
                 File.WriteAllBytes(outPath, t.Rom);
                 done.Add($"image -> {_ws.Show(outPath)}");
             }
