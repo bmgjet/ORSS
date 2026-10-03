@@ -413,7 +413,8 @@ public static class HtsPages
         ]);
 
     public static CalPage Vtec() => new("vtec", "VTEC", "Outputs",
-        "Where the cam changes over, the conditions it needs, and the checks that can be switched off.",
+        "Where the cam changes over, the conditions it needs, and the checks that can be switched off. A ROM built from the skeleton " +
+        "has only the stock points until the VTEC control module is built in (File > Change functions…).",
         [
             G("VTEC settings",
                 S("vtec.enable", "Enable VTEC"),
@@ -424,7 +425,8 @@ public static class HtsPages
                 V("vtec.rpm.high", "High load engage", "rpm"),
                 V("vtec.tps.high", "High load above TPS", "%"),
                 V("vtec.rpm.low", "Low load engage", "rpm"),
-                V("vtec.tps.low", "Low load below TPS", "%")),
+                V("vtec.tps.low", "Low load below TPS", "%"),
+                V("vtec.disengage", "Disengage delay", "rpm", "Once in, VTEC stays in until the rpm is this far under the engage point, so it does not chatter at the point.")),
             G("VTEC options",
                 S("vtec.nospeed", "Disable VTEC speed check"),
                 S("vtec.notemp", "Disable VTEC temp check"),
@@ -434,7 +436,16 @@ public static class HtsPages
                 S("vtec.alt.enable", "Enable alternative output"),
                 C("vtec.alt.output", "Output", CalPage.GpoOutputs),
                 S("vtec.alt.invert", "Invert output")),
+            StockVtec,
         ]);
+
+    /// The stock ECU's own VTEC points (the skeleton's), on both VTEC pages: what decides while no engage points of a module are in use.
+    internal static PageGroup StockVtec => G("Stock engage points",
+        V("vtec.stock.load.on", "With load: engages above", "rpm", "Above this rpm VTEC comes in when the load is over the curve below."),
+        V("vtec.stock.load.off", "With load: drops out below", "rpm"),
+        V("vtec.stock.any.on", "Any load: engages above", "rpm", "Above this rpm VTEC comes in whatever the load."),
+        V("vtec.stock.any.off", "Any load: drops out below", "rpm"),
+        T("vtec.stock.curve", "Load needed against rpm", "", "Between the two engage points, the load VTEC needs at each rpm."));
 
     public static CalPage Iab() => new("iab", "IAB (intake butterflies)", "Outputs",
         "Where the intake manifold's butterflies open and shut.",

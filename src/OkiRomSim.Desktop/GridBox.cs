@@ -40,6 +40,12 @@ public sealed class GridBox : UserControl
             var dict = list.ToDictionary(x => x.Index, x => x.Value);
             Apply([.. dict.Keys], i => dict[i]);
         };
+        // a typed "+2" / "*1.05": each selected cell to a value of its own
+        _grid.SetEach += (list, _) =>
+        {
+            var dict = list.ToDictionary(x => x.Index, x => x.Value);
+            Apply([.. dict.Keys], i => dict[i]);
+        };
         _grid.HeaderActivated += (row, i) => HeaderActivated?.Invoke(row, i);
         var dock = new DockPanel();
         DockPanel.SetDock(_note, Dock.Bottom);

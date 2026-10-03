@@ -92,10 +92,10 @@ try
                 int errs = PrintDiags(r.Diagnostics);
                 if (errs > 0) { Console.Error.WriteLine($"{errs} error(s)"); return 1; }
                 output ??= Path.ChangeExtension(rest[0], ".bin");
-                File.WriteAllBytes(output, r.Image);
-                if (lst) File.WriteAllText(Path.ChangeExtension(output, ".lst"), OkiAssembler.WriteListing(r));
-                if (map) File.WriteAllText(Path.ChangeExtension(output, ".map"), OkiAssembler.WriteMap(r));
-                if (sym) File.WriteAllText(Path.ChangeExtension(output, ".sym"), OkiAssembler.WriteSymbolFile(r));
+                OkiRomSim.Core.SafeFile.WriteAllBytes(output, r.Image);
+                if (lst) OkiRomSim.Core.SafeFile.WriteAllText(Path.ChangeExtension(output, ".lst"), OkiAssembler.WriteListing(r));
+                if (map) OkiRomSim.Core.SafeFile.WriteAllText(Path.ChangeExtension(output, ".map"), OkiAssembler.WriteMap(r));
+                if (sym) OkiRomSim.Core.SafeFile.WriteAllText(Path.ChangeExtension(output, ".sym"), OkiAssembler.WriteSymbolFile(r));
                 Console.WriteLine($"{output}: {r.UsedBytes} of {r.Image.Length} bytes used, {sw.ElapsedMilliseconds} ms");
                 return 0;
             }
@@ -123,9 +123,10 @@ try
                     syms = r.Symbols.ToDictionary(k => k.Key, v => v.Value.Value);
                 }
                 else sim.LoadRom(File.ReadAllBytes(path));
-                if (rpm != null) sim.Engine.Rpm = double.Parse(rpm, CultureInfo.InvariantCulture);
-                if (tps != null) sim.Engine.TpsPct = double.Parse(tps, CultureInfo.InvariantCulture);
-                if (mapKpa != null) sim.Engine.MapKpa = double.Parse(mapKpa, CultureInfo.InvariantCulture);
+                // held to what the sensors can report
+                if (rpm != null) sim.Engine.Rpm = Math.Clamp(double.Parse(rpm, CultureInfo.InvariantCulture), 0, 12000);
+                if (tps != null) sim.Engine.TpsPct = Math.Clamp(double.Parse(tps, CultureInfo.InvariantCulture), 0, 100);
+                if (mapKpa != null) sim.Engine.MapKpa = Math.Clamp(double.Parse(mapKpa, CultureInfo.InvariantCulture), 0, 400);
                 sim.StallInterventionEnabled = stall;
                 ushort? stopAt = until != null ? ParseAddr(until, syms) : null;
                 var watches = (watch ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries).Select(w => ParseAddr(w, syms)).ToList();
@@ -209,7 +210,7 @@ try
             return Usage();
     }
 }
-catch (Exception ex) when (ex is IOException or InvalidDataException or FormatException or System.Text.Json.JsonException or UnauthorizedAccessException)
+catch (Exception ex) when (ex is IOException or InvalidDataException or FormatException or OverflowException or ArgumentException or System.Text.Json.JsonException or UnauthorizedAccessException)
 {
     Console.Error.WriteLine("error: " + ex.Message);
     return 1;

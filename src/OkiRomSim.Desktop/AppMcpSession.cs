@@ -167,7 +167,7 @@ public sealed class AppMcpSession : IMcpSession
             case "latest":
                 {
                     var f = e.Latest ?? Ui(() => _datalog.Current) ?? throw new ToolException("no frame yet");
-                    return string.Join("\n", f.Channels().Select(c => $"{c} = {f.Get(c):0.###} {LogFrame.Units.GetValueOrDefault(c, "")}")) +
+                    return string.Join("\n", f.Channels().Select(c => $"{c} = {f.Get(c):0.###} {LogFrame.UnitOf(c)}")) +
                            (f.Raw != null ? $"\nraw: {Convert.ToHexString(f.Raw)}" : "");
                 }
             case "frames":

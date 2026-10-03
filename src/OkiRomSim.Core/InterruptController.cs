@@ -1,5 +1,4 @@
-// Copyright (c) bmgjet. All rights reserved.
-// OKI MSM66207 Hardware Interrupt Dispatcher.
+// Copyright (c) bmgjet. All rights reserved. OKI MSM66207 Hardware Interrupt Dispatcher.
 namespace OkiRomSim.Core;
 
 public static class InterruptVectors
@@ -22,10 +21,11 @@ public static class InterruptController
     /// Check if pending IRQs match enabled IE flags and dispatch ISR call. `accept` false latches the request flags without dispatching: the instruction after RTI always runs before another interrupt is taken, so pending requests cannot chain straight from one handler into the next.
     public static bool HandlePendingInterrupts(Cpu cpu, Bus bus, ushort extraIrq, bool accept = true)
     {
-        // Peripheral edges set IRQ flags even while an ISR is active or the corresponding IE bit is clear. Latch them before deciding whether the CPU can accept another interrupt.
-        ushort currentIrq = (ushort)(bus.ReadDataU16(Bus.SfrIrq) | extraIrq);
-        bus.WriteDataU16(Bus.SfrIrq, currentIrq);
-        ushort ie = bus.ReadDataU16(Bus.SfrIe);
+        // Peripheral edges set IRQ flags even while an ISR is active or the corresponding IE bit is clear. Latch them before deciding whether the CPU can accept another interrupt. (IRQ and IE are plain registers: read straight from RAM. The write is skipped when nothing changed - almost every instruction - which also keeps a write hook (the app's "written by" record) from being told the running instruction wrote a register it did not touch)
+        ushort was = bus.RamWord(Bus.SfrIrq);
+        ushort currentIrq = (ushort)(was | extraIrq);
+        if (currentIrq != was) bus.WriteRamWord(Bus.SfrIrq, currentIrq);
+        ushort ie = bus.RamWord(Bus.SfrIe);
 
         // PSW.8 is MIE, the global maskable-interrupt enable. Interrupt entry saves PSW and then clears MIE; firmware may set it again inside an ISR when it deliberately permits nesting.
         if (!accept || !cpu.Mie() || (currentIrq & ie) == 0) return false;

@@ -64,7 +64,7 @@ public sealed class ExternalData : IDisposable
                 string text = feed.Source.StartsWith("http", StringComparison.OrdinalIgnoreCase)
                     ? await _http.GetStringAsync(feed.Source, token)
                     : await File.ReadAllTextAsync(feed.Source, token);
-                var node = JsonDocument.Parse(text).RootElement;
+                var node = JsonElement.Parse(text);   // (not JsonDocument.Parse: that one holds pooled memory until it is disposed, and this runs at every poll)
                 foreach (var step in feed.Path.Split('.', StringSplitOptions.RemoveEmptyEntries))
                     if (node.ValueKind == JsonValueKind.Object && node.TryGetProperty(step, out var child)) node = child;
                 var found = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);

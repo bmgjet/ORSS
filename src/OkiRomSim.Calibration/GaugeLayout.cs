@@ -116,7 +116,7 @@ public sealed class GaugeLayout
 
     public string ToJson() => JsonSerializer.Serialize(this, Json);
     public static GaugeLayout FromJson(string text) => JsonSerializer.Deserialize<GaugeLayout>(text, Json) ?? new GaugeLayout();
-    public void Save(string path) => File.WriteAllText(path, ToJson());
+    public void Save(string path) => OkiRomSim.Core.SafeFile.WriteAllText(path, ToJson());
     public static GaugeLayout Load(string path) => FromJson(File.ReadAllText(path));
 
     /// Ready-made dashboards, so there is something to start from.

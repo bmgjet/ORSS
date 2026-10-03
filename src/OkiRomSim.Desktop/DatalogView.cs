@@ -78,8 +78,7 @@ public sealed class DatalogView : UserControl
     ulong _codeSince;
     bool _settingPos;
     DateTime _lastCode, _lastParams, _lastGauges;
-    // playback without a simulator (Tuner mode): step through frames in wall time
-    // ~30 steps a second: the replay (and its gauges, values and graph cursor) moves as smoothly as it plays
+    // playback without a simulator (Tuner mode): step through frames in wall time ~30 steps a second: the replay (and its gauges, values and graph cursor) moves as smoothly as it plays
     readonly DispatcherTimer _playTimer = new() { Interval = TimeSpan.FromMilliseconds(33) };
     DateTime _playWallStart; double _playLogStart; int _playIndex = -1;
 
@@ -91,10 +90,63 @@ public sealed class DatalogView : UserControl
     /// The channel stream's channels (read and kept by the main window, in the settings).
     public Func<List<string>>? GetStreamChannels;
     public Action<List<string>>? SetStreamChannels;
+    /// What the stream sends to the ECU's serial inputs (SerialInputMap.Save), kept the same way.
+    public Func<List<string>>? GetSerialInputs;
+    public Action<List<string>>? SetSerialInputs;
+
+    /// The port, protocol and line speed from Settings. Changed while logging, the link starts again with them, so the values and the graph show what the new link sends.
+    public void SetLink(string port, string protocol, int baud)
+    {
+        bool changed = Port != port || !Protocol.Equals(protocol, StringComparison.OrdinalIgnoreCase) || Baud != baud;
+        Port = port; Protocol = protocol; Baud = baud;
+        if (changed && (Engine.Running || Engine.Watch.Wanted) && Engine.External == null && !_connecting) Reconnect("the datalog settings changed");
+    }
+
+    /// Stop the link and start it again with the settings as they are now (off the UI thread: both wait on the cable).
+    void Reconnect(string why)
+    {
+        var port = ChosenPort();
+        if (port.Length == 0) return;
+        _connecting = true;
+        _connect.IsEnabled = false;
+        _status.Text = why + ": connecting again…";
+        AppLog.Action("datalog", why + $": reconnect {port} ({Protocol}, {Baud})");
+        Task.Run(() =>
+        {
+            string? error = null;
+            try { Engine.Stop(); Engine.Start(port, Protocol, Baud); }
+            catch (Exception ex) { error = ex.Message; AppLog.Error("datalog", "reconnect failed", ex); }
+            Dispatcher.UIThread.Post(() =>
+            {
+                _connecting = false;
+                _connect.IsEnabled = true;
+                UpdateConnect();
+                if (error != null) _status.Text = "cannot open the port: " + error;
+            });
+        });
+    }
+
+    /// The port set in Settings; with none, the first one that is not the emulator's.
+    string ChosenPort() => Port.Length > 0 ? Port
+        : SerialLink.Ports().FirstOrDefault(p => !p.Equals(_host.Emulator.PortName, StringComparison.OrdinalIgnoreCase)
+                                                 && !p.Equals(EmulatorPort, StringComparison.OrdinalIgnoreCase)) ?? "";
     public int Baud { get; set; } = 38400;
     public event Action<int>? GoToAddress;
     /// Every frame the page shows (live, played back or selected), for the calibration trace.
     public event Action<LogFrame?>? CurrentFrameChanged;
+    /// A reading to show on the maps (the dyno's double-click): the calibration page puts the engine's place on the table open.
+    public event Action<LogFrame>? ShowOnMaps;
+    public void ShowFrameOnMaps(LogFrame f) => ShowOnMaps?.Invoke(f);
+    /// Open Settings at a page ("Dyno", "Units").
+    public event Action<string>? OpenSettingsPage;
+    public void OpenSettingsAt(string page) => OpenSettingsPage?.Invoke(page);
+    /// Settings changed from a window of this page (the dyno's): saved, and applied.
+    public event Action? SettingsChanged;
+    public void SaveSettings() => SettingsChanged?.Invoke();
+    /// Settings were saved or applied (units, the dyno's): windows of this page show them.
+    public event Action? SettingsApplied;
+    public void RaiseSettingsApplied() => SettingsApplied?.Invoke();
+    internal SimHost Host => _host;
     public LogFrame? Current { get; private set; }
 
     /// Where the panel sizes are kept (AppSettings.PanelSizes): the app's settings as they are now.
@@ -115,7 +167,7 @@ public sealed class DatalogView : UserControl
                 var gs = new GridSplitter
                 {
                     ResizeDirection = across ? GridResizeDirection.Columns : GridResizeDirection.Rows,
-                    Background = new SolidColorBrush(Color.FromArgb(70, 255, 255, 255)),
+                    Background = AppTheme.Brush(Color.FromArgb(70, 255, 255, 255)),
                 };
                 if (across) { gs.Width = 6; gs.VerticalAlignment = VerticalAlignment.Stretch; } else { gs.Height = 6; gs.HorizontalAlignment = HorizontalAlignment.Stretch; }
                 ToolTip.SetTip(gs, "Drag to make the panels either side larger or smaller (remembered). Reset panels puts them back.");
@@ -166,7 +218,10 @@ public sealed class DatalogView : UserControl
             if (!_host.PlaybackActive && DriveSimulator && !_compact && _host.LoadedPath != null) _host.ApplyFrame(f);
         };
         ToolTip.SetTip(_pos, "Position in the loaded log. Drag to look at a moment (the calibration map marks where the engine was).");
-        ToolTip.SetTip(_params, "Every value in the latest frame: decoded, with its unit and the raw byte(s). Wideband and aux channels (Settings > Emulator & datalog) are added at the bottom.");
+        ToolTip.SetTip(_params, "Every value in the latest frame: decoded, with its unit and the raw byte(s). Wideband and aux channels (Settings > Emulator & datalog) are added at the bottom.\n\n" +
+                                "Pick several: Ctrl+click, Shift+click, or drag a box over them (Ctrl+A all). Right-click for gauges of the ones picked.");
+        _params.MultiSelect = true;
+        _params.SelectionMenu = ValuesMenu;
         ToolTip.SetTip(Gauges, "Your own gauges: dials, bars, numbers, trigger lights and rolling graphs of any logged channel. Create widget floats one over everything else.");
         ToolTip.SetTip(_compare, "The frame's readings from the car next to what the simulated ECU is doing with them.");
         ToolTip.SetTip(_code, "Routines and branches of the assembly that ran since the log started driving the simulator, in address order. Double-click to go to one.");
@@ -197,15 +252,56 @@ public sealed class DatalogView : UserControl
     public async Task OpenChannels()
     {
         if (_top() is not Window owner) return;
-        var w = new DatalogChannelsWindow(GetStreamChannels?.Invoke() ?? [.. DatalogChannels.Defaults]);
+        var w = new DatalogChannelsWindow(GetStreamChannels?.Invoke() ?? [.. DatalogChannels.Defaults], GetSerialInputs?.Invoke() ?? [],
+                                          Engine.Protocol as ChannelStream, Channels());
         await Dialogs.ShowModal(w, owner);
         if (w.Result is not { } r) return;
         SetStreamChannels?.Invoke(r);
         ChannelStream.Selected = r;
-        _status.Text = $"channel stream: {r.Count} channel(s), {DatalogChannels.All.Where(c => r.Contains(c.Key)).Sum(c => c.Bytes)} bytes" +
-                       (Engine.Running ? " - reconnect to use them" : " - used from the next connect");
+        if (w.Inputs is { } inputs)
+        {
+            SetSerialInputs?.Invoke([.. inputs.Select(m => m.Save())]);
+            Engine.SerialInputs = inputs;
+        }
+        var picks = DatalogChannels.Picks(r);
+        var (fps, slowEvery) = DatalogChannels.Rate(picks);
+        // logging now: the ROM gets the new list between frames, and the values and the graph follow it
+        bool live = Engine.Reconfigure();
+        // logging with a protocol whose frame is fixed (the HTS 20h frame a skeleton ROM also answers): the picks change nothing until it is the channel stream - offered, and the link started again with it
+        if (!live && Engine.Running && Engine.Protocol is not ChannelStream && Engine.External == null &&
+            await Dialogs.Confirm(owner, "Use the channel stream?",
+                $"The datalog is connected with {Engine.Protocol?.Name ?? "a protocol"}, which always sends the same frame: the channels picked are only sent by the channel stream (a skeleton ROM with its datalog). Connect again with the channel stream now?",
+                "Connect with the channel stream", "Not now"))
+        {
+            var port = ChosenPort();
+            await Task.Run(() => { try { Engine.Stop(); Engine.Start(port, "Channel stream", Baud); } catch (Exception ex) { AppLog.Error("datalog", "reconnect failed", ex); } });
+            live = true;
+        }
+        // what the ROM cannot send is said, not dropped quietly: the stream reports it once the new list is taken
+        if (live) _ = Task.Run(async () =>
+        {
+            await Task.Delay(1500);
+            if (Engine.Protocol is ChannelStream { Dropped.Count: > 0 } cs2)
+                Dispatcher.UIThread.Post(() => _status.Text = $"not in this ROM, so not logged: {string.Join(", ", cs2.Dropped)}. " +
+                    (cs2.TableSize < DatalogChannels.TableSizeAll ? "Add 'Datalogging: every channel' (File > Change functions) to log them." : ""));
+        });
+        _status.Text = $"channel stream: {picks.Count} channel(s), {DatalogChannels.FrameBytes(picks)} bytes a frame, about {fps:0} frames a second" +
+                       (slowEvery > 0 ? $", each slow one every {(slowEvery < 1 ? $"{slowEvery * 1000:0} ms" : $"{slowEvery:0.0} s")}" : "") +
+                       (live ? " - sent to the ECU" : Engine.Running ? " - used from the next connect (this protocol picks no channels)" : " - used from the next connect");
         AppLog.Action("datalog", "stream channels: " + string.Join(", ", r));
     }
+
+    /// The layout check: channels picked as the Channels window would.
+    internal void SetPicksForCheck(string[] picks)
+    {
+        SetStreamChannels?.Invoke([.. picks]);
+        ChannelStream.Selected = [.. picks];
+        Engine.Reconfigure();
+    }
+
+    /// The channels the values list shows now.
+    internal List<string> ShownParameterNames() => [.. _shownNames];
+    List<string> _shownNames = [];
 
     static TextBlock Lbl(string t) => new() { Text = t, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 6, 0), FontSize = 11, FontWeight = FontWeight.Bold };
     static TextBlock Head(string t) => new() { Text = t.ToUpperInvariant(), FontSize = 10, Opacity = 0.6, Margin = new Thickness(0, 2) };
@@ -345,8 +441,12 @@ public sealed class DatalogView : UserControl
         AppLog.Action("datalog", $"loaded {name} ({_loaded.Count} frames)");
     }
 
+    /// A plugin driving the emulator and its datalog in place of the app's own link, or null.
+    public Func<IEmulatorTakeover?>? Takeover { get; set; }
+
     void ToggleConnect()
     {
+        if (Takeover?.Invoke() is { } t) { t.ToggleConnect(); UpdateConnect(); return; }
         if (Engine.Running || _connecting || Engine.Watch.Wanted)
         {
             // stopping can block on a port that is not answering: off the UI thread as well
@@ -361,11 +461,8 @@ public sealed class DatalogView : UserControl
             AppLog.Action("datalog", "disconnect");
             return;
         }
-        // no port set: the first one - but never the emulator's (the one it has open, or is set to use), which a guess
-        // used to take whenever the emulator was not connected at that moment, and then held on to
-        var port = Port.Length > 0 ? Port
-                 : SerialLink.Ports().FirstOrDefault(p => !p.Equals(_host.Emulator.PortName, StringComparison.OrdinalIgnoreCase)
-                                                          && !p.Equals(EmulatorPort, StringComparison.OrdinalIgnoreCase)) ?? "";
+        // no port set: the first one - but never the emulator's (the one it has open, or is set to use), which a guess used to take whenever the emulator was not connected at that moment, and then held on to
+        var port = ChosenPort();
         if (port.Length == 0) { _status.Text = "no serial port: pick one in Settings > Emulator & datalog (or 'simulator' to log the ROM running here)"; return; }
         if (port == "simulator" && _host.LoadedPath == null) { _status.Text = "open a ROM first to log it in the simulator"; return; }
         _codeSince = _host.Sim.Cpu.Cycles;
@@ -406,6 +503,29 @@ public sealed class DatalogView : UserControl
         w.Show(owner);
     }
 
+    DynoWindow? _dyno;
+
+    /// The dyno as it is (for a project): the profile picked and the runs ticked, or null when it is closed.
+    public (string Profile, List<string> Ticked)? DynoState() => _dyno?.ViewState();
+
+    /// A project opened: the dyno shows what it showed when it was saved (opened if it was open; one already open reloads its runs).
+    public void RestoreDyno(bool open, string profile, List<string> ticked)
+    {
+        if (_dyno == null && !open) return;
+        if (_dyno == null) OpenDyno();
+        _dyno?.RestoreView(profile, ticked);
+    }
+
+    void OpenDyno()
+    {
+        if (_top() is not Window owner) return;
+        if (_dyno is { } open) { try { open.Activate(); return; } catch { _dyno = null; } }
+        var w = new DynoWindow(this);
+        _dyno = w;
+        w.Closed += (_, _) => { if (ReferenceEquals(_dyno, w)) _dyno = null; };
+        w.Show(owner);
+    }
+
     void OpenOnboard()
     {
         if (_top() is not Window owner) return;
@@ -427,7 +547,16 @@ public sealed class DatalogView : UserControl
     }
 
     /// What the graphs draw: the live recording while logging, else the log the slider works on.
-    IReadOnlyList<LogFrame> GraphFrames() => Engine.Running ? Engine.Frames() : Log();
+    IReadOnlyList<LogFrame> GraphFrames()
+    {
+        if (!Engine.Running) return Log();
+        // live, the graph asks on every tick and each answer is a copy of the whole recording (up to 50,000 frames: 400 KB on the large-object heap, many times a second). The graph only redraws a few times a second, so one copy serves a quarter of a second.
+        long now = Environment.TickCount64;
+        if (_graphSnap == null || now - _graphSnapAt >= 250) { _graphSnap = Engine.Frames(); _graphSnapAt = now; }
+        return _graphSnap;
+    }
+    List<LogFrame>? _graphSnap;
+    long _graphSnapAt;
 
     /// The graph for the top of the panel, made the first time it is asked for.
     DatalogGraphPanel GraphPanel() => _graphPanel ??= new DatalogGraphPanel(GraphFrames, Seek, compact: true);
@@ -523,8 +652,11 @@ public sealed class DatalogView : UserControl
     /// The Datalogging menu (on the calibration bar beside the map): everything that used to be buttons along the top of this panel.
     public Toolbar.Entry[] MenuEntries(Func<bool> liveTrace, Action<bool> setLiveTrace) =>
     [
-        new Toolbar.Entry(Toolbar.Log, Engine.Running ? "Disconnect" : "Connect",
-            "Start or stop logging on the port set in Settings > Emulator & datalog ('simulator' logs the ROM running here, through its own serial port).", ToggleConnect),
+        Takeover?.Invoke() is { } t
+            ? new Toolbar.Entry(Toolbar.Log, (t.Connected ? "Disconnect " : "Connect ") + t.Name,
+                $"{t.Name} is in charge of the emulator and its datalog: its device's link. {t.Status}", ToggleConnect)
+            : new Toolbar.Entry(Toolbar.Log, Engine.Running ? "Disconnect" : "Connect",
+                "Start or stop logging on the port set in Settings > Emulator & datalog ('simulator' logs the ROM running here, through its own serial port).", ToggleConnect),
         Toolbar.Entry.Line,
         new Toolbar.Entry(Toolbar.Open, "Load log…",
             "Open a log: an .rlog (the datalog, the ROM it ran on and the tuning settings in one file), a binary datalog or a CSV.", LoadLog),
@@ -550,6 +682,9 @@ public sealed class DatalogView : UserControl
         new Toolbar.Entry(Toolbar.Detect, "Codes and service…",
             "The trouble codes the ECU has stored and its check-engine lamp, read from the datalog, with Clear codes; on the skeleton ROM also injectors off, " +
             "timing locked for a timing light, the maps picked and the GIO outputs forced on - over the datalog cable.", OpenService),
+        new Toolbar.Entry(Toolbar.Gauge, "Virtual dyno…",
+            "Power and torque from the datalog: an inertia dyno (the car spins a roller of known inertia) or a strip run (the car's own weight on a " +
+            "straight, flat stretch). Triggers start and stop each run; runs are kept, replayed, overlaid, raced head to head and printed.", OpenDyno),
         new Toolbar.Entry(Toolbar.Log, "Demon onboard logging…",
             "Set up a Moates Demon to log the ECU by itself, into its own memory, with no laptop in the car; read its sessions back here.", OpenOnboard),
         new Toolbar.Entry(Toolbar.Detect, "Detect layout",
@@ -602,11 +737,16 @@ public sealed class DatalogView : UserControl
     /// Start logging on the port set in Settings, unless it is already going.
     public void Start() { if (!(Engine.Running || _connecting || Engine.Watch.Wanted)) ToggleConnect(); }
 
-    void UpdateConnect() => _connect.Content = Engine.Running || Engine.Watch.Wanted ? "Disconnect" : "Connect";
+    public void UpdateConnect() => _connect.Content = Takeover?.Invoke() is { } t ? (t.Connected || t.Connecting ? "Disconnect" : "Connect")
+                                                   : Engine.Running || Engine.Watch.Wanted ? "Disconnect" : "Connect";
 
     /// The state of the link to the car, for the dot on the Datalogging menu.
     public (LinkState State, string Tip) LinkStatus()
     {
+        if (Takeover?.Invoke() is { } t)
+            return t.Connected && Engine.Fresh ? (LinkState.Connected, $"Datalogging: {t.Name} - {Engine.FramesPerSecond:0} frames a second")
+                 : t.Connected || t.Connecting ? (LinkState.Reconnecting, $"Datalogging: {t.Name} - {t.Status}")
+                 : (LinkState.Off, $"Datalogging: {t.Name} is not connected. Connect it from this menu.");
         if (Engine.External is { } ext)
             return Engine.Fresh ? (LinkState.Connected, $"Datalogging: {Engine.Status} ({Engine.FramesPerSecond:0} frames a second)")
                                 : (LinkState.Reconnecting, $"Datalogging: waiting for frames from {ext}");
@@ -624,9 +764,7 @@ public sealed class DatalogView : UserControl
     {
         // feeding the simulator the car's readings makes no sense when the simulator is the source
         if (DriveSimulator && !_compact && Engine.Source != "simulator") _host.ApplyFrame(f);
-        // where the engine is goes to the map as each frame arrives, not on the next screen refresh: the cell lit (and
-        // the one Lock to live cell edits) is the one this frame says. Frames that come quicker than the screen can
-        // take are folded into one: only the newest is shown
+        // where the engine is goes to the map as each frame arrives, not on the next screen refresh: the cell lit (and the one Lock to live cell edits) is the one this frame says. Frames that come quicker than the screen can take are folded into one: only the newest is shown
         if (Interlocked.Exchange(ref _framePosted, 1) == 0)
             Dispatcher.UIThread.Post(() =>
             {
@@ -733,7 +871,11 @@ public sealed class DatalogView : UserControl
         _status.Text = "replay stopped";
     }
 
-    public IEnumerable<string> Channels() => (Engine.Latest ?? Current ?? _loaded.FirstOrDefault())?.Channels() ?? [];
+    /// The channels on offer: the live ones while logging, else every channel of the log loaded (not what an earlier session logged).
+    public IEnumerable<string> Channels() =>
+        Engine.Running && Engine.Latest is { } live ? live.Channels()
+        : _loaded.Count > 0 ? LogFrame.AllChannels(_loaded)
+        : (Current ?? Engine.Latest)?.Channels() ?? [];
 
     // ------------------------------------------------------------------ files
 
@@ -749,7 +891,7 @@ public sealed class DatalogView : UserControl
                 FileTypeFilter = new[]
                 {
                     new FilePickerFileType("Datalogs") { Patterns = new[] { "*.rlog", "*.csv", "*.hdl", "*.hml", "*.dlf", "*.bml", "*.log" } },
-                    new FilePickerFileType("Oki ROM Studio logs (.rlog)") { Patterns = new[] { "*.rlog" } },
+                    new FilePickerFileType("Rom Sim Studio logs (.rlog)") { Patterns = new[] { "*.rlog" } },
                     new FilePickerFileType("CSV") { Patterns = new[] { "*.csv" } },
                     new FilePickerFileType("Binary datalogs (.hdl .hml .dlf .bml .log)") { Patterns = new[] { "*.hdl", "*.hml", "*.dlf", "*.bml", "*.log" } },
                     new FilePickerFileType("All files") { Patterns = new[] { "*.*" } },
@@ -776,6 +918,12 @@ public sealed class DatalogView : UserControl
 
     public string LoadFile(string path)
     {
+        // a log opened while logging live is what gets looked at: the live link stops (its frames are kept), or its values would go on hiding the log's
+        if (Engine.Running && !UiCheck.Active)
+        {
+            Task.Run(() => { try { Engine.Stop(); } catch (Exception ex) { AppLog.Error("datalog", "stop failed", ex); } });
+            AppLog.Action("datalog", "live logging stopped to look at a log file");
+        }
         byte[]? rom = null;
         if (path.EndsWith(".rlog", StringComparison.OrdinalIgnoreCase))
         {
@@ -886,7 +1034,37 @@ public sealed class DatalogView : UserControl
     }
 
     /// The frame's values, the list changed line by line instead of made again (no flicker, far less work).
-    void ShowParameters(LogFrame f) => _params.SetRows(ParameterRows(f, _rawBox.IsChecked == true));
+    void ShowParameters(LogFrame f) { _shownNames = [.. f.Channels()]; _params.SetRows(ParameterRows(f, _rawBox.IsChecked == true)); }
+
+    /// The values list's right-click menu: gauges of the values picked (on the dashboard or floating), copy them, graph them.
+    IEnumerable<(string, Action)> ValuesMenu(IReadOnlyList<DataList.Row> rows)
+    {
+        var f = Current;
+        var picked = rows.Select(r => r.Cells[0].Text).Where(ch => f?.Get(ch) is double).ToList();
+        if (picked.Count == 0) yield break;
+        List<(string, double)> Values() => [.. picked.Select(ch => (ch, Current?.Get(ch) ?? double.NaN))];
+        string n = picked.Count == 1 ? picked[0] : $"{picked.Count} values";
+        yield return ($"Add gauges for {n}", () => Gauges.AddFor(Values(), null, widget: false));
+        yield return ("Add as dials", () => Gauges.AddFor(Values(), GaugeKind.Dial, false));
+        yield return ("Add as bars", () => Gauges.AddFor(Values(), GaugeKind.Bar, false));
+        yield return ("Add as numbers", () => Gauges.AddFor(Values(), GaugeKind.Number, false));
+        yield return ("Add as rolling graphs", () => Gauges.AddFor(Values(), GaugeKind.Graph, false));
+        yield return ("Add as lamps", () => Gauges.AddFor(Values(), GaugeKind.Light, false));
+        yield return ("-", () => { });
+        yield return ($"Float {(picked.Count == 1 ? "it" : "them")} in a widget", () => Gauges.AddFor(Values(), null, widget: true));
+        yield return ("Copy (name, value, unit)", () => CopyValues(picked));
+    }
+
+    async void CopyValues(List<string> channels)
+    {
+        if (TopLevel.GetTopLevel(this)?.Clipboard is not { } cb || Current is not { } f) return;
+        var lines = channels.Select(ch => f.Get(ch) is double v ? $"{ch}\t{LogFrame.Shown(ch, v).Value.ToString("0.###", CultureInfo.InvariantCulture)}\t{LogFrame.Shown(ch, v).Unit}" : ch);
+        await cb.SetTextAsync(string.Join(Environment.NewLine, lines));
+        _status.Text = $"copied {channels.Count} value(s)";
+    }
+
+    /// The values list, the UI check's way in.
+    internal DataList ValuesForCheck => _params;
 
     /// The frame's values as rows: the channel, its value and unit; the raw bytes under them when asked for.
     static List<DataList.Row> ParameterRows(LogFrame f, bool raw)
@@ -894,11 +1072,12 @@ public sealed class DatalogView : UserControl
         var rows = new List<DataList.Row>();
         foreach (var ch in f.Channels())
         {
-            if (f.Get(ch) is not double d) continue;
+            if (f.Get(ch) is not double kept) continue;
             bool flag = ch is "vtec" or "fuel_pump";
+            var (d, unit) = LogFrame.Shown(ch, kept);
             string text = flag ? (d != 0 ? "ON" : "off") : d.ToString(Math.Abs(d) >= 1000 ? "0" : "0.###", CultureInfo.InvariantCulture);
             rows.Add(new([new(ch, DataList.Address), new(text, flag ? (d != 0 ? DataList.Good : DataList.Dim) : DataList.Text, true),
-                          new(LogFrame.Units.GetValueOrDefault(ch, ""), DataList.Dim)], flag && d != 0 ? DataList.Good : null));
+                          new(unit, DataList.Dim)], flag && d != 0 ? DataList.Good : null, Tip: FlagNames.About(ch) ?? ModuleDebug.Describe(ch)));
         }
         if (raw && f.Raw != null)
         {
@@ -997,7 +1176,7 @@ public sealed class DatalogView : UserControl
                         : _loaded.Count > 0 ? $"{_loaded.Count} frames loaded" : "not connected";
         _stateText.Foreground = live ? DataList.Good : playing ? DataList.Data : DataList.Dim;
         // the line under it only when it says more than the dot does
-        _status.IsVisible = !string.IsNullOrEmpty(_status.Text) && _status.Text != "not connected";
+        _status.IsVisible = !string.IsNullOrEmpty(_status.Text) && _status.Text != "not connected" && _status.Text != Lang.T("not connected");
     }
 
     /// The car's readings beside the simulated ECU's, and what each does with them.

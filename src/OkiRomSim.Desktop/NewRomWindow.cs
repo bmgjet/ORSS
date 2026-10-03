@@ -16,6 +16,12 @@ public sealed class NewRomWindow : Window
     /// The file to open when the window closes, or null when it was cancelled.
     public string? Created { get; private set; }
 
+    /// File > Change functions: a ROM built from a skeleton, rebuilt with other functions. Current is what it has now; SavePath is its build file (rewritten where it is when SaveIsBuildFile) or where a new one goes (a .bin opened on its own has none yet).
+    public sealed record ChangeRequest(Skeleton Skeleton, IReadOnlyList<string> Current, string SavePath, bool SaveIsBuildFile, string RomLabel);
+    readonly ChangeRequest? _change;
+    /// Change mode: the functions picked, when it was not cancelled.
+    public List<string>? ChosenFunctions { get; private set; }
+
     readonly ListBox _list = new() { MinHeight = 60 };
     readonly TextBlock _about = new() { TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = 0.85, Margin = new Thickness(0, 6, 0, 0) };
     readonly List<string> _files = [];
@@ -29,6 +35,18 @@ public sealed class NewRomWindow : Window
     readonly ProgressBar _space = new() { Minimum = 0, Maximum = 32768, Height = 14, MinWidth = 60 };
     readonly TextBlock _spaceText = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
     readonly TextBlock _problems = new() { FontSize = 12, Foreground = Brushes.OrangeRed, TextWrapping = TextWrapping.Wrap };
+    readonly RamBar _ramBar = new();
+    readonly TextBlock _ramText = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+    /// The worst tick interrupt, measured in the simulator (us; the bar goes to 600).
+    readonly ProgressBar _tickBar = new() { Minimum = 0, Maximum = 600, Height = 14, MinWidth = 60 };
+    readonly TextBlock _tickText = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+    /// Measurements by pick (they take a few seconds each), and the one under way.
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (IsrTiming.Result Built, IsrTiming.Result? AllOn)> Timings = new(StringComparer.OrdinalIgnoreCase);
+    CancellationTokenSource? _timing;
+    /// The checks every ROM is put through (a tick or a cross each), and what is said about the pick below them.
+    readonly WrapPanel _checks = new();
+    readonly StackPanel _adviceList = new() { Spacing = 2 };
+    List<Advice> _advice = [];
     readonly Dictionary<string, CheckBox> _boxes = new(StringComparer.OrdinalIgnoreCase);
     readonly Button _ok = new() { IsDefault = true };
     SkeletonBuildResult? _last;
@@ -59,14 +77,15 @@ public sealed class NewRomWindow : Window
     readonly RadioButton _create = new() { Content = "Create - a skeleton ROM and only the functions you want", GroupName = "kind", FontWeight = FontWeight.SemiBold };
     readonly Control _existingPanel, _createPanel;
 
-    public NewRomWindow()
+    public NewRomWindow(ChangeRequest? change = null)
     {
-        Title = "New ROM";
+        _change = change;
+        Title = change == null ? "New ROM" : "Change functions - " + change.RomLabel;
         Width = 860; Height = 640; MinWidth = 560; MinHeight = 440;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
         var folder = Templates();
-        _skeletons = Skeleton.Find(folder);
+        _skeletons = change != null ? [change.Skeleton] : Skeleton.Find(folder);
         if (folder != null)
             _files.AddRange(Directory.GetFiles(folder, "*.asm")
                 .Where(f => !f.EndsWith("-skeleton.asm", StringComparison.OrdinalIgnoreCase))
@@ -90,7 +109,7 @@ public sealed class NewRomWindow : Window
         _existing.Click += (_, _) => { _existing.IsChecked = true; _create.IsChecked = false; SwitchMode(); };
         _create.Click += (_, _) => { if (!_create.IsEnabled) return; _create.IsChecked = true; _existing.IsChecked = false; SwitchMode(); };
 
-        _ok.Click += async (_, _) => { if (_create.IsChecked == true) await MakeFromSkeleton(); else await Make(); };
+        _ok.Click += async (_, _) => { if (_change != null) await MakeChange(); else if (_create.IsChecked == true) await MakeFromSkeleton(); else await Make(); };
         var cancel = new Button { Content = "Cancel", IsCancel = true };
         cancel.Click += (_, _) => Close();
         var openFolder = new Button { Content = "Open templates folder" };
@@ -105,8 +124,7 @@ public sealed class NewRomWindow : Window
         buttons.Children.Add(_ok);
         buttons.Children.Add(cancel);
 
-        // where the new ROM goes, typed or picked here: no file dialog is needed (a system one can open taller than a
-        // laptop's screen), Browse… opens one for those who want it
+        // where the new ROM goes, typed or picked here: no file dialog is needed (a system one can open taller than a laptop's screen), Browse… opens one for those who want it
         var browse = new Button { Content = "Browse…" };
         ToolTip.SetTip(browse, "Pick the folder and name with the system's file dialog.");
         browse.Click += async (_, _) => { if (await AskWhere(Path.GetFileName(_saveAs.Text ?? "")) is { } picked) _saveAs.Text = picked; };
@@ -124,6 +142,25 @@ public sealed class NewRomWindow : Window
         var top = new StackPanel { Spacing = 4, Margin = new Thickness(0, 0, 0, 6) };
         top.Children.Add(_existing);
         top.Children.Add(_create);
+        if (change != null)
+        {
+            // only the functions: the ROM and its skeleton are given
+            _existing.IsVisible = _create.IsVisible = false;
+            _create.IsChecked = true; _existing.IsChecked = false;
+            _base.IsEnabled = false;
+            openFolder.IsVisible = false;
+            saveRow.IsVisible = !change.SaveIsBuildFile;
+            saveLabel.Text = "New build file";
+            ToolTip.SetTip(_saveAs, "This ROM has no build file yet: one is written here (with a copy of the skeleton beside it) and opened, and the tune of the ROM open now is carried into it.");
+            top.Children.Add(new TextBlock
+            {
+                TextWrapping = TextWrapping.Wrap, FontSize = 12.5,
+                Text = $"{change.RomLabel} is built with the {change.Current.Count} function(s) ticked below. Tick what to add and untick what to take out, " +
+                       "then Rebuild: the ROM is built again with them, and every setting and map the two builds share - the fuel and ignition maps, " +
+                       "the rev limits, every module's settings - is carried across from the ROM open now. A function added starts at its factory " +
+                       "setting (modules off until switched on in their page). Undo (Ctrl+Z) takes the carried tune back off; nothing is saved until you save.",
+            });
+        }
         var body = new DockPanel { Margin = new Thickness(14, 12) };
         DockPanel.SetDock(top, Dock.Top); body.Children.Add(top);
         DockPanel.SetDock(foot, Dock.Bottom); body.Children.Add(foot);
@@ -140,6 +177,7 @@ public sealed class NewRomWindow : Window
         Content = root;
         Describe();
         SwitchMode();
+        Closed += (_, _) => _timing?.Cancel();
         _list.SelectionChanged += (_, _) => SuggestSaveAs();
         _base.SelectionChanged += (_, _) => SuggestSaveAs();
         SuggestSaveAs();
@@ -151,11 +189,12 @@ public sealed class NewRomWindow : Window
     /// A name for the new ROM in the ROMs folder that is not taken yet - unless one has been typed or browsed to.
     void SuggestSaveAs()
     {
+        if (_change != null) { if (string.IsNullOrEmpty(_saveAs.Text)) _saveAs.Text = _suggested = _change.SavePath; return; }
         if (_saveAs.Text is { Length: > 0 } now && now != _suggested) return;
         string stem = _create.IsChecked == true
             ? (Current is { } sk ? Path.GetFileNameWithoutExtension(sk.Path).Replace("-skeleton", "") + "-custom" : "custom")
             : (_list.SelectedIndex >= 0 && _list.SelectedIndex < _files.Count ? Path.GetFileNameWithoutExtension(_files[_list.SelectedIndex]) + "_new" : "rom_new");
-        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "OkiRomSim ROMs");
+        var dir = AppPaths.Roms;
         var path = Path.Combine(dir, stem + ".asm");
         for (int n = 2; File.Exists(path); n++) path = Path.Combine(dir, $"{stem}-{n}.asm");
         _saveAs.Text = _suggested = path;
@@ -181,6 +220,14 @@ public sealed class NewRomWindow : Window
     /// Open on Create (the layout check uses it).
     internal void ShowCreate() { if (_create.IsEnabled) _create.IsChecked = true; }
 
+    /// The layout check's picture of Create: a pick that fills the RAM bar and says a warning, saved to a folder with no one's user name in it.
+    internal void ForCheck()
+    {
+        _saveAs.Text = _suggested = @"D:\Tunes\p30-custom.asm";
+        foreach (var d in new[] { "FEAT_EBC", "FEAT_LAUNCH", "FEAT_GIO1", "FEAT_TPSRETARD" })
+            if (_boxes.TryGetValue(d, out var b)) b.IsChecked = true;
+    }
+
     void SwitchMode()
     {
         bool create = _create.IsChecked == true;
@@ -193,14 +240,14 @@ public sealed class NewRomWindow : Window
             Describe();
             _existingPanel.InvalidateMeasure();
         }
-        _ok.Content = create ? "Create ROM" : "Create from template";
+        _ok.Content = _change != null ? "Rebuild with these" : create ? "Create ROM" : "Create from template";
         ToolTip.SetTip(_ok, create
             ? "Choose where the new ROM's source goes. A build file with the functions you ticked is written there (with a copy of the skeleton beside it) and opened."
             : "Choose where the new ROM's source goes; the template is copied there and opened. The template itself is never changed.");
         UpdateOk();
     }
 
-    void UpdateOk() => _ok.IsEnabled = _create.IsChecked == true ? _last?.Success == true : _files.Count > 0;
+    void UpdateOk() => _ok.IsEnabled = _create.IsChecked == true ? _last?.Success == true && SkeletonAdvice.Worst(_advice) < AdviceLevel.Error : _files.Count > 0;
 
     // ------------------------------------------------------------------ existing
 
@@ -314,6 +361,12 @@ public sealed class NewRomWindow : Window
             ToolTip.SetTip(b, tip);
             return b;
         }
+        tools.Children.Add(Small("Default",
+            "A safe starting point: the stock fail-safes, trouble codes and self-tests, closed loop, datalogging (the HTS frame and this app's " +
+            "stream and service commands), and the HTS120 functions nearly every tune uses - rev limits, coolant protection, ignition cut " +
+            "shaping, launch, full throttle shift, injector scaling, TPS end points, road speed correction, gear detection. Every module is " +
+            "off until you switch it on in its page, so the ROM runs as stock until then, with room left to add more.",
+            () => SetPreset(SkeletonPresets.Default)));
         tools.Children.Add(Small("None", "Untick everything: the bare skeleton.", () => SetAll(_ => false)));
         tools.Children.Add(Small("Stock", "Every stock function the skeleton took out, and nothing else: the ROM it was made from.", () => SetAll(f => f.Stock)));
         tools.Children.Add(Small("All modules", "Every module that can be built with the others (the first of any pair that cannot).", () => SetAll(f => !f.Stock)));
@@ -322,13 +375,29 @@ public sealed class NewRomWindow : Window
         var detailBox = new Border
         {
             Child = new ScrollViewer { Content = _detail, HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled },
-            BorderBrush = new SolidColorBrush(Color.FromArgb(60, 255, 255, 255)), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4),
+            BorderBrush = AppTheme.Brush(Color.FromArgb(60, 255, 255, 255)), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4),
             Padding = new Thickness(10, 8), Margin = new Thickness(8, 0, 0, 0),
         };
         _detail.Text = "Point at a function to read what it does.";
+        // under the description: the checklist and what is said about the pick, beside the list so it keeps its height
+        var adviceScroll = new ScrollViewer { Content = _adviceList, HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled };
+        var checksBody = new DockPanel();
+        DockPanel.SetDock(_checks, Dock.Top); checksBody.Children.Add(_checks);
+        checksBody.Children.Add(adviceScroll);
+        var checksBox = new Border
+        {
+            Child = checksBody,
+            BorderBrush = AppTheme.Brush(Color.FromArgb(60, 255, 255, 255)), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(10, 6, 6, 6), Margin = new Thickness(8, 6, 0, 0),
+        };
+        ToolTip.SetTip(_checks, "What every ROM is checked for. Point at one for why it has a tick or a cross.");
+        _checks.Margin = new Thickness(0, 0, 0, 4);
+        var right = new Grid { RowDefinitions = new RowDefinitions("2*,3*") };
+        Grid.SetRow(detailBox, 0); right.Children.Add(detailBox);
+        Grid.SetRow(checksBox, 1); right.Children.Add(checksBox);
         var lists = new Grid { ColumnDefinitions = new ColumnDefinitions("3*,2*") };
         Grid.SetColumn(listScroll, 0); lists.Children.Add(listScroll);
-        Grid.SetColumn(detailBox, 1); lists.Children.Add(detailBox);
+        Grid.SetColumn(right, 1); lists.Children.Add(right);
 
         var spaceRow = new DockPanel { Margin = new Thickness(0, 8, 0, 0) };
         var spaceLabel = new TextBlock { Text = "ROM space", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
@@ -338,8 +407,37 @@ public sealed class NewRomWindow : Window
         spaceRow.Children.Add(_space);
         ToolTip.SetTip(spaceRow, "What the ROM with these functions takes of the 32,768 bytes. When a function does not fit, the build says so and Create stays off until something else is left out.");
 
+        // module RAM: few bytes, and every module that keeps a value between calls takes some of them
+        var ramRow = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
+        var ramLabel = new TextBlock { Text = "Module RAM", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+        DockPanel.SetDock(ramLabel, Dock.Left); ramRow.Children.Add(ramLabel);
+        _ramText.Margin = new Thickness(8, 0, 0, 0);
+        DockPanel.SetDock(_ramText, Dock.Right); ramRow.Children.Add(_ramText);
+        ramRow.Children.Add(_ramBar);
+        ToolTip.SetTip(ramLabel, "The RAM modules keep their values in between runs. Each colour is one module (point at the bar for who has what); when they want more than there is, the build stops and Create stays off.");
+        // the labels line up, so the bars start at the same place
+        spaceLabel.MinWidth = ramLabel.MinWidth = 84;
+
+        // the tick interrupt's time: what stopped ROMs with many modules starting on the car
+        var tickRow = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
+        var tickLabel = new TextBlock { Text = "Interrupt time", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+        DockPanel.SetDock(tickLabel, Dock.Left); tickRow.Children.Add(tickLabel);
+        _tickText.Margin = new Thickness(8, 0, 0, 0);
+        DockPanel.SetDock(_tickText, Dock.Right); tickRow.Children.Add(_tickText);
+        tickRow.Children.Add(_tickBar);
+        ToolTip.SetTip(tickRow,
+            "The longest the 2.048 ms tick interrupt runs, where the modules do their work: the pick is built and run in the simulator from idle " +
+            "to 7000 rpm. The bar is the ROM as it is built (its modules off until you switch them on); the text also gives it with every module " +
+            "switched on, the most it can come to. While it runs every other interrupt waits, the crank and spark ones among them.\n" +
+            $"Green up to {IsrTiming.GoodUs:0} us. Past {IsrTiming.CautionUs:0} us the crank interrupts are held up long enough to matter at high rpm " +
+            "(a tooth every few hundred us), and a tick that long is what once stopped ROMs with many modules starting on the car.\n" +
+            "The share is how much of the CPU all the interrupts take: what is left runs the main loop (idle, the maps' slower work).");
+        spaceLabel.MinWidth = tickLabel.MinWidth = 84;
+
         var bottom = new StackPanel();
         bottom.Children.Add(spaceRow);
+        bottom.Children.Add(ramRow);
+        bottom.Children.Add(tickRow);
         bottom.Children.Add(_problems);
 
         var p = new DockPanel { Margin = new Thickness(22, 0, 0, 0) };
@@ -383,11 +481,19 @@ public sealed class NewRomWindow : Window
                 _featureList.Children.Add(box);
             }
         }
-        // on to start with: the stock trouble codes and the fail-safes that go with them (a failed sensor gets a
-        // safe default value instead of its raw reading)
+        // on to start with, the safe starting point: the fail-safes, the self-tests, a way to log it and an overheat limit - or, changing a ROM's functions, what it has now
         _changing = true;
-        foreach (var d in DefaultOn)
-            if (_boxes.TryGetValue(d, out var b)) { b.IsChecked = true; ToolTip.SetTip(b, (sk.Feature(d)?.About ?? "") + "\nTicked to start with: it holds the fail-safes."); }
+        if (_change != null)
+            foreach (var d in _change.Current)
+            {
+                if (!_boxes.TryGetValue(d, out var b)) continue;
+                b.IsChecked = true;
+                if (b.Content is StackPanel sp && sp.Children[0] is TextBlock name) name.FontWeight = FontWeight.SemiBold;
+                ToolTip.SetTip(b, (sk.Feature(d)?.About ?? "") + "\nIn the ROM now.");
+            }
+        foreach (var (d, why) in _change != null ? [] : DefaultOn)
+            if (_boxes.TryGetValue(d, out var b) && sk.Problems([.. Chosen(), d]).Count == 0)
+            { b.IsChecked = true; ToolTip.SetTip(b, (sk.Feature(d)?.About ?? "") + "\nTicked to start with: " + why); }
         _changing = false;
         Rebuild();
     }
@@ -449,8 +555,31 @@ public sealed class NewRomWindow : Window
         Rebuild();
     }
 
-    /// Functions ticked when a skeleton is picked.
-    static readonly string[] DefaultOn = ["FEAT_STOCK_DTC"];
+    /// The layout check's picture of Default.
+    internal void PickDefault() { _saveAs.Text = _suggested = @"D:\Tunes\p30-custom.asm"; SetPreset(SkeletonPresets.Default); }
+
+    /// Tick a preset's functions (and only those) that this skeleton has and that go together; the build then says what it takes.
+    void SetPreset(IEnumerable<string> preset)
+    {
+        if (Current is not { } sk) return;
+        _changing = true;
+        var chosen = new List<string>();
+        foreach (var d in preset)
+            if (sk.Feature(d) != null && sk.Problems([.. chosen, d]).Count == 0) chosen.Add(d);
+        foreach (var (d, b) in _boxes) b.IsChecked = chosen.Contains(d, StringComparer.OrdinalIgnoreCase);
+        _changing = false;
+        _note = "";
+        Rebuild();
+    }
+
+    /// Functions ticked when a skeleton is picked (the skeleton's own rev limiter is always in), and why.
+    static readonly (string Define, string Why)[] DefaultOn =
+    [
+        ("FEAT_STOCK_DTC", "it holds the fail-safes (a failed sensor is replaced by a safe value) and lights the check-engine lamp."),
+        ("FEAT_STOCK_SELFTEST", "the stock checks that reset the ECU when its CPU, RAM or clock go wrong."),
+        ("FEAT_DATALOG", "without a datalogging protocol the ROM cannot be logged or tuned live on the car."),
+        ("FEAT_ECTPRO", "a lower rev limit once the engine overheats (enable it on its page once the car is running)."),
+    ];
 
     List<string> Chosen() => [.. _boxes.Where(kv => kv.Value.IsChecked == true).Select(kv => kv.Key)];
 
@@ -488,18 +617,98 @@ public sealed class NewRomWindow : Window
                 {
                     // a build that does not fit: the bar full and red, and by how much it is over
                     _space.Value = r.Success ? r.UsedBytes : _space.Maximum;
-                    _space.Foreground = !r.Success || r.FreeBytes < 512 ? Brushes.OrangeRed : r.FreeBytes < 2048 ? Brushes.Goldenrod : new SolidColorBrush(Color.FromRgb(0x4e, 0xa1, 0xff));
+                    _space.Foreground = !r.Success || r.FreeBytes < 512 ? Brushes.OrangeRed : r.FreeBytes < 2048 ? Brushes.Goldenrod : AppTheme.Brush(Color.FromRgb(0x4e, 0xa1, 0xff));
                     _spaceText.Text = r.Success ? $"{r.UsedBytes:N0} of 32,768 bytes used · {r.FreeBytes:N0} free · {chosen.Count} function(s)"
                                     : r.Over > 0 ? $"over the limit by {r.Over:N0} bytes · {chosen.Count} function(s)" : "does not build";
                     var note = _note.Length > 0 ? _note + "\n" : "";
                     _problems.Text = r.Success ? _note
                                    : r.Over > 0 ? note + $"Too big: over the limit by {r.Over:N0} bytes. Working out what to take out…"
                                    : note + "Does not build:\n" + string.Join("\n", r.Errors.Take(4));
-                    _problems.Foreground = r.Success ? new SolidColorBrush(Color.FromRgb(0xb0, 0xb6, 0xc0)) : Brushes.OrangeRed;
+                    _problems.Foreground = r.Success ? AppTheme.Brush(Color.FromRgb(0xb0, 0xb6, 0xc0)) : Brushes.OrangeRed;
                 }
+                ShowRam(r?.Ram);
+                MeasureTick(sk, chosen, r?.Success == true);
+                ShowAdvice(SkeletonAdvice.Check(sk, chosen, r));
                 UpdateOk();
                 if (r != null) Costs(sk, chosen, r, serial);
             }
+        }
+    }
+
+    /// Time the pick's tick interrupt in the simulator, in the background, a moment after the last change (a pick measured before shows at once).
+    void MeasureTick(Skeleton sk, List<string> chosen, bool builds)
+    {
+        _timing?.Cancel();
+        if (!builds) { ShowTick(null, "the pick does not build"); return; }
+        var key = Key(sk, chosen);
+        if (Timings.TryGetValue(key, out var known)) { ShowTick(known, null); return; }
+        var cts = _timing = new CancellationTokenSource();
+        _tickText.Text = "measuring…";
+        _tickText.Foreground = DataList.Dim;
+        Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(700, cts.Token);              // ticking several boxes in a row: only the last pick is run
+                var b = sk.Build(chosen);
+                if (cts.IsCancellationRequested || b.Assembly == null) return;
+                var built = IsrTiming.Measure(b.Assembly, allOn: false, cts.Token);
+                var on = built == null ? null : IsrTiming.Measure(b.Assembly, allOn: true, cts.Token);
+                if (built != null) Timings[key] = (built, on);
+                Dispatcher.UIThread.Post(() => { if (!cts.IsCancellationRequested) ShowTick(built == null ? null : (built, on), built == null ? "the ROM did not run in the simulator" : null); });
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { AppLog.Error("new rom", "interrupt timing failed", ex); }
+        }, cts.Token);
+    }
+
+    /// The bar: the tick as the ROM ships (its modules off until switched on); the text adds what it is with every module switched on.
+    void ShowTick((IsrTiming.Result Built, IsrTiming.Result? AllOn)? m, string? why)
+    {
+        if (m is not { } t) { _tickBar.Value = 0; _tickText.Text = why ?? ""; _tickText.Foreground = DataList.Dim; return; }
+        var r = t.Built;
+        _tickBar.Value = Math.Min(_tickBar.Maximum, r.TickWorstUs);
+        _tickBar.Foreground = r.TickWorstUs > IsrTiming.CautionUs ? Brushes.OrangeRed : r.TickWorstUs > IsrTiming.GoodUs ? Brushes.Goldenrod : AppTheme.Brush(Color.FromRgb(0x4e, 0xa1, 0xff));
+        _tickText.Text = $"tick {r.TickWorstUs:0} us at worst as built" + (t.AllOn is { } on ? $" · {on.TickWorstUs:0} us with every module on" : "") +
+                         $" · interrupts {r.CpuPercent:0} % of the CPU";
+        double worst = t.AllOn?.TickWorstUs ?? r.TickWorstUs;
+        _tickText.Foreground = r.TickWorstUs > IsrTiming.CautionUs ? DataList.Error : worst > IsrTiming.CautionUs || r.TickWorstUs > IsrTiming.GoodUs ? DataList.Warning : DataList.Text;
+    }
+
+    void ShowRam(ModuleRam? ram)
+    {
+        _ramBar.Ram = ram;
+        _ramText.Text = ram == null ? "" : ram.Full ? $"full: {ram.Used} of {ram.Size} bytes wanted" : $"{ram.Used} of {ram.Size} bytes used · {ram.Free} free · {ram.Base:X3}h-{ram.End - 1:X3}h";
+        _ramText.Foreground = ram is { Full: true } ? DataList.Error : ram != null && ram.Used > ram.Size * 0.85 ? DataList.Warning : DataList.Text;
+    }
+
+    /// The checklist as ticks and crosses, then everything said about the pick, the worst first.
+    void ShowAdvice(List<Advice> advice)
+    {
+        _advice = advice;
+        static IBrush Ink(AdviceLevel l) => l switch { AdviceLevel.Error => DataList.Error, AdviceLevel.Warning => DataList.Warning, AdviceLevel.Good => DataList.Good, _ => DataList.Dim };
+        static string Mark(AdviceLevel l) => l switch { AdviceLevel.Error => "✖", AdviceLevel.Warning => "▲", AdviceLevel.Good => "✔", _ => "i" };
+        _checks.Children.Clear();
+        foreach (var a in advice.Where(a => a.Check != null).GroupBy(a => a.Check).Select(g => g.OrderByDescending(a => a.Level).First()))
+        {
+            var chip = new Border
+            {
+                Child = new TextBlock { Text = $"{Mark(a.Level)}  {a.Check}", FontSize = 11.5, Foreground = Ink(a.Level) },
+                BorderBrush = Ink(a.Level), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(9),
+                Padding = new Thickness(8, 1), Margin = new Thickness(0, 0, 6, 4), Opacity = a.Level == AdviceLevel.Good ? 0.8 : 1,
+            };
+            ToolTip.SetTip(chip, $"{a.Title}\n{a.Detail}");
+            _checks.Children.Add(chip);
+        }
+        _adviceList.Children.Clear();
+        // (what stops the build is said in red above, by the build itself)
+        foreach (var a in advice.Where(a => a.Level is AdviceLevel.Warning or AdviceLevel.Info || (a.Level == AdviceLevel.Error && a.Check == SkeletonAdvice.RevLimiter))
+                                .OrderByDescending(a => a.Level))
+        {
+            var line = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 11.5 };
+            line.Inlines!.Add(new Avalonia.Controls.Documents.Run($"{Mark(a.Level)}  {a.Title}: ") { Foreground = Ink(a.Level), FontWeight = FontWeight.SemiBold });
+            line.Inlines.Add(new Avalonia.Controls.Documents.Run(a.Detail) { Foreground = a.Level == AdviceLevel.Info ? DataList.Dim : DataList.Text });
+            _adviceList.Children.Add(line);
         }
     }
 
@@ -533,8 +742,7 @@ public sealed class NewRomWindow : Window
             int bytes = on ? b.FreeBytes - now.FreeBytes : now.FreeBytes - b.FreeBytes;     // what it takes up
             return (on, bytes, b.FreeBytes, alsoOut.Count > 0 ? string.Join(", ", alsoOut) : "", ok);
         }
-        // at once: the sets already built exactly, the rest estimated from what they took up last time (sizes barely move
-        // with the other functions), marked ≈ until the exact ones are in
+        // at once: the sets already built exactly, the rest estimated from what they took up last time (sizes barely move with the other functions), marked ≈ until the exact ones are in
         var quick = new Dictionary<string, (bool On, int Bytes, int FreeAfter, string Replaces, bool Ok)>(StringComparer.OrdinalIgnoreCase);
         var estimated = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var f in sk.Features)
@@ -563,8 +771,7 @@ public sealed class NewRomWindow : Window
                 results[f.Define] = Cost(f, BuildCached(sk, set), alsoOut);
             });
             if (serial != _buildSerial) return;
-            // over the limit: what to take out. Every one that is enough on its own; if none is, the fewest (largest first)
-            // that together are, checked by building it
+            // over the limit: what to take out. Every one that is enough on its own; if none is, the fewest (largest first) that together are, checked by building it
             var fixes = new List<string>();
             string? together = null;
             if (now.Over > 0)
@@ -632,15 +839,50 @@ public sealed class NewRomWindow : Window
     /// Write the build: the skeleton (and its modules) beside the new file, and the file itself - the chosen functions as defines, then the skeleton - so it can be changed later by editing the define lines.
     async Task MakeFromSkeleton()
     {
-        if (Current is not { } sk || _last?.Success != true) return;
+        if (Current is not { } sk || _last?.Success != true || SkeletonAdvice.Worst(_advice) >= AdviceLevel.Error) return;
+        // warnings are said once more, together, before anything is written
+        var warnings = _advice.Where(a => a.Level == AdviceLevel.Warning).ToList();
+        if (warnings.Count > 0 && !await Dialogs.Confirm(this, "This ROM may have issues",
+                $"{string.Join("\n\n", warnings.Select(w => $"▲  {w.Title}\n{w.Detail}"))}\n\nCreate it anyway?", "Create anyway", "Go back"))
+            return;
         var path = await SaveAsPath();
         if (path == null) return;
+        if (WriteBuild(sk, path, Chosen())) { Created = path; Close(); }
+    }
+
+    /// Change mode: the pick, checked as a new ROM's is; a ROM with no build file gets one written (and opened by the caller).
+    async Task MakeChange()
+    {
+        if (_change is not { } ch || Current is not { } sk || _last?.Success != true || SkeletonAdvice.Worst(_advice) >= AdviceLevel.Error) return;
+        var now = Chosen();
+        var added = now.Except(ch.Current, StringComparer.OrdinalIgnoreCase).ToList();
+        var removed = ch.Current.Except(now, StringComparer.OrdinalIgnoreCase).ToList();
+        if (added.Count == 0 && removed.Count == 0) { _problems.Text = "Nothing changed: tick a function to add or untick one to take out."; _problems.Foreground = DataList.Warning; return; }
+        var warnings = _advice.Where(a => a.Level == AdviceLevel.Warning).ToList();
+        string Names(List<string> l) => string.Join(", ", l.Select(d => sk.Feature(d)?.Name ?? d));
+        var summary = (added.Count > 0 ? $"Added: {Names(added)}\n" : "") + (removed.Count > 0 ? $"Taken out: {Names(removed)} (their settings go with them)\n" : "");
+        if (!await Dialogs.Confirm(this, "Rebuild the ROM?",
+                summary + (warnings.Count > 0 ? "\n" + string.Join("\n\n", warnings.Select(w => $"▲  {w.Title}\n{w.Detail}")) + "\n" : "") +
+                "\nThe tune of the ROM open now is carried across.", "Rebuild", "Go back"))
+            return;
+        if (!ch.SaveIsBuildFile)
+        {
+            var path = await SaveAsPath();
+            if (path == null || !WriteBuild(sk, path, now)) return;
+            Created = path;
+        }
+        else Created = ch.SavePath;
+        ChosenFunctions = now;
+        Close();
+    }
+
+    /// Write a build: the skeleton (and its modules) beside the new file, and the file itself - the functions as defines, then the skeleton.
+    bool WriteBuild(Skeleton sk, string path, List<string> functions)
+    {
         try
         {
             var dir = Path.GetDirectoryName(path)!;
-            // the skeleton and its modules go beside the new file. A copy already there that is not exactly the app's (an
-            // older one, or one edited by hand for another ROM) is left for the ROMs that use it, and this ROM gets a
-            // folder of its own - so a new ROM always starts from the newest skeleton and is never offered an update
+            // the skeleton and its modules go beside the new file. A copy already there that is not exactly the app's (an older one, or one edited by hand for another ROM) is left for the ROMs that use it, and this ROM gets a folder of its own - so a new ROM always starts from the newest skeleton and is never offered an update
             string skName = Path.GetFileName(sk.Path);
             string Target(string d) => Path.Combine(d, skName);
             bool IsApps(string d) => Path.GetFullPath(Target(d)).Equals(Path.GetFullPath(sk.Path), StringComparison.OrdinalIgnoreCase);
@@ -650,7 +892,7 @@ public sealed class NewRomWindow : Window
             string baseDir = dir;
             if (File.Exists(Target(dir)) && !Current(dir)) baseDir = Path.Combine(dir, Path.GetFileNameWithoutExtension(path) + "-base");
             if (Path.GetFullPath(path).Equals(Path.GetFullPath(Target(baseDir)), StringComparison.OrdinalIgnoreCase))
-            { _problems.Text = "That is the skeleton's own name - pick another name for the new ROM."; return; }
+            { _problems.Text = "That is the skeleton's own name - pick another name for the new ROM."; return false; }
             Directory.CreateDirectory(baseDir);
             if (!Current(baseDir))
             {
@@ -658,12 +900,11 @@ public sealed class NewRomWindow : Window
                 if (sk.FeaturesDir != null) CopyDir(sk.FeaturesDir, Path.Combine(baseDir, Path.GetFileName(sk.FeaturesDir)));
             }
             var include = Path.GetRelativePath(dir, Target(baseDir));
-            File.WriteAllText(path, sk.BuildSource(Chosen(), include, Path.GetFileNameWithoutExtension(path)));
-            Core.AppLog.Action("new rom", $"created {path} from {sk.Name} with {string.Join(", ", Chosen())}");
-            Created = path;
-            Close();
+            File.WriteAllText(path, sk.BuildSource(functions, include, Path.GetFileNameWithoutExtension(path)));
+            Core.AppLog.Action("new rom", $"created {path} from {sk.Name} with {string.Join(", ", functions)}");
+            return true;
         }
-        catch (Exception ex) { _problems.Text = "Could not write the ROM: " + ex.Message; }
+        catch (Exception ex) { _problems.Text = "Could not write the ROM: " + ex.Message; return false; }
     }
 
     static bool SameFile(string a, string b)

@@ -22,7 +22,7 @@ public static class DarkChrome
     {
         try
         {
-            using var s = AssetLoader.Open(new Uri("avares://OkiRomSimStudio/Assets/icon.png"));
+            using var s = AssetLoader.Open(new Uri("avares://RomSimStudio/Assets/icon.png"));
             return new Bitmap(s);
         }
         catch { return null; }
@@ -32,7 +32,7 @@ public static class DarkChrome
     {
         try
         {
-            using var s = AssetLoader.Open(new Uri("avares://OkiRomSimStudio/Assets/icon.png"));
+            using var s = AssetLoader.Open(new Uri("avares://RomSimStudio/Assets/icon.png"));
             return new WindowIcon(s);
         }
         catch { return null; }
@@ -47,7 +47,7 @@ public static class DarkChrome
     /// Turns the window into a borderless dark one and returns the title bar to put at the top of its content (an empty control where the system title bar is kept). Call before assigning Content.
     public static Control Apply(Window w, string title)
     {
-        w.Background = new SolidColorBrush(Background);
+        w.Background = AppTheme.Brush(Background);
         w.Icon = LoadWindowIcon();
         w.Opened += (_, _) => ScreenFit.FitWindow(w);
         if (!Custom) { w.SystemDecorations = SystemDecorations.Full; return new Panel { Height = 0 }; }
@@ -72,7 +72,7 @@ public static class DarkChrome
         {
             ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
             Height = 34,
-            Background = new SolidColorBrush(Panel),
+            Background = AppTheme.Brush(Panel),
         };
 
         var left = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(10, 0) };
@@ -82,7 +82,7 @@ public static class DarkChrome
         var titleText = new TextBlock
         {
             Text = title,
-            Foreground = new SolidColorBrush(Text),
+            Foreground = AppTheme.Brush(Text),
             VerticalAlignment = VerticalAlignment.Center,
             FontSize = 12,
             FontWeight = FontWeight.SemiBold,
@@ -125,7 +125,7 @@ public static class DarkChrome
             Width = 44,
             Height = 34,
             Background = Brushes.Transparent,
-            Foreground = new SolidColorBrush(Text),
+            Foreground = AppTheme.Brush(Text),
             BorderThickness = new Thickness(0),
             CornerRadius = new CornerRadius(0),
             HorizontalContentAlignment = HorizontalAlignment.Center,
@@ -133,7 +133,7 @@ public static class DarkChrome
             FontSize = 12,
         };
         b.Click += (_, _) => onClick();
-        b.PointerEntered += (_, _) => b.Background = new SolidColorBrush(danger ? Color.FromRgb(0xc0, 0x39, 0x2b) : Line);
+        b.PointerEntered += (_, _) => b.Background = AppTheme.Brush(danger ? Color.FromRgb(0xc0, 0x39, 0x2b) : Line);
         b.PointerExited += (_, _) => b.Background = Brushes.Transparent;
         return b;
     }

@@ -33,9 +33,9 @@ public sealed class ServiceWindow : Window
     bool _busy, _syncing;
     int _tick;
 
-    static readonly IBrush LampOn = new SolidColorBrush(Color.FromRgb(0xFF, 0xA0, 0x10));
-    static readonly IBrush LampOff = new SolidColorBrush(Color.FromArgb(0x40, 0x80, 0x80, 0x80));
-    static readonly IBrush Active = new SolidColorBrush(Color.FromRgb(0xC0, 0x30, 0x30));
+    static readonly IBrush LampOn = AppTheme.Brush(Color.FromRgb(0xFF, 0xA0, 0x10));
+    static readonly IBrush LampOff = AppTheme.Brush(Color.FromArgb(0x40, 0x80, 0x80, 0x80));
+    static readonly IBrush Active = AppTheme.Brush(Color.FromRgb(0xC0, 0x30, 0x30));
 
     static ToggleButton Big(string text) => new() { Content = text, MinHeight = 44, MinWidth = 120, FontSize = 14, Margin = new Thickness(0, 0, 6, 6), HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center };
 
@@ -97,6 +97,7 @@ public sealed class ServiceWindow : Window
         body.Children.Add(_codes);
         body.Children.Add(Wrap(_clear));
         body.Children.Add(service);
+        body.Children.Add(MemoryBox());
         body.Children.Add(_status);
 
         var chrome = DarkChrome.Apply(this, Title);
@@ -109,6 +110,73 @@ public sealed class ServiceWindow : Window
         _timer.Tick += (_, _) => Refresh();
         Opened += async (_, _) => { Refresh(); _timer.Start(); if (ServiceAllowed(out _)) await Send(TroubleCodes.State, "the state", quiet: true); };
         Closed += (_, _) => _timer.Stop();
+    }
+
+    // ---------------------------------------------------------------- ECU memory (the memory read module)
+    readonly TextBox _memAddr = new() { Text = "3F8", Width = 70, FontFamily = MainWindow.MonoFont, FontSize = 13, VerticalContentAlignment = VerticalAlignment.Center };
+    readonly ToggleButton _memWatch = new() { Content = "Watch", MinHeight = 34, MinWidth = 80, FontSize = 13, HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center };
+    readonly TextBlock _memDump = new() { FontFamily = MainWindow.MonoFont, FontSize = 12.5, TextWrapping = TextWrapping.NoWrap };
+    readonly DispatcherTimer _memTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
+    byte[]? _memLast;
+    int _memLastAt = -1;
+
+    /// 32 bytes of the car's ECU RAM, read over the datalog cable while it runs (the skeleton ROM's memory read module): a byte that changed since the last read is marked.
+    Control MemoryBox()
+    {
+        var read = new Button { Content = "Read", MinHeight = 34, MinWidth = 80, FontSize = 13, HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center };
+        ToolTip.SetTip(_memAddr, "The first RAM address, in hex (80-460): module RAM is 3F8 with the stock trouble codes built in, 31A without.");
+        ToolTip.SetTip(read, "Read the 32 bytes from that address now.");
+        ToolTip.SetTip(_memWatch, "Read them twice a second while this is down.");
+        read.Click += async (_, _) => await ReadMemory();
+        _memWatch.IsCheckedChanged += (_, _) => { if (_memWatch.IsChecked == true) _memTimer.Start(); else _memTimer.Stop(); };
+        _memTimer.Tick += async (_, _) => { if (!_memBusy) await ReadMemory(); };
+        Closed += (_, _) => _memTimer.Stop();
+        var box = new StackPanel { Spacing = 4 };
+        box.Children.Add(new TextBlock { Text = "ECU MEMORY", FontWeight = FontWeight.Bold, FontSize = 12, Opacity = 0.8, Margin = new Thickness(0, 10, 0, 2) });
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        row.Children.Add(new TextBlock { Text = "Address", VerticalAlignment = VerticalAlignment.Center, FontSize = 13 });
+        row.Children.Add(_memAddr);
+        row.Children.Add(read);
+        row.Children.Add(_memWatch);
+        box.Children.Add(row);
+        box.Children.Add(_memDump);
+        box.Children.Add(new TextBlock
+        {
+            Text = "Any RAM byte on the car, read between datalog frames: needs the channel stream and the ROM's memory read module. The ROM itself is never read.",
+            TextWrapping = TextWrapping.Wrap, FontSize = 11.5, Opacity = 0.7,
+        });
+        return box;
+    }
+
+    bool _memBusy;
+
+    async Task ReadMemory()
+    {
+        if (_memBusy) return;
+        if (!int.TryParse((_memAddr.Text ?? "").Trim().TrimEnd('h', 'H'), System.Globalization.NumberStyles.HexNumber, null, out var addr))
+        { _status.Text = "the address is hex: 3F8, 31A..."; return; }
+        _memBusy = true;
+        try
+        {
+            var (data, note) = await _engine.ReadMemory(addr);
+            if (data == null) { _status.Text = "ECU memory: " + note; _memWatch.IsChecked = false; return; }
+            var sb = new System.Text.StringBuilder();
+            for (int r = 0; r < data.Length; r += 8)
+            {
+                sb.Append($"{addr + r:X3}h  ");
+                for (int i = r; i < r + 8 && i < data.Length; i++)
+                {
+                    bool changed = _memLast != null && _memLastAt == addr && _memLast.Length == data.Length && _memLast[i] != data[i];
+                    sb.Append(data[i].ToString("X2")).Append(changed ? '*' : ' ');
+                }
+                sb.Append('\n');
+            }
+            _memDump.Text = sb.ToString().TrimEnd();
+            bool again = _memLastAt == addr;
+            _memLast = data; _memLastAt = addr;
+            _status.Text = $"ECU memory {addr:X3}h-{addr + 31:X3}h read at {DateTime.Now:HH:mm:ss}" + (again ? " (* changed since the last read)" : "");
+        }
+        finally { _memBusy = false; }
     }
 
     static WrapPanel Wrap(params Control[] items)

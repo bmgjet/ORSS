@@ -1,5 +1,4 @@
-// Copyright (c) bmgjet. All rights reserved.
-// Execution coverage at two levels: address coverage (was a byte ever executed) and, the one that matters for "hit all branches", EDGE coverage (was each conditional branch seen both taken and not-taken). BranchesHalfCovered lists branches seen only one way, where untested paths hide.
+// Copyright (c) bmgjet. All rights reserved. Execution coverage at two levels: address coverage (was a byte ever executed) and, the one that matters for "hit all branches", EDGE coverage (was each conditional branch seen both taken and not-taken). BranchesHalfCovered lists branches seen only one way, where untested paths hide.
 using System.Text;
 
 namespace OkiRomSim.Core;
@@ -11,7 +10,8 @@ public sealed class Coverage
     private readonly ulong[] _lastAt = new ulong[Bus.RomSize];
 
     /// Per conditional-branch site: bit 0 = seen taken, bit 1 = seen not-taken. Only populated for addresses that actually decoded to a conditional branch, so Count is the number of branch sites reached.
-    private readonly Dictionary<ushort, int> _edges = [];
+    private readonly byte[] _edges = new byte[Bus.RomSize];
+    private int _edgeSites;
 
     public int AddressesExecuted { get; private set; }
     public ulong InstructionsObserved { get; private set; }
@@ -21,7 +21,8 @@ public sealed class Coverage
         Array.Clear(_executed);
         Array.Clear(_hits);
         Array.Clear(_lastAt);
-        _edges.Clear();
+        Array.Clear(_edges);
+        _edgeSites = 0;
         AddressesExecuted = 0;
         InstructionsObserved = 0;
     }
@@ -43,18 +44,19 @@ public sealed class Coverage
     /// Record the outcome of a conditional branch at `pc`.
     public void RecordBranch(ushort pc, bool taken)
     {
-        _edges.TryGetValue(pc, out int mask);
-        _edges[pc] = mask | (taken ? 1 : 2);
+        int i = pc & (Bus.RomSize - 1);
+        byte old = _edges[i];
+        if (old == 0) _edgeSites++;
+        _edges[i] = (byte)(old | (taken ? 1 : 2));
     }
 
-    public int BranchSitesReached => _edges.Count;
-    public int BranchSitesFullyCovered => _edges.Count(kv => kv.Value == 3);
+    public int BranchSitesReached => _edgeSites;
+    public int BranchSitesFullyCovered => _edges.Count(m => m == 3);
 
     /// Branch sites seen only one way round, with the outcome still missing.
     public IEnumerable<(ushort Pc, bool MissingTaken)> BranchesHalfCovered() =>
-        _edges.Where(kv => kv.Value != 3)
-              .OrderBy(kv => kv.Key)
-              .Select(kv => (kv.Key, (kv.Value & 1) == 0));
+        Enumerable.Range(0, _edges.Length).Where(i => _edges[i] is not (0 or 3))
+                  .Select(i => ((ushort)i, (_edges[i] & 1) == 0));
 
     /// Contiguous runs of never-executed ROM, largest first. Filler regions (long stretches of FFh) are reported separately so a 400-byte blanked block does not look like unreached logic.
     public IEnumerable<(ushort Start, int Length, bool IsFiller)> UnreachedRegions(

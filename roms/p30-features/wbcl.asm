@@ -5,7 +5,7 @@
 ;> category: Fuel
 ;> pages: closeloop
 ;> conflicts: FEAT_STOCK_O2
-;> ram: module RAM (2 bytes)
+;> ram: module RAM (3 bytes)
 ;> about: Trims the fuel towards a target AFR read from a wideband O2 controller on an analog input: a
 ;>        target against manifold pressure, only with the engine warm and inside an rpm and throttle
 ;>        window, and never further than a set limit either way. Outside the window the trim goes back
@@ -40,7 +40,7 @@ endif
 if XP == XP_CAL
 ;@ CloseLoopEnable type=u8 flag=1 on=1 off=0 category="Closed loop (wideband)" slot=closeloop.enable desc="Wideband closed loop on."
 wbcl_enable:            DB  000h
-;@ CloseLoopInput type=u8 category="Closed loop (wideband)" slot=closeloop.input desc="The wideband's analog output on: 0 O2 (D14), 1 ELD (D10), 2 EGR (D12), 3 B6."
+;@ CloseLoopInput type=u8 category="Closed loop (wideband)" slot=closeloop.input desc="The wideband's analog output on: 0 O2 (D14), 1 ELD (D10), 2 EGR (D12), 3 B6, 4-11 serial input 1-8 (sent over the datalog cable: the serial inputs module)."
 wbcl_input:             DB  000h
 ;@ CloseLoopAFR0 type=u8 formula=x/10 unit=AFR decimals=1 category="Closed loop (wideband)" slot=closeloop.afr0 desc="The AFR the wideband reports at 0 V."
 wbcl_afr0:              DB  064h

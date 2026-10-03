@@ -102,7 +102,7 @@ public sealed class FeaturePageView : UserControl
 
     static Border Box(string title, Control body) => new()
     {
-        BorderBrush = new SolidColorBrush(Color.FromArgb(64, 255, 255, 255)),
+        BorderBrush = AppTheme.Brush(Color.FromArgb(64, 255, 255, 255)),
         BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4),
         Margin = new Thickness(0, 0, 0, 10),
         Child = new StackPanel
@@ -195,10 +195,11 @@ public sealed class FeaturePageView : UserControl
     /// The unit beside a row: the page's own, else the unit of the setting's formula.
     string UnitOf(PageRow row, string slot)
     {
-        if (row.Unit.Length > 0 || row.Kind is RowKind.Switch or RowKind.Choice or RowKind.Text) return row.Unit;
+        if (row.Kind is RowKind.Switch or RowKind.Choice or RowKind.Text) return row.Unit;
+        if (row.Unit.Length > 0) return Units.Label(Units.Shown(row.Unit));
         var defs = _host.Defs();
         if (CalPage.Bound(defs, slot) is not { } item) return "";
-        try { return defs.Formula(item.Formula).Unit; } catch { return ""; }
+        try { return Units.Label(Units.Shown(defs.Formula(item.Formula).Unit)); } catch { return ""; }
     }
 
     /// The editor for one slot: a number box, a tick box, a choice, a text, or a button that opens the table.
@@ -247,11 +248,16 @@ public sealed class FeaturePageView : UserControl
             case RowKind.Choice:
                 {
                     var options = row.Options ?? [];
+                    // the ROM's own list where its description has one: a skeleton module numbers its inputs its own way
+                    if (row.Values == null && SaneLimits.ChoiceNames(item.Description) is { Length: >= 2 } own) options = own;
+                    // a switch input: the serial inputs too, when the ROM has them
+                    var (opts, values) = CalPage.WithSerialInputs(defs, options, row.Values);
+                    options = opts;
                     double raw;
                     try { raw = _host.ReadItem(item)[0].Raw; } catch { return Broken(item); }
                     // the raw value of each entry: its position, or the row's own list (one-hot inputs)
-                    int RawOf(int i) => row.Values is { } v && i < v.Length ? v[i] : i;
-                    int at = row.Values is { } vals ? Array.IndexOf(vals, (int)raw) : (int)raw;
+                    int RawOf(int i) => values is { } v && i < v.Length ? v[i] : i;
+                    int at = values is { } vals ? Array.IndexOf(vals, (int)raw) : (int)raw;
                     var shown = options.ToList();
                     if (at < 0 || at >= options.Length) { shown.Add($"(raw {raw:0} - not one of these)"); at = shown.Count - 1; }
                     var box = new ComboBox { ItemsSource = shown, Width = 220, SelectedIndex = at };
@@ -271,14 +277,18 @@ public sealed class FeaturePageView : UserControl
                     CellValue c;
                     FormulaDef f;
                     try { c = _host.ReadItem(item)[0]; f = defs.Formula(item.Formula); } catch { return Broken(item); }
-                    var (lo, hi) = RomData.RawRange(item.Type);
-                    double vlo = Math.Min(f.ToValue(lo), f.ToValue(hi)), vhi = Math.Max(f.ToValue(lo), f.ToValue(hi));
+                    var (lo, _) = RomData.RawRange(item.Type);
+                    var (vlo, vhi) = RomData.EditRange(defs, item, c.Value);
                     double step = Math.Abs(f.ToValue(lo + 1) - f.ToValue(lo));
                     if (step <= 0 || double.IsNaN(step) || double.IsInfinity(step)) step = 1;
+                    // in the unit picked in Settings > Units (the row's own unit, when it names one, wins)
+                    string fu = row.Unit.Length > 0 ? row.Unit : f.Unit;
+                    double S(double v) => Units.Show(v, fu);
+                    double slo = Math.Min(S(vlo), S(vhi)), shi = Math.Max(S(vlo), S(vhi));
                     var nud = new NumericUpDown
                     {
-                        Width = 130, Minimum = (decimal)Math.Max(-1e9, vlo), Maximum = (decimal)Math.Min(1e9, vhi),
-                        Increment = (decimal)Math.Round(step, 6), Value = (decimal)Math.Round(c.Value, 6),
+                        Width = 130, Minimum = (decimal)Math.Max(-1e9, slo), Maximum = (decimal)Math.Min(1e9, shi),
+                        Increment = (decimal)Math.Round(step * Units.ScaleOf(fu), 6), Value = (decimal)Math.Round(double.IsFinite(c.Value) ? S(c.Value) : 0, 6),
                         FormatString = "0." + new string('#', Math.Clamp(f.Decimals, 0, 6)), FontFamily = MainWindow.MonoFont,
                     };
                     nud.ValueChanged += (_, e) =>
@@ -286,7 +296,7 @@ public sealed class FeaturePageView : UserControl
                         if (e.NewValue is not decimal d) return;
                         // a value the code reads from two copies is written to both
                         foreach (var it in CalPage.BoundAll(defs, slot))
-                            Write(it, (double)d, raw: false, ((double)d).ToString("0.###", CultureInfo.InvariantCulture));
+                            Write(it, Units.Back((double)d, fu), raw: false, ((double)d).ToString("0.###", CultureInfo.InvariantCulture));
                     };
                     ToolTip.SetTip(nud, Describe(item));
                     return nud;

@@ -32,6 +32,19 @@ public static class Rescale
         int cols = item.IsTable ? item.Cols : 1, count = item.Count;
         var patches = new List<BytePatch>();
         int changed = 0, clipped = 0, rescaled = 0;
+        // the safe limits (rpm, advance, duty...): a cell that was inside them is not scaled out of them. One that was already outside (HTS keeps 31250 rpm in a limit table to mean "off") is scaled as asked.
+        var limits = RomData.Limits(defs, item);
+        var formula = defs.Formula(item.Formula);
+        double Bound(double raw, double before, double oldMult, double mult)
+        {
+            if (limits is not { } l) return raw;
+            double was = formula.ToValue(before * oldMult), now = formula.ToValue(raw * mult);
+            if (was < l.Lo - 1e-9 || was > l.Hi + 1e-9 || (now >= l.Lo - 1e-9 && now <= l.Hi + 1e-9)) return raw;
+            double want = Math.Clamp(now, l.Lo, l.Hi);
+            double r = mult == 1 ? formula.ToRaw(want, lo, hi) : Math.Clamp(Math.Round(formula.ToRaw(want, lo * mult, hi * mult) / mult), lo, hi);
+            clipped++;
+            return r;
+        }
 
         // what each cell should hold, before the multiplier row is taken into account
         var wanted = new double[count];
@@ -69,6 +82,7 @@ public static class Rescale
                     double raw = Math.Round(wanted[i] * share);
                     if (raw > hi) { raw = hi; clipped++; }
                     if (raw < lo) { raw = lo; clipped++; }
+                    raw = Bound(raw, RomData.ReadRaw(rom, item.CellAddress(i), item.Type, item.Bit), mult, newMult);
                     changed += Put(rom, item, i, raw, patches);
                 }
             }
@@ -80,6 +94,7 @@ public static class Rescale
                 double raw = Math.Round(wanted[i]);
                 if (raw > hi) { raw = hi; clipped++; }
                 if (raw < lo) { raw = lo; clipped++; }
+                raw = Bound(raw, RomData.ReadRaw(rom, item.CellAddress(i), item.Type, item.Bit), 1, 1);
                 changed += Put(rom, item, i, raw, patches);
             }
         }

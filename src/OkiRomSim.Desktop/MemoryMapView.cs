@@ -171,12 +171,12 @@ public sealed class MemoryMapView : UserControl
         static readonly string[] Heads = ["Address", "Name", "Raw", "Value", "Written by (newest first)", "Writes"];
         static readonly Typeface Mono = new(MainWindow.MonoFont);
         static readonly Typeface Bold = new(MainWindow.MonoFont, FontStyle.Normal, FontWeight.Bold);
-        static readonly IBrush HeadBg = new SolidColorBrush(Color.FromRgb(0x2b, 0x2e, 0x35));
-        static readonly IBrush Alt = new SolidColorBrush(Color.FromArgb(18, 255, 255, 255));
-        static readonly IBrush Sel = new SolidColorBrush(Color.FromArgb(70, 0x3a, 0x8d, 0xff));
-        static readonly IBrush Hov = new SolidColorBrush(Color.FromArgb(30, 255, 255, 255));
-        static readonly IBrush HeldInk = new SolidColorBrush(Color.FromRgb(0xff, 0xb0, 0x40));
-        static readonly IBrush ValueInk = new SolidColorBrush(Color.FromRgb(0x7f, 0xe0, 0x9a));
+        static readonly IBrush HeadBg = AppTheme.Brush(Color.FromRgb(0x2b, 0x2e, 0x35));
+        static readonly IBrush Alt = AppTheme.Brush(Color.FromArgb(18, 255, 255, 255));
+        static readonly IBrush Sel = AppTheme.Brush(Color.FromArgb(70, 0x3a, 0x8d, 0xff));
+        static readonly IBrush Hov = AppTheme.Brush(Color.FromArgb(30, 255, 255, 255));
+        static readonly IBrush HeldInk = AppTheme.Brush(Color.FromRgb(0xff, 0xb0, 0x40));
+        static readonly IBrush ValueInk = AppTheme.Brush(Color.FromRgb(0x7f, 0xe0, 0x9a));
 
         protected override Size MeasureOverride(Size availableSize) => new(Cols[^1] + 90, Top + (Rows.Count * RowH) + 4);
 

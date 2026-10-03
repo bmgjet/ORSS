@@ -1,5 +1,4 @@
-// Copyright (c) bmgjet. All rights reserved.
-// A scripted trip through the engine's operating regions: coverage is limited by situations, not speed. Each Phase holds the engine at one operating point for a number of instructions, interpolating toward it so transitions also run. The default cycle runs cold conditions first, before the ECT model warms up.
+// Copyright (c) bmgjet. All rights reserved. A scripted trip through the engine's operating regions: coverage is limited by situations, not speed. Each Phase holds the engine at one operating point for a number of instructions, interpolating toward it so transitions also run. The default cycle runs cold conditions first, before the ECT model warms up.
 
 namespace OkiRomSim.Core;
 

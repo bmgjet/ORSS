@@ -14,13 +14,13 @@ ifdef FEAT_DLQD3
 
 
 if XP == XP_CAL
-;@ DatalogQd3Table type=u16 count=40 category="Datalog" desc="RAM address sent as each byte of the 40-byte QD3 frame (FExxh: the constant xx, FF05h: VTEC in bit 0, 0: always 00h)."
+;@ DatalogQd3Table type=u16 count=40 category="Datalog" desc="RAM address sent as each byte of the 40-byte QD3 frame (FExxh: the constant xx, FF05h: VTEC in bit 0, 0: always 00h; 4000h + address: a word's low byte, read with its high byte, and 2000h + address: that high byte, so the two are one reading)."
 dl_qd3_table:
-                DW  0fe46h, 0fe26h, 000ach, 000adh, 0fe00h, 0fe00h, 0fe03h, 00146h   ;  0 46h 26h, rpm period lo/hi, 7 injector lo
+                DW  0fe46h, 0fe26h, 040ach, 020adh, 0fe00h, 0fe00h, 0fe03h, 04146h   ;  0 46h 26h, rpm period lo/hi, 7 injector lo
 if defined(FEAT_STOCK_KNOCK)
-                DW  00147h, 00246h, 00243h, 003beh, 0fe00h, 0fe00h, 0fe00h, 0fe00h   ;  8 injector hi, advance, knock retard, O2
+                DW  02147h, 00246h, 00243h, 003beh, 0fe00h, 0fe00h, 0fe00h, 0fe00h   ;  8 injector hi, advance, knock retard, O2
 else
-                DW  00147h, 00246h, 00000h, 003beh, 0fe00h, 0fe00h, 0fe00h, 0fe00h   ;  8 injector hi, advance, (no knock), O2
+                DW  02147h, 00246h, 00000h, 003beh, 0fe00h, 0fe00h, 0fe00h, 0fe00h   ;  8 injector hi, advance, (no knock), O2
 endif
                 DW  0fe4fh, 0fe0ah, 0fe49h, 0ff05h, 000b4h, 000c3h, 000a3h, 0fe55h   ; 16 19 VTEC, 20 speed, 21 battery, 22 MAP
                 DW  000b9h, 000c0h, 0fe00h, 0feffh, 0feffh, 0fe00h, 0fe75h, 0fee8h   ; 24 throttle, 25 intake air

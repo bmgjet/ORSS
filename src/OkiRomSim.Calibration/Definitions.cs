@@ -86,7 +86,10 @@ public sealed class Expression
                 {
                     j = i + 2;
                     while (j < s.Length && Uri.IsHexDigit(s[j])) j++;
-                    output.Add(new Token('n', (double)Convert.ToInt64(s[(i + 2)..j], 16), ""));
+                    // (a "0x" with no digits, or more than fit in 64 bits, is a bad formula rather than an unhandled exception)
+                    if (j == i + 2 || !long.TryParse(s[(i + 2)..j], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var hexValue))
+                        throw new FormatException($"bad hexadecimal number in the formula near '{s[i..Math.Min(s.Length, j + 1)]}'");
+                    output.Add(new Token('n', hexValue, ""));
                 }
                 else
                 {
@@ -342,7 +345,7 @@ public sealed class DefinitionSet
         d.MergeBuiltinFormulas();
         return d;
     }
-    public void Save(string path) => File.WriteAllText(path, JsonSerializer.Serialize(this, Json));
+    public void Save(string path) => OkiRomSim.Core.SafeFile.WriteAllText(path, JsonSerializer.Serialize(this, Json));
 
     /// A saved set (a project's) laid over the definitions a source ROM's annotations give now. The source wins for everything it annotates: a table that moved when modules were added is where the build put it, and a module added since brings its settings (and their page bindings) with it; one taken out takes them away. What the saved set adds is kept: definitions made by hand or by Detect, formulas of its own, and the page rows bound by hand.
     public static DefinitionSet MergeSaved(DefinitionSet fresh, DefinitionSet saved)
@@ -424,8 +427,9 @@ public sealed class DefinitionSet
             && TryResolve(off.Groups[1].Value, out var baseAddr))
         {
             var o = off.Groups[3].Value;
-            int n = o.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? Convert.ToInt32(o[2..], 16)
-                  : o.EndsWith('h') || o.EndsWith('H') ? Convert.ToInt32(o[..^1], 16) : int.Parse(o, CultureInfo.InvariantCulture);
+            bool hexOffset = o.StartsWith("0x", StringComparison.OrdinalIgnoreCase) || o.EndsWith('h') || o.EndsWith('H');
+            string digits = o.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? o[2..] : o.EndsWith('h') || o.EndsWith('H') ? o[..^1] : o;
+            if (!int.TryParse(digits, hexOffset ? NumberStyles.HexNumber : NumberStyles.None, CultureInfo.InvariantCulture, out int n)) return false;
             address = off.Groups[2].Value == "+" ? baseAddr + n : baseAddr - n;
             return true;
         }
@@ -637,6 +641,8 @@ public static class RomData
 
     public static void WriteRaw(byte[] rom, int addr, CellType t, double raw, int bit = 0)
     {
+        // a definition can point anywhere (an imported or hand-edited one past the end of the image): nothing to write there
+        if (addr < 0 || addr + (t is CellType.U16 or CellType.S16 or CellType.U16BE or CellType.S16BE ? 2 : 1) > rom.Length) return;
         int v = (int)Math.Round(raw, MidpointRounding.AwayFromZero);
         switch (t)
         {
@@ -665,22 +671,69 @@ public static class RomData
         return result;
     }
 
+    /// The values a setting may be given, in its own units: what its bytes can hold, narrowed by the definition's own min / max and by SaneLimits. Null when nothing narrows what the bytes hold.
+    public static (double Lo, double Hi)? Limits(DefinitionSet defs, ItemDef item)
+    {
+        if (item.Flag || item.Type == CellType.Bit || item.Text != null) return null;
+        var f = defs.Formula(item.Formula);
+        double lo = double.NegativeInfinity, hi = double.PositiveInfinity;
+        if (SaneLimits.For(item, f) is { } s) { lo = s.Lo; hi = s.Hi; }
+        if (item.Min is double min) lo = Math.Max(lo, min);
+        if (item.Max is double max) hi = Math.Min(hi, max);
+        if (lo > hi) (lo, hi) = (hi, lo);
+        return double.IsInfinity(lo) && double.IsInfinity(hi) ? null : (lo, hi);
+    }
+
+    /// The range an editor offers, in the setting's units: the limits, widened to take in the value it has now (so opening a page never changes a ROM that was set outside them before).
+    public static (double Lo, double Hi) EditRange(DefinitionSet defs, ItemDef item, double current)
+    {
+        var f = defs.Formula(item.Formula);
+        var (rlo, rhi) = RawRange(item.Type);
+        double a = f.ToValue(rlo), b = f.ToValue(rhi);
+        double lo = Math.Min(a, b), hi = Math.Max(a, b);
+        if (Limits(defs, item) is { } l) { lo = Math.Max(lo, l.Lo); hi = Math.Min(hi, l.Hi); }
+        if (double.IsFinite(current)) { lo = Math.Min(lo, current); hi = Math.Max(hi, current); }
+        // finite always: an editor's numeric box cannot be given an infinity or a NaN (a formula can return either, log2 of 0 say)
+        if (!double.IsFinite(lo)) lo = -1e9;
+        if (!double.IsFinite(hi)) hi = 1e9;
+        return (lo, hi);
+    }
+
     public static void Write(DefinitionSet defs, byte[] rom, ItemDef item, int index, double value)
     {
         var f = defs.Formula(item.Formula);
         var (lo, hi) = RawRange(item.Type);
-        if (item.Min is double min && value < min) value = min;
-        if (item.Max is double max && value > max) value = max;
+        if (double.IsNaN(value) || double.IsInfinity(value)) return;
+        var limits = Limits(defs, item);
+        if (limits is { } l) value = Math.Clamp(value, l.Lo, l.Hi);
         double mult = Multiplier(rom, item, index);
         double raw = mult == 1 ? f.ToRaw(value, lo, hi) : Math.Clamp(Math.Round(f.ToRaw(value, lo * mult, hi * mult) / mult), lo, hi);
+        // the nearest stored value can land a step past a limit (12500 rpm is 150 counts): the step inside instead
+        if (limits is { } lim)
+        {
+            bool Inside(double r) => f.ToValue(r * mult) is var v && v >= lim.Lo - 1e-9 && v <= lim.Hi + 1e-9;
+            if (!Inside(raw)) foreach (var r in new[] { raw - 1, raw + 1 }) if (r >= lo && r <= hi && Inside(r)) { raw = r; break; }
+        }
         WriteRaw(rom, item.CellAddress(index), item.Type, raw, item.Bit);
     }
 
-    /// Write a raw cell value (no formula), clamped to the type's range.
-    public static void WriteRawCell(byte[] rom, ItemDef item, int index, double raw)
+    /// Write a raw cell value (no formula), clamped to the type's range - and, given the definitions, to the setting's limits in its own units.
+    public static void WriteRawCell(byte[] rom, ItemDef item, int index, double raw, DefinitionSet? defs = null)
     {
         var (lo, hi) = RawRange(item.Type);
-        WriteRaw(rom, item.CellAddress(index), item.Type, Math.Clamp(Math.Round(raw), lo, hi), item.Bit);
+        if (double.IsNaN(raw) || double.IsInfinity(raw)) return;
+        raw = Math.Clamp(Math.Round(raw), lo, hi);
+        if (defs != null && Limits(defs, item) is { } l)
+        {
+            var f = defs.Formula(item.Formula);
+            double mult = Multiplier(rom, item, index), v = f.ToValue(raw * mult);
+            if (v < l.Lo || v > l.Hi)
+            {
+                double want = Math.Clamp(v, l.Lo, l.Hi);
+                raw = mult == 1 ? f.ToRaw(want, lo, hi) : Math.Clamp(Math.Round(f.ToRaw(want, lo * mult, hi * mult) / mult), lo, hi);
+            }
+        }
+        WriteRaw(rom, item.CellAddress(index), item.Type, raw, item.Bit);
     }
 
     public static double[] AxisValues(DefinitionSet defs, byte[] rom, AxisDef? axis, int count)

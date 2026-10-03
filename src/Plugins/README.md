@@ -1,12 +1,12 @@
 # Plugins
 
-A plugin is a .NET class library that OkiRomSim Studio loads at start-up. Pick plugins in **Settings > Plugins**. The plugins that come with the app are listed there with an **Add** button.
+A plugin is a .NET class library that Rom Sim Studio loads at start-up. Pick plugins in **Settings > Plugins**. The plugins that come with the app are listed there with an **Add** button.
 
 A plugin runs inside the app with the app's own rights. It can read and change the ROM, its definitions and the simulator. It can add menu entries, buttons, tabs, windows, calibration pages, page sections and settings pages, and it can feed the datalog.
 
 ## Making one
 
-1. Make a class library for the same .NET as the app (`net10.0`). Reference the app's project, or `OkiRomSimStudio.dll`, without copying it:
+1. Make a class library for the same .NET as the app (`net10.0`). Reference the app's project, or `RomSimStudio.dll`, without copying it:
 
    ```xml
    <ProjectReference Include="..\..\OkiRomSim.Desktop\OkiRomSim.Desktop.csproj" Private="false" ExcludeAssets="runtime" />

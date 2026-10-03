@@ -1,7 +1,7 @@
 // Copyright (c) bmgjet. All rights reserved.
 namespace OkiRomSim.Desktop;
 
-/// `OkiRomSimStudio --selftest-live <build.asm>`: the live-edit paths against a running simulator, without a window - a source change patched in without a reset, RAM held at a value, and who writes RAM. Prints PASS / FAIL, exits 0 or 1.
+/// `RomSimStudio --selftest-live <build.asm>`: the live-edit paths against a running simulator, without a window - a source change patched in without a reset, RAM held at a value, and who writes RAM. Prints PASS / FAIL, exits 0 or 1.
 static class SelfTest
 {
     /// `--selftest-smooth`: the datalog smoother on made-up readings - a one-frame spike dropped, a real change let through a frame later, a skipped channel left alone.
@@ -24,6 +24,13 @@ static class SelfTest
         sm.Blend = true;
         var blend = Run([6000, 6100, 5900, 28, 6000]);
         Check(Math.Abs(blend[3] - 6000) < 1 && Math.Abs(blend[4] - 5950) < 1, $"blended, the spike is left out of the average: {string.Join(", ", blend.Select(v => v.ToString("0.#")))}");
+        // asking for fewer frames shrinks the window at once: with 15 kept, a step 3000 -> 6000 would need 8 frames to get through
+        sm.Blend = false; sm.Frames = 15; Run([3000, 3000, 3000, 3000, 3000, 3000, 3000, 3000]);
+        sm.Frames = 3;
+        var f2 = new OkiRomSim.Calibration.LogFrame { Rpm = 6000 }; sm.Apply(f2);
+        var f3 = new OkiRomSim.Calibration.LogFrame { Rpm = 6000 }; sm.Apply(f3);
+        Check(f3.Rpm == 6000, $"after asking for 3 frames instead of 15, a step gets through in two frames (got {f3.Rpm})");
+        sm.Blend = true;
         sm.Reset();
         var o2 = new OkiRomSim.Calibration.LogFrame();
         foreach (var v in new[] { 0.1, 0.9, 0.1, 0.9 }) { o2 = new() { O2V = v }; sm.Apply(o2); }
@@ -50,8 +57,12 @@ static class SelfTest
         a.SetBreakpointEnabled(0x7FF0, false);
         var (st, ram, rom) = a.SaveState();
         var zip = Path.Combine(Path.GetTempPath(), "okirom-selftest.project.zip");
-        ProjectFile.Save(zip, new ProjectData { Machine = st, Ram = ram, Rom = rom });
+        var dyno = new Dictionary<string, byte[]> { ["profiles/Test car.json"] = "{\"name\":\"Test car\"}"u8.ToArray(), ["runs/Run 1.json"] = new byte[50_000] };
+        ProjectFile.Save(zip, new ProjectData { Machine = st, Ram = ram, Rom = rom, DynoOpen = true, DynoProfile = "Test car", DynoTicked = ["Run 1.json"], DynoFiles = dyno });
         var p = ProjectFile.Load(zip);
+        Check(p.DynoOpen && p.DynoProfile == "Test car" && p.DynoTicked.SequenceEqual(["Run 1.json"]) &&
+              p.DynoFiles.Count == 2 && p.DynoFiles.All(kv => dyno.TryGetValue(kv.Key, out var v) && v.SequenceEqual(kv.Value)),
+              "the dyno's profiles, runs and view come back as they went in");
         var b = new SimHost();
         b.Build(path);
         b.RestoreState(p.Machine!, p.Ram, p.Rom);

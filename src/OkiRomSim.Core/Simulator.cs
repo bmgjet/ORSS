@@ -1,7 +1,4 @@
-// Copyright (c) bmgjet. All rights reserved.
-// Top-level glue tying Cpu + Bus + EngineState + InterruptController into a runnable simulator. The core step/tick/interrupt loop is:
-//
-// before = cpu.Cycles ExecStep.Step(cpu, bus) timerIrq = bus.TickTimers(cpu.Cycles - before) distIrq = engine.CheckDistributorPulses(bus, cpu.Cycles, Bus.CpuHz) InterruptController.HandlePendingInterrupts(cpu, bus, timerIrq | distIrq)
+// Copyright (c) bmgjet. All rights reserved. Top-level glue tying Cpu + Bus + EngineState + InterruptController into a runnable simulator. The core step/tick/interrupt loop is: before = cpu.Cycles ExecStep.Step(cpu, bus) timerIrq = bus.TickTimers(cpu.Cycles - before) distIrq = engine.CheckDistributorPulses(bus, cpu.Cycles, Bus.CpuHz) InterruptController.HandlePendingInterrupts(cpu, bus, timerIrq | distIrq)
 
 using System.Diagnostics.CodeAnalysis;
 
@@ -257,13 +254,13 @@ public sealed class Simulator
             Stalls.Observe(Cpu, Bus, Board, Cpu.Instructions);
         }
 
-        if (ForcedBranches.TryGetValue(pcBefore, out bool forceTaken))
+        if (ForcedBranches.Count != 0 && ForcedBranches.TryGetValue(pcBefore, out bool forceTaken))
         {
             var forced = TryStepForcedBranch(pcBefore, forceTaken);
             if (forced != null) return forced;
         }
 
-        if (IgnoredJumps.Contains(pcBefore))
+        if (IgnoredJumps.Count != 0 && IgnoredJumps.Contains(pcBefore))
         {
             var ignored = TryStepIgnoredJump(pcBefore);
             if (ignored != null) return ignored;
@@ -274,7 +271,7 @@ public sealed class Simulator
         Decoded d;
         bool branchTaken;
         // Only reads the *instruction* makes are interesting to StallMonitor. TickTimers reads IRQ/IE/TM/PWM on every step, and letting those into the poll set would make every stall look like it was waiting on the timer block.
-        Bus.OnDataRead = StallInterventionEnabled ? DataReadHook + Stalls.NoteRead : DataReadHook;
+        Bus.OnDataRead = StallInterventionEnabled ? CombinedReadHook() : DataReadHook;
         try
         {
             d = DecodeCached(pcBefore);
@@ -306,7 +303,7 @@ public sealed class Simulator
         ushort timerIrq = Bus.TickTimers(delta);
         ushort distIrq = Engine.CheckDistributorPulses(Bus, Cpu.Cycles, Bus.CpuHz);
         LastStepInterrupted = InterruptController.HandlePendingInterrupts(Cpu, Bus, (ushort)(timerIrq | distIrq),
-            accept: !d.Mnemonic.StartsWith("RTI", StringComparison.Ordinal));
+            accept: !IsRti(d));
 
         // rel8 targets are relative to the address *after* the instruction, not to wherever a taken branch just landed.
         return new TraceEntry(pcBefore, d, (ushort)(pcBefore + d.Len));
@@ -412,6 +409,33 @@ public sealed class Simulator
                 foreach (var m in ConditionalBranches)
                     if (FullOpcodes.Table[i].Mnemonic.StartsWith(m, StringComparison.Ordinal)) t[i] = true;
             _condByIndex = t;
+        }
+        return t[d.Index];
+    }
+
+    /// The read hook with the stall monitor's added, kept between steps (combining them anew for every instruction allocated a delegate each time).
+    Action<ushort>? _combinedFor, _combined;
+    Action<ushort>? _noteRead;
+    Action<ushort>? CombinedReadHook()
+    {
+        if (_combined == null || !ReferenceEquals(_combinedFor, DataReadHook))
+        {
+            _noteRead ??= Stalls.NoteRead;
+            _combined = DataReadHook + _noteRead;
+            _combinedFor = DataReadHook;
+        }
+        return _combined;
+    }
+
+    private static bool[]? _rtiByIndex;
+    private static bool IsRti(Decoded d)
+    {
+        var t = _rtiByIndex;
+        if (t == null)
+        {
+            t = new bool[FullOpcodes.Table.Length];
+            for (int i = 0; i < t.Length; i++) t[i] = FullOpcodes.Table[i].Mnemonic.StartsWith("RTI", StringComparison.Ordinal);
+            _rtiByIndex = t;
         }
         return t[d.Index];
     }

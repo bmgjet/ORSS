@@ -59,7 +59,25 @@ endif
 if XP == XP_CODE
 ; Every tick. lib.asm leaves 0FCh bit 0 (the spark cut) to this: while a limiter wants the spark cut it is
 ; on for the cut time, off for the re-fire time, and so on.
-icm_tick:
+icm_tick:       L       A, DP                  ; nothing wants a cut and nothing is left to undo (the usual case): out
+                PUSHS   A                      ; at once - this runs every tick
+                MOV     DP, #MOD_SPARKWANT
+                L       A, [DP]
+                JNE     icm_full
+                MOV     DP, #icm_trimword
+                L       A, [DP]
+                JNE     icm_full
+                MB      C, 0fch.0
+                JLT     icm_full
+                MOV     DP, #002f8h
+                LB      A, [DP]
+                CMPB    A, #001h
+                JNE     icm_full
+                POPS    A
+                MOV     DP, A
+                RT
+icm_full:       POPS    A
+                MOV     DP, A
                 PUSHS   LRB
                 MOV     LRB, #0003fh
                 L       A, DP

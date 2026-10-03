@@ -18,14 +18,14 @@ public sealed class ToolException(string message) : Exception(message);
 public sealed class McpServer
 {
     public const string ProtocolVersion = "2025-06-18";
-    public string Name { get; init; } = "okirom-mcp";
+    public string Name { get; init; } = "romsim-mcp";
     public string Version { get; init; } = OkiRomSim.Core.BuildInfo.Version;
     public Workspace Workspace { get; }
     readonly Dictionary<string, McpTool> _tools = new(StringComparer.Ordinal);
     public IReadOnlyCollection<McpTool> Tools => _tools.Values;
     /// Called after every tool call, for logging.
     public Action<McpCallInfo>? Log { get; set; }
-    /// The ROM open in the desktop app, when the server runs inside it (null for okirom-mcp).
+    /// The ROM open in the desktop app, when the server runs inside it (null for romsim-mcp).
     public IMcpSession? Session { get; }
     /// Longest a tool may run before the caller is told to try again (it keeps running).
     public TimeSpan ToolTimeout { get; set; } = TimeSpan.FromMinutes(5);
@@ -69,8 +69,9 @@ public sealed class McpServer
     JsonObject? HandleOne(JsonObject msg)
     {
         var id = msg["id"]?.DeepClone();
-        var method = msg["method"]?.GetValue<string>();
-        if (method == null) return id == null ? null : Error(id, -32600, "missing method");
+        // (TryGetValue: a "method" that is a number or an object is an invalid request, not an exception out of the server)
+        string? method = msg["method"] is JsonValue mv && mv.TryGetValue<string>(out var ms) ? ms : null;
+        if (method == null) return id == null ? null : Error(id, -32600, msg["method"] == null ? "missing method" : "method must be a string");
         bool notification = !msg.ContainsKey("id");
         try
         {
@@ -102,7 +103,7 @@ public sealed class McpServer
 
     JsonObject Initialize(JsonObject? p)
     {
-        string requested = p?["protocolVersion"]?.GetValue<string>() ?? ProtocolVersion;
+        string requested = p?["protocolVersion"] is JsonValue pv && pv.TryGetValue<string>(out var ps) ? ps : ProtocolVersion;
         return new JsonObject
         {
             ["protocolVersion"] = requested,
@@ -128,7 +129,7 @@ public sealed class McpServer
 
     JsonObject CallTool(JsonObject? p)
     {
-        var name = p?["name"]?.GetValue<string>() ?? throw new RpcException(-32602, "missing tool name");
+        var name = p?["name"] is JsonValue nv && nv.TryGetValue<string>(out var ns) ? ns : throw new RpcException(-32602, "missing tool name");
         if (!_tools.TryGetValue(name, out var tool)) throw new RpcException(-32602, $"unknown tool '{name}' (call help for the list)");
         var args = p?["arguments"] as JsonObject ?? [];
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -223,12 +224,13 @@ public sealed class Workspace
                 $"'{path}' is outside the workspace ({string.Join(", ", Roots)}). " +
                 "The simulator may be on another machine, so a path you can see is not necessarily a path it can: " +
                 "send the file with file_upload (or rom_upload for a ROM to open), or call workspace_allow to ask the user to let this folder in.");
-        // refuse links that point out of the workspace
-        var info = new FileInfo(full);
-        if (info.Exists && info.LinkTarget != null)
+        // refuse links that point out of the workspace: the file itself, or any folder on the way to it (a junction or symlink inside the workspace to somewhere else would otherwise be a way out)
+        for (var at = full; at != null && !Roots.Any(r => at.Equals(r, Cmp)); at = Path.GetDirectoryName(at))
         {
-            var target = info.ResolveLinkTarget(true)?.FullName ?? "";
-            if (!Roots.Any(r => target.StartsWith(r + Path.DirectorySeparatorChar, Cmp))) throw new ToolException($"'{path}' links outside the workspace");
+            FileSystemInfo entry = Directory.Exists(at) ? new DirectoryInfo(at) : new FileInfo(at);
+            if (!entry.Exists || entry.LinkTarget == null) continue;
+            var target = entry.ResolveLinkTarget(true)?.FullName ?? "";
+            if (!Allows(target)) throw new ToolException($"'{path}' links outside the workspace");
         }
         return mustExist && !File.Exists(full) && !Directory.Exists(full) ? throw new ToolException($"'{path}' does not exist") : full;
     }

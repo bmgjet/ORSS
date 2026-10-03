@@ -94,7 +94,8 @@ public static partial class HtsLayout
         P("tipinout.initial", 0x646C, "Tipintempoffsetinitial", 6, "raw", "honda_temp_c", "Tip-in fuel against coolant temperature, first minutes after start.", step: 3, yType: "u16");
 
         // --- injectors
-        F("injector.deadtime", 0x610D, "Deadtime", "type=u16 formula=x/8 inverse=x*8");
+        F("injector.deadtime", 0x610D, "Deadtime", "type=u16 formula=x*3.2/1000 inverse=x*1000/3.2 unit=ms decimals=2",
+            "Injector offset added to every pulse, in the injector timer's 3.2 us counts (the ROM adds it to the timer value; checked in the simulator). Not ms x 8, which adds only 1/39 of what it shows.");
         F("injector.overall", 0x610B, "OverallFT", TrimW, "Overall fuel trim.");
         F("injector.crank", 0x6103, "CrankT", TrimW);
         F("injector.postfuel", 0x6105, "PostfuelT", TrimW);
@@ -294,6 +295,7 @@ public static partial class HtsLayout
         F("vtec.minect", 0x6120, "VtecECTMin", Ect);
         F("vtec.minspeed", 0x6122, "VtecVSSMin", Vss);
         F("vtec.minload", 0x6121, "VtecLoadMin", Mbar);
+        F("vtec.disengage", 0x611D, "VtecDelay", "type=u8 formula=\"x * 62.5\" inverse=\"x / 62.5\" unit=rpm decimals=0", "Once in, VTEC stays in until the rpm is this far under the engage point.");
         F("vtec.tps.high", 0x6657, "VtecSettings", Tps, "VTEC high-load throttle.");
         F("vtec.rpm.high", 0x6658, "VtecSettings_rpmhigh", RpmL);
         F("vtec.tps.low", 0x6659, "VtecSettings_tpslow", Tps);
@@ -487,8 +489,7 @@ public static partial class HtsLayout
         if (v is 115 or 120) return (Family.Hts115, $"HTS {v / 100}.{v % 100:00}");
         if (v == 116) return (Family.P13, "HTS P13 base ROM (1.16)");
         if (v is >= 100 and < 115) return (Family.Older, $"HTS {v / 100}.{v % 100:00}");
-        // a base ROM of the same family without the suite's name: its version as three digits at 7FEFh and a text of its
-        // maker's in the last bytes (HTS-master takes the last byte 'e', or "ITE" / "ple" before it)
+        // a base ROM of the same family without the suite's name: its version as three digits at 7FEFh and a text of its maker's in the last bytes (HTS-master takes the last byte 'e', or "ITE" / "ple" before it)
         bool digits = rom[0x7FEF] <= 9 && rom[0x7FF0] <= 9 && rom[0x7FF1] <= 9;
         bool tail = rom[0x7FFF] == (byte)'e' || (rom[0x7FFD] == (byte)'I' && rom[0x7FFE] == (byte)'T' && rom[0x7FFF] == (byte)'E');
         int bv = (rom[0x7FEF] * 100) + (rom[0x7FF0] * 10) + rom[0x7FF1];
@@ -665,7 +666,9 @@ public static partial class HtsLayout
         return null;
     }
 
-    /// byteToMillibar depends on the ROM's MAP sensor preset (60FCh): 0 = stock scale offset by the fuel-cut byte, 1 = stock, 2 = the custom high / low calibration words (stored + 32768). The formula is built from this ROM's own bytes, as HTS does every time it shows a pressure.
+    /// byteToMillibar depends on the ROM's MAP sensor preset (60FCh): 0 = stock scale offset by the fuel-cut byte, 1 = stock, 2 = the custom high / low calibration words (stored + 32768). The formula is built from this ROM's own bytes, as HTS does every time it shows a pressure. The MAP pressure formulas built again from the ROM's preset bytes (after they change: a MAP sensor swap).
+    public static void RefreshMapFormulas(DefinitionSet defs, byte[] rom) => MapFormulas(defs, rom);
+
     static void MapFormulas(DefinitionSet defs, byte[] rom)
     {
         static string N(double v) => v.ToString("0.#####", CultureInfo.InvariantCulture);

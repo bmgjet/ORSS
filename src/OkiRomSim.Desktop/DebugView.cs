@@ -13,9 +13,7 @@ namespace OkiRomSim.Desktop;
 /// Wraps a panel so Ctrl + mouse wheel over it zooms it (and only it). The zoom is reported so it can be remembered; `apply` replaces the default scale transform (the source editor changes its font size instead, which stays sharp and keeps its scrolling).
 public sealed class ZoomHost : Decorator
 {
-    // A LayoutTransformControl lays a scaled child out at the child's own width and centres it: a zoomed panel then
-    // left a strip down both sides (the calibration list pushed in from the edge). Here the child is always given the
-    // whole panel, measured and arranged at panel / zoom and drawn scaled from the top-left corner.
+    // A LayoutTransformControl lays a scaled child out at the child's own width and centres it: a zoomed panel then left a strip down both sides (the calibration list pushed in from the edge). Here the child is always given the whole panel, measured and arranged at panel / zoom and drawn scaled from the top-left corner.
     protected override Size MeasureOverride(Size available)
     {
         if (Child == null) return default;
@@ -210,7 +208,7 @@ public sealed class DebugView : UserControl
                 Title = "Save the debug log", SuggestedFileName = $"okiromsim_{DateTime.Now:yyyyMMdd_HHmm}.log", DefaultExtension = "log",
             });
             var path = file?.TryGetLocalPath();
-            if (path != null) File.WriteAllText(path, Dump());
+            if (path != null) SafeFile.WriteAllText(path, Dump());
         }
         catch (Exception ex) { AppLog.Error("debug", "save failed", ex); }
     }

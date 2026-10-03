@@ -53,6 +53,11 @@ launch_tick:    PUSHS   LRB
                 PUSHS   A
                 L       A, X2
                 PUSHS   A
+                CLRB    A
+                LCB     A, launch_block        ; off: straight to letting go (the switch is not read)
+                RC
+                CMPB    A, #000h
+                JEQ     launch_decide
                 MOV     X1, #launch_input
                 CAL     mod_switch             ; armed?
                 RC

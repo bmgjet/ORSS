@@ -29,41 +29,41 @@ vcal_6_vec:               DW  vcal_6
 vcal_7_vec:               DW  vcal_7
 code_start:     DB  000h,07Fh,031h,000h
 int_NMI:        CLR     PSW
-                MOV     LRB, #00041h  ; [H] local register base = #00041h (base address 0x0208)
-                RB      off(00230h).7  ; [H] test-and-reset edge-detect bit 00230h.7
-                JEQ     nmi_snapshot_dp_skip  ; [H] skip snapshot if bit was already 0
-                L       A, DP  ; [H] bit just transitioned 1->0: snapshot DP
-                ST      A, 00084h[X1]  ; [H] ...into 00084h[X1]
+                MOV     LRB, #00041h  ; local register base = #00041h (base address 0x0208)
+                RB      off(00230h).7  ; test-and-reset edge-detect bit 00230h.7
+                JEQ     nmi_snapshot_dp_skip  ; skip snapshot if bit was already 0
+                L       A, DP  ; bit just transitioned 1->0: snapshot DP
+                ST      A, 00084h[X1]  ; ...into 00084h[X1]
 nmi_snapshot_dp_skip:     MOV     DP, #00009h
-nmi_poll_p4_1:     MB      C, P4.1  ; [H] sample pin P4.1 into carry
-                JGE     nmi_enter_lowpower_seq  ; [H] JGE branches on Carry=0 (arch.ml) -> as soon as P4.1 reads 0, jump ahead immediately
-                JRNZ    DP, nmi_poll_p4_1  ; [H] else (P4.1 still 1) keep polling until DP counts out, then fall through anyway
+nmi_poll_p4_1:     MB      C, P4.1  ; sample pin P4.1 into carry
+                JGE     nmi_enter_lowpower_seq  ; JGE branches on Carry=0 (arch.ml) -> as soon as P4.1 reads 0, jump ahead immediately
+                JRNZ    DP, nmi_poll_p4_1  ; else (P4.1 still 1) keep polling until DP counts out, then fall through anyway
                 J       nmi_poll_p4_1_load_p2
-nmi_poll_p4_1_store_adsel:     STB     A, ADSEL  ; [H] clear A/D channel select
-                MOV     IE, #00040h  ; [H] mask interrupt-enable to one source
+nmi_poll_p4_1_store_adsel:     STB     A, ADSEL  ; clear A/D channel select
+                MOV     IE, #00040h  ; mask interrupt-enable to one source
                 MOVB    TCON1, #0e0h
-                CLR     IRQ  ; [H] clear pending IRQ flags
+                CLR     IRQ  ; clear pending IRQ flags
                 SB      P4SF.1
-                MOV     TM1, #0ffffh  ; [H] reload timer1 to max (effectively stop it counting down soon)
+                MOV     TM1, #0ffffh  ; reload timer1 to max (effectively stop it counting down soon)
                 SB      TCON1.4
-                SB      SBYCON.2  ; [H] standby-control bit set (see routine note above)
+                SB      SBYCON.2  ; standby-control bit set (see routine note above)
                 LB      A, #005h
-; [H] STPACP = "Stop Code Acceptor" per the MSM66207 datasheet -- not a clock prescaler. Writing
-; [H] N then N<<1 (5, then 10) is the write-unlock sequence this register requires before STOP/HALT
-; [H] mode will actually be entered; it's a safety interlock against accidental entry, not a divider.
-                STB     A, STPACP  ; [H] stop-code-acceptor unlock write, step 1: N=5
-                SLLB    A  ; [H] ...step 2: N<<1=10
-                STB     A, STPACP  ; [H] unlock write, step 2
-                SB      SBYCON.0  ; [H] standby-control bit 0 set (likely the actual STOP-mode trigger)
+; STPACP = "Stop Code Acceptor" per the MSM66207 datasheet -- not a clock prescaler. Writing
+; N then N<<1 (5, then 10) is the write-unlock sequence this register requires before STOP/HALT
+; mode will actually be entered; it's a safety interlock against accidental entry, not a divider.
+                STB     A, STPACP  ; stop-code-acceptor unlock write, step 1: N=5
+                SLLB    A  ; ...step 2: N<<1=10
+                STB     A, STPACP  ; unlock write, step 2
+                SB      SBYCON.0  ; standby-control bit 0 set (likely the actual STOP-mode trigger)
                 RB      09fh.1
 nmi_enter_lowpower_seq:     J       nmi_enter_lowpower_seq_load_ram0eb
                 DW  00000h
 int_timer_0:    MOV     LRB, #00037h
-; [H] --- Timer0 ISR: bit-shifts a value (r6, 16 bits across er0/er1/er2 chain) out one bit per
-; [H] timer period, reloading TMR0 for the next bit's timing, tracking bit count in r7 (0-15,
-; [H] matching a 16-bit shift register), accumulating into off(00197h) and driving P2 with the
-; [H] result. Reads as a software bit-banged serial or pulse-train output; no calibration anchors
-; [H] to identify the specific protocol/signal.
+; --- Timer0 ISR: bit-shifts a value (r6, 16 bits across er0/er1/er2 chain) out one bit per
+; timer period, reloading TMR0 for the next bit's timing, tracking bit count in r7 (0-15,
+; matching a 16-bit shift register), accumulating into off(00197h) and driving P2 with the
+; result. Reads as a software bit-banged serial or pulse-train output; no calibration anchors
+; to identify the specific protocol/signal.
                 ANDB    TCON0, #0fbh
                 CMPB    r7, #00fh
                 JEQ     timer0_return
@@ -3580,12 +3580,12 @@ injtimer_bank_c_store:     MOV     X1, A
                 JBR     off(00123h).2, injtimer_critsection_start
                 CLR     A
 injtimer_critsection_start:     AND     IE, #002a0h
-; [H] --- Per-cylinder injector timer write (critical section, interrupts masked via IE/PSWH):
-; [H] cylinder_ign_correct_loop applies CylinderIGNCorrect (real per-cylinder ignition-correction
-; [H] calibration table) and a mul5/div4 scale to each cylinder's computed value, writing results
-; [H] to the injector timer-compare registers up through 0x3C0 -- this is the routine referenced
-; [H] back in ign_angle_to_timer_convert's comment as "programming the two ignition coil-channel
-; [H] hardware timers" (the same critical-section pattern, here for injector-side output).
+; --- Per-cylinder injector timer write (critical section, interrupts masked via IE/PSWH):
+; cylinder_ign_correct_loop applies CylinderIGNCorrect (real per-cylinder ignition-correction
+; calibration table) and a mul5/div4 scale to each cylinder's computed value, writing results
+; to the injector timer-compare registers up through 0x3C0 -- this is the routine referenced
+; back in ign_angle_to_timer_convert's comment as "programming the two ignition coil-channel
+; hardware timers" (the same critical-section pattern, here for injector-side output).
                 RB      PSWH.0
                 MOV     off(001c4h), X1
                 ST      A, off(001c0h)
@@ -4084,13 +4084,13 @@ clear_0x324_high_nibble:     MOV     DP, #00320h
                 MOVB    off(002bch), #014h
                 RC
 fuelpump_prime_check:     MB      off(00230h).5, C
-; [H] --- Runtime state init: A/D channel setup, initial sensor snapshot, working-RAM seeding,
-; [H] and diagnostic-serial baud/config setup, run once during boot after the self-test/RAM-clear
-; [H] passes above. Ends by jumping to stack_sanity_check (0x3359) before falling into the main loop.
-; [H] Individual working-RAM addresses here (0xD8-0xE1, 0xDC-0xDF, etc.) are not yet traced to
-; [H] specific named parameters -- confidently identified: ADCR2H/ADCR4/ADCR6 (A/D conversion
-; [H] results), tbl_boot_copy_block (a calibration table copied verbatim into 0x1D1-0x1DD), and
-; [H] STTM/STTMR/STTMC/STCON/SRCON (serial timer + control regs -- diagnostic link baud setup).
+; --- Runtime state init: A/D channel setup, initial sensor snapshot, working-RAM seeding,
+; and diagnostic-serial baud/config setup, run once during boot after the self-test/RAM-clear
+; passes above. Ends by jumping to stack_sanity_check (0x3359) before falling into the main loop.
+; Individual working-RAM addresses here (0xD8-0xE1, 0xDC-0xDF, etc.) are not yet traced to
+; specific named parameters -- confidently identified: ADCR2H/ADCR4/ADCR6 (A/D conversion
+; results), tbl_boot_copy_block (a calibration table copied verbatim into 0x1D1-0x1DD), and
+; STTM/STTMR/STTMC/STCON/SRCON (serial timer + control regs -- diagnostic link baud setup).
                 MOV     USP, #00180h
                 CLR     A
                 ST      A, IE
@@ -6170,7 +6170,7 @@ percyl_counter_dp_select:     MOV     DP, #0031dh
                 JBS     off(002a9h).3, percyl_counter_increment
                 DEC     DP
 percyl_counter_increment:     INCB    off(002a9h)
-                TRB     [DP]  ; [H] ;mnemonic was "TBR" (letter transposition); confirmed as TRB against HondaTuningSuiteRom120.asm, same opcode C213
+                TRB     [DP]  ; ;mnemonic was "TBR" (letter transposition); confirmed as TRB against HondaTuningSuiteRom120.asm, same opcode C213
                 JNE     percyl_wrap_check1
                 LB      A, off(002a9h)
                 ANDB    A, #007h
@@ -6373,12 +6373,12 @@ irqmode_done:     SB      PSWH.0
                 ST      A, IE
                 NOP
 stack_sanity_check:     CMP     SSP, #0047eh
-; [H] --- Post-init peripheral verification: re-reads SSP, LRB, every port direction/special-
-; [H] function register, all four timer control regs, PWM control regs, A/D select/scan, and the
-; [H] diagnostic-serial baud/control regs, comparing each against the exact values int_break's
-; [H] init sequence (0x235F periph_init_start onward) programmed them to. Any mismatch -> stamps
-; [H] trapReasonCode=0x50 (selftest_fail_050) and BRKs, forcing a full re-init retry. This is a
-; [H] "did my own initialization actually stick" check, not a fresh self-test of new hardware.
+; --- Post-init peripheral verification: re-reads SSP, LRB, every port direction/special-
+; function register, all four timer control regs, PWM control regs, A/D select/scan, and the
+; diagnostic-serial baud/control regs, comparing each against the exact values int_break's
+; init sequence (0x235F periph_init_start onward) programmed them to. Any mismatch -> stamps
+; trapReasonCode=0x50 (selftest_fail_050) and BRKs, forcing a full re-init retry. This is a
+; "did my own initialization actually stick" check, not a fresh self-test of new hardware.
                 JNE     selftest_fail_050
                 MOV     DP, #00400h
                 L       A, [DP]
@@ -6470,12 +6470,12 @@ periph_init_verify_pwm_adc_and_ie:     AND     IE, #002a0h
                 L       A, 0f2h
                 ST      A, IE
                 L       A, X1
-; [H] --- Oscillator/timer cross-check: snapshots TM0/TM1/TM2 into X1/X2/DP, re-enables
-; [H] interrupts briefly (IE/PSWH toggling), re-snapshots into er0/er1/er2, then verifies the
-; [H] deltas fall within expected ranges (0x22, 0x80, 0x22, a ratio check against er1>>2) --
-; [H] confirms the timers are actually counting at the rate the code expects (i.e. the clock
-; [H] source/oscillator is running correctly) before trusting any timing-dependent logic
-; [H] (ignition/injection scheduling) downstream. Out-of-range -> selftest_fail_04b.
+; --- Oscillator/timer cross-check: snapshots TM0/TM1/TM2 into X1/X2/DP, re-enables
+; interrupts briefly (IE/PSWH toggling), re-snapshots into er0/er1/er2, then verifies the
+; deltas fall within expected ranges (0x22, 0x80, 0x22, a ratio check against er1>>2) --
+; confirms the timers are actually counting at the rate the code expects (i.e. the clock
+; source/oscillator is running correctly) before trusting any timing-dependent logic
+; (ignition/injection scheduling) downstream. Out-of-range -> selftest_fail_04b.
                 SUB     A, er0
                 ST      A, er0
                 JEQ     selftest_fail_04b
@@ -8933,10 +8933,10 @@ crank_a8_p1_output:     L       A, off(001ceh)
                 STB     A, [DP]
                 RT
 ign_angle_to_timer_convert:     CLRB    A
-; [H] --- Converts a computed ignition angle/trim (r4) into a hardware timer-compare value
-; [H] (scaling via MULB by 3 and combining with er1), used when programming the two ignition
-; [H] coil-channel hardware timers (igntiming_output_coil1 and the DP=0x35D channel that follows).
-; [H] Clamps the result if it would exceed 0xFE00 range (CMPB ACC,#0feh check).
+; --- Converts a computed ignition angle/trim (r4) into a hardware timer-compare value
+; (scaling via MULB by 3 and combining with er1), used when programming the two ignition
+; coil-channel hardware timers (igntiming_output_coil1 and the DP=0x35D channel that follows).
+; Clamps the result if it would exceed 0xFE00 range (CMPB ACC,#0feh check).
                 STB     A, r3
                 SUBB    A, r4
                 MOVB    r0, #003h
@@ -8965,11 +8965,11 @@ knockretard_r1_store:     CMPCB   A, 00002h[X1]
 knockretard_sub_result:     MOVB    r0, A
                 SJ      table_interp_delta_calc
 vcal_0:         CMPCB   A, 00002h[X1]
-; [H] --- Generic 1D linear-interpolation table lookup, used 50 times throughout the file (flex
-; [H] fuel, boost/wastegate control, GIO trims, ignition/O2 corrections, etc). Given a table
-; [H] pointer in X1 (entries are (X,Y) byte pairs) and an input value in A, walks the table to
-; [H] find the bracketing X segment, then linearly interpolates the corresponding Y. This is the
-; [H] same routine flex-fuel notes describe as "the shared interpolation helper".
+; --- Generic 1D linear-interpolation table lookup, used 50 times throughout the file (flex
+; fuel, boost/wastegate control, GIO trims, ignition/O2 corrections, etc). Given a table
+; pointer in X1 (entries are (X,Y) byte pairs) and an input value in A, walks the table to
+; find the bracketing X segment, then linearly interpolates the corresponding Y. This is the
+; same routine flex-fuel notes describe as "the shared interpolation helper".
                 JGE     table_interp_bracket_found
                 INC     X1
                 INC     X1
@@ -9228,9 +9228,9 @@ scaler_table_search_back:     DECB    r6
 scaler_div_final:     DIV
                 RT
 table2d_lookup_interp:     CLR     A
-; [H] --- Generic 2D table lookup/interpolation helper (row x column, e.g. RPM x Load). Given a
-; [H] table base in X1, row width in r0, row index in r1, column offset in r2, column count in r3.
-; [H] Companion to the 1D table_interp_lookup used elsewhere.
+; --- Generic 2D table lookup/interpolation helper (row x column, e.g. RPM x Load). Given a
+; table base in X1, row width in r0, row index in r1, column offset in r2, column count in r3.
+; Companion to the 1D table_interp_lookup used elsewhere.
                 LB      A, r2
                 ADD     X1, A
                 MOV     DP, X1
@@ -9705,11 +9705,11 @@ cfgvariant_eval_condition:     CLRB    r0
                 INCB    r0
 cfgvariant_result_common:     SJ      cfgvariant_eval_result
 cfgvariant_check_v3:     CMPB    r6, #003h
-; [H] --- cfgvariant_eval_condition's dispatch body: for each specific variant index (3, 6, 7, 10,
-; [H] 11, 13, 20, 26), checks the sign of that variant's associated sensor/config byte (0xBB,
-; [H] 0x3D4, 0x3A4, 0x3CC, 0x3D2, 0x3CD, 0x3D2 again, 0xD7) and increments r0 if negative --
-; [H] reads as a per-variant "is this variant's associated input plausible/connected" check,
-; [H] feeding cfgvariant_eval_result.
+; --- cfgvariant_eval_condition's dispatch body: for each specific variant index (3, 6, 7, 10,
+; 11, 13, 20, 26), checks the sign of that variant's associated sensor/config byte (0xBB,
+; 0x3D4, 0x3A4, 0x3CC, 0x3D2, 0x3CD, 0x3D2 again, 0xD7) and increments r0 if negative --
+; reads as a per-variant "is this variant's associated input plausible/connected" check,
+; feeding cfgvariant_eval_result.
                 JNE     cfgvariant_check_v6
                 LB      A, 0a3h
                 SLLB    A

@@ -1,5 +1,4 @@
-// Copyright (c) bmgjet. All rights reserved.
-// Turns a raw 32 KB ROM image into assembler source that rebuilds to the same bytes. Code is found by following control flow from the reset, interrupt and VCAL vectors, carrying the DD (word/byte) mode along each path; unreachable bytes stay as DB data and targets get labels. Any instruction whose text won't rebuild to its original bytes is demoted to DB and re-checked.
+// Copyright (c) bmgjet. All rights reserved. Turns a raw 32 KB ROM image into assembler source that rebuilds to the same bytes. Code is found by following control flow from the reset, interrupt and VCAL vectors, carrying the DD (word/byte) mode along each path; unreachable bytes stay as DB data and targets get labels. Any instruction whose text won't rebuild to its original bytes is demoted to DB and re-checked.
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -177,7 +176,7 @@ public static class BinDisassembler
 
         Line($"; {title}");
         Line(";");
-        Line("; Disassembled by OkiRomSim from a raw ROM image. Code was found by following");
+        Line("; Disassembled by Rom Sim Studio from a raw ROM image. Code was found by following");
         Line("; control flow from the reset, interrupt and VCAL vectors; everything that flow");
         Line("; never reached (tables, calibration data, unused space) is kept as DB bytes.");
         Line("; Assembling this file reproduces the original image byte for byte.");

@@ -59,7 +59,7 @@ public sealed class OkiTools
         if (requestedPath == null && text.Length <= InlineLimit) return text;
         var path = _ws.Resolve(requestedPath ?? Path.Combine(".okirom", defaultName), mustExist: false, forWrite: true);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, text);
+        OkiRomSim.Core.SafeFile.WriteAllText(path, text);
         int lines = text.Count(c => c == '\n') + 1;
         return $"{what} written to {_ws.Show(path)} ({lines} lines, {text.Length:N0} chars). Page through it with file_read.";
     }
@@ -264,7 +264,7 @@ public sealed class OkiTools
             return sb1.ToString();
         }
         var sb = new StringBuilder();
-        sb.AppendLine("okirom-mcp - OKI MSM66207 (66K) ROM development tools");
+        sb.AppendLine("romsim-mcp - OKI MSM66207 (66K) ROM development tools");
         sb.AppendLine($"workspace: {string.Join(", ", _ws.Roots)}{(_ws.ReadOnly ? " (read-only)" : "")} - relative paths start at the first root");
         sb.AppendLine();
         foreach (var t in tools)
@@ -389,7 +389,7 @@ Paths are confined to the workspace. Large outputs go to .okirom/ files - read t
         if (File.Exists(path) && !B(a, "overwrite", false)) throw new ToolException("the file exists; pass overwrite=true to replace it (or use file_edit)");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var content = S(a, "content") ?? "";
-        File.WriteAllText(path, content);
+        OkiRomSim.Core.SafeFile.WriteAllText(path, content);
         return $"wrote {_ws.Show(path)} ({content.Count(c => c == '\n') + 1} lines)";
     }
 
@@ -408,7 +408,7 @@ Paths are confined to the workspace. Large outputs go to .okirom/ files - read t
         if (count > 1 && !B(a, "all", false)) throw new ToolException($"old_text occurs {count} times; add surrounding lines to make it unique, or pass all=true");
         int line = text[..text.IndexOf(old, StringComparison.Ordinal)].Count(c => c == '\n') + 1;
         text = B(a, "all", false) ? text.Replace(old, neu) : ReplaceFirst(text, old, neu);
-        File.WriteAllText(path, text);
+        OkiRomSim.Core.SafeFile.WriteAllText(path, text);
         return $"edited {_ws.Show(path)}: {(count > 1 ? count + " replacements" : "1 replacement")} starting at line {line}";
     }
 
@@ -430,7 +430,7 @@ Paths are confined to the workspace. Large outputs go to .okirom/ files - read t
         var add = text.Length == 0 ? [] : text.Replace("\r\n", "\n").TrimEnd('\n').Split('\n').ToList();
         lines.RemoveRange(s - 1, e - s + 1);
         lines.InsertRange(s - 1, add);
-        File.WriteAllText(path, string.Join(nl, lines));
+        OkiRomSim.Core.SafeFile.WriteAllText(path, string.Join(nl, lines));
         return $"{_ws.Show(path)}: replaced {e - s + 1} line(s) at {s} with {add.Count}; the file now has {lines.Count} lines";
     }
 
@@ -455,11 +455,11 @@ Paths are confined to the workspace. Large outputs go to .okirom/ files - read t
             if (B(a, "write", true))
             {
                 var outPath = _ws.Resolve(S(a, "output") ?? Path.ChangeExtension(src, ".bin"), mustExist: false, forWrite: true);
-                File.WriteAllBytes(outPath, r.Image);
+                OkiRomSim.Core.SafeFile.WriteAllBytes(outPath, r.Image);
                 sb.AppendLine($"wrote {_ws.Show(outPath)}");
-                if (B(a, "sym", true)) File.WriteAllText(Path.ChangeExtension(outPath, ".sym"), OkiAssembler.WriteSymbolFile(r));
-                if (B(a, "listing", false)) { File.WriteAllText(Path.ChangeExtension(outPath, ".lst"), OkiAssembler.WriteListing(r)); sb.AppendLine($"wrote {_ws.Show(Path.ChangeExtension(outPath, ".lst"))}"); }
-                if (B(a, "map", false)) { File.WriteAllText(Path.ChangeExtension(outPath, ".map"), OkiAssembler.WriteMap(r)); sb.AppendLine($"wrote {_ws.Show(Path.ChangeExtension(outPath, ".map"))}"); }
+                if (B(a, "sym", true)) OkiRomSim.Core.SafeFile.WriteAllText(Path.ChangeExtension(outPath, ".sym"), OkiAssembler.WriteSymbolFile(r));
+                if (B(a, "listing", false)) { OkiRomSim.Core.SafeFile.WriteAllText(Path.ChangeExtension(outPath, ".lst"), OkiAssembler.WriteListing(r)); sb.AppendLine($"wrote {_ws.Show(Path.ChangeExtension(outPath, ".lst"))}"); }
+                if (B(a, "map", false)) { OkiRomSim.Core.SafeFile.WriteAllText(Path.ChangeExtension(outPath, ".map"), OkiAssembler.WriteMap(r)); sb.AppendLine($"wrote {_ws.Show(Path.ChangeExtension(outPath, ".map"))}"); }
             }
         }
         return sb.ToString();
@@ -521,7 +521,7 @@ Paths are confined to the workspace. Large outputs go to .okirom/ files - read t
         var text = dis.Text;
         if ((S(a, "bit_test_mnemonic") ?? "TBR").Equals("TRB", StringComparison.OrdinalIgnoreCase))
             text = Regex.Replace(text, @"(?m)^(\s*(?:[A-Za-z_]\w*:)?\s*)TBR\b", "${1}TRB");
-        File.WriteAllText(outPath, text);
+        OkiRomSim.Core.SafeFile.WriteAllText(outPath, text);
         return $"wrote {_ws.Show(outPath)}: {dis.CodeInstructions:N0} instructions found by following the code, {dis.DataBytes:N0} bytes kept as data, " +
                (dis.RoundTrips ? "reassembles byte-identical." : "NOTE: " + dis.Note) +
                $"\n{text.Count(c => c == '\n')} lines. Next: symbols / file_search to find routines, explore to understand one.";
@@ -570,7 +570,7 @@ Paths are confined to the workspace. Large outputs go to .okirom/ files - read t
         }
         var filter = S(a, "filter") ?? "";
         Regex? rx = null;
-        try { if (filter.Length > 0) rx = new Regex(filter, RegexOptions.IgnoreCase); } catch { }
+        try { if (filter.Length > 0) rx = new Regex(filter, RegexOptions.IgnoreCase, TimeSpan.FromSeconds(2)); } catch { }   // (a timeout: a pattern that backtracks for ever must not pin the tool)
         int max = Math.Clamp(I(a, "max", 100), 1, 5000);
         var syms = (p.Asm?.Symbols.Values ?? Enumerable.Empty<SymbolInfo>())
             .Where(s => s.Kind is SymbolKind.Label or SymbolKind.Equate)
@@ -644,9 +644,11 @@ Paths are confined to the workspace. Large outputs go to .okirom/ files - read t
         var sim = new Simulator { FastForwardDelayLoops = true };
         sim.LoadRom(p.Image);
         var e = sim.Engine;
-        e.Rpm = D(a, "rpm", 800); e.MapKpa = D(a, "map_kpa", 33); e.TpsPct = D(a, "tps_pct", 0);
-        e.EctCelsius = D(a, "ect_c", 85); e.IatCelsius = D(a, "iat_c", 25); e.O2Volts = D(a, "o2_v", 0.45);
-        e.VbattVolts = D(a, "batt_v", 14.2); e.SpeedKmh = D(a, "speed_kmh", 0);
+        // each input held to what its sensor can report (a number that is not one takes the default)
+        double In(string key, double def, double lo, double hi) => D(a, key, def) is var v && double.IsFinite(v) ? Math.Clamp(v, lo, hi) : def;
+        e.Rpm = In("rpm", 800, 0, 12000); e.MapKpa = In("map_kpa", 33, 0, 400); e.TpsPct = In("tps_pct", 0, 0, 100);
+        e.EctCelsius = In("ect_c", 85, -40, 150); e.IatCelsius = In("iat_c", 25, -40, 150); e.O2Volts = In("o2_v", 0.45, 0, 5);
+        e.VbattVolts = In("batt_v", 14.2, 0, 20); e.SpeedKmh = In("speed_kmh", 0, 0, 300);
         sim.SyncSensors();
         int? until = S(a, "until") is { Length: > 0 } u ? p.Resolve(u) : null;
         int traceN = Math.Clamp(I(a, "trace", 0), 0, 100_000);

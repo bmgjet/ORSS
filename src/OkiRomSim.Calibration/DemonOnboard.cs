@@ -59,8 +59,7 @@ public sealed class DemonOnboard(IByteLink link)
         var r = Exchange(WithSum((byte)'D', (byte)'O', (byte)'L', (byte)'I'), 17, "onboard state");
         if (r.Length < 17) { note = r.Length == 0 ? "no answer from the Demon (is it a Demon, on the emulator port?)" : $"a short answer ({r.Length} of 17 bytes)"; return null; }
         if ((byte)r[..16].Sum(x => x) != r[16]) { note = "the state's checksum is wrong"; return null; }
-        // 0 (unused), sessions, flash page mmsb, msb, buffer page, buffer msb, lsb, loop count, log switch, loop switch,
-        // session status, session full, compression, packet skips, flash max mmsb, buffer max msb, checksum
+        // 0 (unused), sessions, flash page mmsb, msb, buffer page, buffer msb, lsb, loop count, log switch, loop switch, session status, session full, compression, packet skips, flash max mmsb, buffer max msb, checksum
         int pageSize = r[15] == 0 ? 256 : 512;
         int pages = (r[14] + 1) * 256;
         note = "ok";

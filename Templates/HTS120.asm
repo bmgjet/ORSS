@@ -13502,7 +13502,7 @@ MultO2:                 DW  08000h
 TipinT:                 DW  07999h
 ;@ OverallFT type=u16 formula=trim_word_pct category=Detected slot=injector.overall desc="Overall fuel trim."
 OverallFT:                 DW  08000h
-;@ Deadtime type=u16 formula=x/8 inverse=x*8 category=Fuel slot=injector.deadtime
+;@ Deadtime type=u16 formula=x*3.2/1000 inverse=x*1000/3.2 unit=ms decimals=2 category=Fuel slot=injector.deadtime desc="Injector offset: added to every pulse, in the injector timer's 3.2 us counts (checked in the simulator). The other tuning software writes ms x 8 here, which adds only 1/39 of what it shows."
 Deadtime:                 DW  00000h
 ;@ DisableVE type=u8 flag=1 on=255 off=0 category=Switches slot=closeloop.ve;romoptions.vecorr desc="VE correction off."
 DisableVE:       DB  0FFh

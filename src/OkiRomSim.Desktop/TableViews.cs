@@ -52,15 +52,23 @@ public sealed class TableModel
         FormulaDef f;
         try { f = defs.Formula(item.Formula); } catch { f = Builtin.Raw; }
         int rows = item.IsTable ? item.Rows : 1, cols = item.IsTable ? item.Cols : 1;
+        string ru = AxisUnit(item.RowAxis, "row"), cu = AxisUnit(item.ColAxis, "col");
         return new TableModel
         {
             Item = item, Rows = rows, Cols = cols,
-            Values = [.. cells.Select(c => c.Value)], Raw = [.. cells.Select(c => c.Raw)],
-            RowAxis = item.RowAxis == null ? [.. Enumerable.Range(0, rows).Select(i => (double)i)] : RomData.AxisValues(defs, rom, item.RowAxis, rows),
-            ColAxis = item.ColAxis == null ? [.. Enumerable.Range(0, cols).Select(i => (double)i)] : RomData.AxisValues(defs, rom, item.ColAxis, cols),
-            RowUnit = AxisUnit(item.RowAxis, "row"), ColUnit = AxisUnit(item.ColAxis, "col"),
-            Unit = f.Unit, Decimals = Math.Min(f.Decimals, 2),
+            Values = Shown([.. cells.Select(c => c.Value)], f.Unit), Raw = [.. cells.Select(c => c.Raw)],
+            RowAxis = Shown(item.RowAxis == null ? [.. Enumerable.Range(0, rows).Select(i => (double)i)] : RomData.AxisValues(defs, rom, item.RowAxis, rows), ru),
+            ColAxis = Shown(item.ColAxis == null ? [.. Enumerable.Range(0, cols).Select(i => (double)i)] : RomData.AxisValues(defs, rom, item.ColAxis, cols), cu),
+            RowUnit = Units.Label(Units.Shown(ru)), ColUnit = Units.Label(Units.Shown(cu)),
+            Unit = Units.Label(Units.Shown(f.Unit)), Decimals = Math.Min(f.Decimals, 2),
         };
+    }
+
+    /// Values kept in `unit`, in the unit picked for it in Settings > Units (unchanged when that is the same).
+    public static double[] Shown(double[] values, string unit)
+    {
+        if (Units.Shown(unit) == unit) return values;
+        return [.. values.Select(v => Units.Show(v, unit))];
     }
 
     // min / max are needed for every cell's colour: work them out once per change of values
@@ -214,32 +222,34 @@ public sealed class TableGrid : Control
         uint k = c.ToUInt32();
         if (CellBrushes.TryGetValue(k, out var b)) return b;
         if (CellBrushes.Count > 2000) CellBrushes.Clear();
-        return CellBrushes[k] = new SolidColorBrush(c);
+        return CellBrushes[k] = AppTheme.Brush(c, tile: true);
     }
-    static LinearGradientBrush Vertical(params (Color C, double At)[] stops)
+    static LinearGradientBrush TileVertical(params (Color C, double At)[] stops) => AppTheme.Track(Plain(stops), tile: true);
+    static LinearGradientBrush Vertical(params (Color C, double At)[] stops) => AppTheme.Track(Plain(stops));
+    static LinearGradientBrush Plain((Color C, double At)[] stops)
     {
         var g = new LinearGradientBrush { StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative), EndPoint = new RelativePoint(0, 1, RelativeUnit.Relative) };
         foreach (var (c, at) in stops) g.GradientStops.Add(new GradientStop(c, at));
         return g;
     }
     // every cell a lit tile: bright along its top edge, the colour itself through the middle, a little shade at the foot
-    static readonly IBrush Gloss = Vertical((Color.FromArgb(95, 255, 255, 255), 0), (Color.FromArgb(28, 255, 255, 255), 0.42),
+    static readonly IBrush Gloss = TileVertical((Color.FromArgb(95, 255, 255, 255), 0), (Color.FromArgb(28, 255, 255, 255), 0.42),
                                             (Color.FromArgb(0, 0, 0, 0), 0.55), (Color.FromArgb(46, 0, 0, 0), 1));
     static readonly IBrush HeadBg = Vertical((Color.FromRgb(0x34, 0x38, 0x41), 0), (Color.FromRgb(0x23, 0x26, 0x2c), 1));
     static readonly IBrush HeadSel = Vertical((Color.FromRgb(0x3a, 0x6d, 0xa3), 0), (Color.FromRgb(0x25, 0x4a, 0x73), 1));
     static readonly IBrush HeadHover = Vertical((Color.FromRgb(0x45, 0x4b, 0x57), 0), (Color.FromRgb(0x2e, 0x32, 0x3a), 1));
-    static readonly IBrush Ink = new SolidColorBrush(Color.FromRgb(0x12, 0x14, 0x18));
-    static readonly IBrush InkLight = new SolidColorBrush(Color.FromRgb(0xf2, 0xf4, 0xf8));
-    static readonly IBrush OverlayInk = new SolidColorBrush(Color.FromRgb(0x1c, 0x2a, 0x8c));
-    static readonly IBrush OverlayPill = new SolidColorBrush(Color.FromArgb(120, 255, 255, 255));
-    static readonly IBrush SelWash = new SolidColorBrush(Color.FromArgb(46, 255, 255, 255));
-    static readonly Pen SelGlow = new(new SolidColorBrush(Color.FromArgb(90, 0, 0, 0)), 6);
-    static readonly Pen SelOuter = new(new SolidColorBrush(Color.FromRgb(0x0a, 0x0b, 0x0d)), 3);
-    static readonly Pen SelInner = new(Brushes.White, 1.5);
-    static readonly Pen HoverPen = new(Brushes.White, 1.5);
-    static readonly Pen HoverShade = new(new SolidColorBrush(Color.FromArgb(160, 0, 0, 0)), 3);
-    static readonly Pen HeadEdge = new(new SolidColorBrush(Color.FromRgb(0x14, 0x15, 0x18)), 1);
-    static readonly IBrush Changed = new SolidColorBrush(Color.FromArgb(200, 0x10, 0x10, 0x10));
+    static readonly IBrush Ink = AppTheme.Brush(Color.FromRgb(0x12, 0x14, 0x18), tile: true);
+    static readonly IBrush InkLight = AppTheme.Brush(Color.FromRgb(0xf2, 0xf4, 0xf8), tile: true);
+    static readonly IBrush OverlayInk = AppTheme.Brush(Color.FromRgb(0x1c, 0x2a, 0x8c), tile: true);
+    static readonly IBrush OverlayPill = AppTheme.Brush(Color.FromArgb(120, 255, 255, 255), tile: true);
+    static readonly IBrush SelWash = AppTheme.Brush(Color.FromArgb(46, 255, 255, 255), tile: true);
+    static readonly Pen SelGlow = new(AppTheme.Brush(Color.FromArgb(90, 0, 0, 0), tile: true), 6);
+    static readonly Pen SelOuter = new(AppTheme.Brush(Color.FromRgb(0x0a, 0x0b, 0x0d), tile: true), 3);
+    static readonly Pen SelInner = new(AppTheme.Brush(Colors.White, tile: true), 1.5);
+    static readonly Pen HoverPen = new(AppTheme.Brush(Colors.White, tile: true), 1.5);
+    static readonly Pen HoverShade = new(AppTheme.Brush(Color.FromArgb(160, 0, 0, 0), tile: true), 3);
+    static readonly Pen HeadEdge = new(AppTheme.Brush(Color.FromRgb(0x14, 0x15, 0x18)), 1);
+    static readonly IBrush Changed = AppTheme.Brush(Color.FromArgb(200, 0x10, 0x10, 0x10), tile: true);
 
     /// Fill the panel: the cells grow (or shrink) so the whole table is on screen and its numbers - the small ones in the corner of each cell too - are as big as the panel allows.
     public bool Stretch { get; set { field = value; InvalidateMeasure(); InvalidateVisual(); } }
@@ -369,8 +379,7 @@ public sealed class TableGrid : Control
             (CellW, CellH, HeadW, HeadH, _font) = Natural();
             return;
         }
-        // the row headings are a column and a quarter wide, the column headings a row high
-        // (all of it on screen, however small that makes it: hovering over a cell tells its value)
+        // the row headings are a column and a quarter wide, the column headings a row high (all of it on screen, however small that makes it: hovering over a cell tells its value)
         CellW = Math.Max(8, (size.Width - 1) / (m.Cols + 1.25));
         CellH = Math.Max(5, (size.Height - 1) / (m.Rows + 1));
         HeadW = Math.Max(20, CellW * 1.25);
@@ -418,10 +427,9 @@ public sealed class TableGrid : Control
                 if (Perf.Effects) ctx.FillRectangle(Gloss, rc, round);      // a gradient on every cell: the first thing a slow machine is spared
                 // a lit cell framed too, bright where the engine is and fading along the trail, so it shows on any colour
                 if (m.Heat.TryGetValue(i, out var lit))
-                    ctx.DrawRectangle(null, new Pen(new SolidColorBrush(Color.FromArgb((byte)(70 + (185 * Math.Min(1, lit / 0.75))), 255, 255, 255)), lit >= 0.75 ? 2.2 : 1.4),
+                    ctx.DrawRectangle(null, new Pen(AppTheme.Brush(Color.FromArgb((byte)(70 + (185 * Math.Min(1, lit / 0.75))), 255, 255, 255)), lit >= 0.75 ? 2.2 : 1.4),
                                       rc.Deflate(1), round, round);
-                // dark figures on every cell, the red ones too: a table reads as one piece (only a colour set in
-                // Settings dark enough to lose them gets light ones)
+                // dark figures on every cell, the red ones too: a table reads as one piece (only a colour set in Settings dark enough to lose them gets light ones)
                 var ink = (0.299 * color.R) + (0.587 * color.G) + (0.114 * color.B) > 60 ? Ink : InkLight;
                 if (m.Overlay is { } ov && i < ov.Length && !double.IsNaN(ov[i]))
                 {
@@ -474,8 +482,8 @@ public sealed class TableGrid : Control
             {
                 var (a, b) = (m.TrailPath[k - 1], m.TrailPath[k]);
                 byte alpha = (byte)(230 * (1 - b.Age));
-                ctx.DrawLine(new Pen(new SolidColorBrush(Color.FromArgb((byte)(alpha / 2), 0, 0, 0)), 5.5, lineCap: PenLineCap.Round), At(a), At(b));
-                ctx.DrawLine(new Pen(new SolidColorBrush(Color.FromArgb(alpha, TableModel.TraceColor.R, TableModel.TraceColor.G, TableModel.TraceColor.B)), 3, lineCap: PenLineCap.Round), At(a), At(b));
+                ctx.DrawLine(new Pen(AppTheme.Brush(Color.FromArgb((byte)(alpha / 2), 0, 0, 0)), 5.5, lineCap: PenLineCap.Round), At(a), At(b));
+                ctx.DrawLine(new Pen(AppTheme.Brush(Color.FromArgb(alpha, TableModel.TraceColor.R, TableModel.TraceColor.G, TableModel.TraceColor.B)), 3, lineCap: PenLineCap.Round), At(a), At(b));
             }
         }
         // where the program is reading, interpolated: a glowing ring
@@ -484,8 +492,8 @@ public sealed class TableGrid : Control
             var p = new Point(HeadW + ((tc.Col + 0.5) * CellW), HeadH + ((tc.Row + 0.5) * CellH));
             double rad = Math.Clamp(Math.Min(CellW, CellH) * 0.3, 5, 14);
             ctx.DrawEllipse(BrushOf(Color.FromArgb(70, TableModel.TraceColor.R, TableModel.TraceColor.G, TableModel.TraceColor.B)), null, p, rad * 1.9, rad * 1.9);
-            ctx.DrawEllipse(null, new Pen(Brushes.Black, 3), p, rad, rad);
-            ctx.DrawEllipse(null, new Pen(Brushes.White, 1.5), p, rad, rad);
+            ctx.DrawEllipse(null, new Pen(AppTheme.Black, 3), p, rad, rad);
+            ctx.DrawEllipse(null, new Pen(AppTheme.White, 1.5), p, rad, rad);
             ctx.DrawEllipse(Brushes.White, null, p, 1.8, 1.8);
         }
     }
@@ -817,6 +825,9 @@ public sealed class TableGrid : Control
         ToolTip.SetTip(_editor, "New value for the selected cells. Enter applies, Esc cancels. Prefix r for a raw value (r120), + or - for a change (+2, -0.5), * for a factor (*1.05); =-2 sets a negative value.");
     }
 
+    /// Each selected cell to a value of its own, as one edit (a typed "+2" or "*1.05"): the values, and what to call the change.
+    public event Action<IReadOnlyList<(int Index, double Value)>, string>? SetEach;
+
     void CommitEdit()
     {
         _editor.IsVisible = false;
@@ -829,13 +840,13 @@ public sealed class TableGrid : Control
         if (t.StartsWith('=')) t = t[1..].Trim();
         else if ((t[0] is '+' or '-') && double.TryParse(t, NumberStyles.Float, inv, out var delta))
         {
-            // "+2" / "-2" change every selected cell by that much ("=-2" sets -2)
-            foreach (var i in sel) SetCells?.Invoke(new[] { i }, Model.Values[i] + delta, false);
+            // "+2" / "-2" change every selected cell by that much ("=-2" sets -2): one edit for all of them (one undo step, one write), not one per cell
+            SetEach?.Invoke([.. sel.Select(i => (i, Model.Values[i] + delta))], $"{(delta >= 0 ? "+" : "")}{delta:0.###}");
             return;
         }
         if (t.StartsWith('*') && double.TryParse(t[1..], NumberStyles.Float, inv, out var factor))
         {
-            foreach (var i in sel) SetCells?.Invoke(new[] { i }, Model.Values[i] * factor, false);
+            SetEach?.Invoke([.. sel.Select(i => (i, Model.Values[i] * factor))], $"x {factor:0.###}");
             return;
         }
         if (double.TryParse(t, NumberStyles.Float, inv, out var v)) SetCells?.Invoke(sel, v, false);
@@ -949,7 +960,7 @@ public sealed class TableGraph : Control
         ctx.FillRectangle(new LinearGradientBrush
         {
             StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative), EndPoint = new RelativePoint(0, 1, RelativeUnit.Relative),
-            GradientStops = { new GradientStop(Color.FromRgb(0x2b, 0x2e, 0x35), 0), new GradientStop(Color.FromRgb(0x1a, 0x1b, 0x1f), 1) },
+            GradientStops = { new GradientStop(AppTheme.Map(Color.FromRgb(0x2b, 0x2e, 0x35)), 0), new GradientStop(AppTheme.Map(Color.FromRgb(0x1a, 0x1b, 0x1f)), 1) },
         }, panel, 4);
         var grid = new Pen(Dark.Grid, 1);
         var axisPen = new Pen(Dark.Axis, 1);
@@ -982,9 +993,9 @@ public sealed class TableGraph : Control
             traceLine = linePos;
             double w = Bounds.Width - Pad - Right;
             traceX = Pad + (Points <= 1 ? w / 2 : Math.Clamp(pointPos, 0, Points - 1) * w / (Points - 1));
-            var band = new SolidColorBrush(Color.FromArgb(55, TableModel.TraceColor.R, TableModel.TraceColor.G, TableModel.TraceColor.B));
+            var band = AppTheme.Brush(Color.FromArgb(55, TableModel.TraceColor.R, TableModel.TraceColor.G, TableModel.TraceColor.B));
             ctx.FillRectangle(band, new Rect(traceX.Value - 7, 10, 14, h));
-            ctx.DrawLine(new Pen(new SolidColorBrush(TableModel.TraceColor), 1.5, dashStyle: DashStyle.Dash), new Point(traceX.Value, 10), new Point(traceX.Value, 10 + h));
+            ctx.DrawLine(new Pen(AppTheme.Brush(TableModel.TraceColor), 1.5, dashStyle: DashStyle.Dash), new Point(traceX.Value, 10), new Point(traceX.Value, 10 + h));
         }
         var selected = Keys?.Model == m ? Keys.Selection().ToHashSet() : [];
         var rowAxis = Transpose ? m.ColAxis : m.RowAxis;
@@ -1008,10 +1019,10 @@ public sealed class TableGraph : Control
                     bool hot = m.Heat.TryGetValue(i, out var heat);
                     bool sel = selected.Contains(i);
                     double rad = i == _hoverIndex || i == _dragIndex ? 8 : hot ? (heat >= 0.75 ? 8 : 6) : sel ? 6 : traced ? 5.2 : 4.2;
-                    if (sel) ctx.DrawEllipse(null, new Pen(Brushes.White, 2), pt, rad + 3, rad + 3);
+                    if (sel) ctx.DrawEllipse(null, new Pen(AppTheme.White, 2), pt, rad + 3, rad + 3);
                     if (hot)
                     {
-                        ctx.DrawEllipse(null, new Pen(Brushes.White, 2.5), pt, rad + 2.5, rad + 2.5);
+                        ctx.DrawEllipse(null, new Pen(AppTheme.White, 2.5), pt, rad + 2.5, rad + 2.5);
                         Sphere(ctx, pt, rad, heat >= 0.75 ? TableModel.TraceColor : TableModel.TrailColor, 255);
                     }
                     else Sphere(ctx, pt, rad, color, alpha);
@@ -1028,7 +1039,7 @@ public sealed class TableGraph : Control
                 double at = Math.Max(y - 6, last + 12);
                 last = at;
                 ctx.DrawText(new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, new Typeface(MainWindow.MonoFont), 9.5,
-                             new SolidColorBrush(c)), new Point(Bounds.Width - LabelRoom + 4, at));
+                             AppTheme.Brush(c)), new Point(Bounds.Width - LabelRoom + 4, at));
             }
         }
         if (tc is { } tt && traceX is double tx)
@@ -1039,11 +1050,11 @@ public sealed class TableGraph : Control
             double fr = Math.Clamp(tt.Row - r0, 0, 1), fc = Math.Clamp(tt.Col - c0, 0, 1);
             double v = (m[r0, c0] * (1 - fr) * (1 - fc)) + (m[r0, c1] * (1 - fr) * fc) + (m[r1, c0] * fr * (1 - fc)) + (m[r1, c1] * fr * fc);
             var p = new Point(tx, Pos(0, v).Y);
-            ctx.DrawEllipse(null, new Pen(Brushes.White, 3), p, 10, 10);
-            ctx.DrawEllipse(new SolidColorBrush(TableModel.TraceColor), new Pen(Brushes.Black, 1.5), p, 7, 7);
+            ctx.DrawEllipse(null, new Pen(AppTheme.White, 3), p, 10, 10);
+            ctx.DrawEllipse(AppTheme.Brush(TableModel.TraceColor), new Pen(AppTheme.Black, 1.5), p, 7, 7);
             var readout = new FormattedText($"{m.Format(v)} {m.Unit}", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, new Typeface(MainWindow.MonoFont), 11.5, Dark.Text);
             var at = new Point(Math.Min(tx + 14, Bounds.Width - Right - readout.Width - 10), p.Y - 26);
-            ctx.DrawRectangle(new SolidColorBrush(Color.FromArgb(215, 14, 15, 18)), new Pen(new SolidColorBrush(TableModel.TraceColor), 1),
+            ctx.DrawRectangle(AppTheme.Brush(Color.FromArgb(215, 14, 15, 18)), new Pen(AppTheme.Brush(TableModel.TraceColor), 1),
                               new Rect(at.X - 5, at.Y - 2, readout.Width + 10, readout.Height + 4), 4, 4);
             ctx.DrawText(readout, at);
         }
@@ -1067,7 +1078,7 @@ public sealed class TableGraph : Control
             for (int k = 1; k < pts.Length; k++) g.LineTo(pts[k]);
             g.EndFigure(false);
         }
-        Pen P(Color col, byte a, double w) => new(new SolidColorBrush(Color.FromArgb(a, col.R, col.G, col.B)), w, lineCap: PenLineCap.Round, lineJoin: PenLineJoin.Round);
+        Pen P(Color col, byte a, double w) => new(AppTheme.Brush(Color.FromArgb(a, col.R, col.G, col.B)), w, lineCap: PenLineCap.Round, lineJoin: PenLineJoin.Round);
         using (ctx.PushTransform(Matrix.CreateTranslation(1.6, 2.6)))
             ctx.DrawGeometry(null, P(Colors.Black, (byte)(alpha * 0.5), width + 2.5), geo);
         ctx.DrawGeometry(null, P(Mix(c, Colors.Black, 0.45), alpha, width + 1.4), geo);
@@ -1079,7 +1090,7 @@ public sealed class TableGraph : Control
     /// A point as a small shaded ball: lit from the upper left, darker towards its far edge.
     static void Sphere(DrawingContext ctx, Point at, double r, Color c, byte alpha)
     {
-        ctx.DrawEllipse(new SolidColorBrush(Color.FromArgb((byte)(alpha * 0.45), 0, 0, 0)), null, at + new Point(1.2, 1.8), r, r);
+        ctx.DrawEllipse(AppTheme.Brush(Color.FromArgb((byte)(alpha * 0.45), 0, 0, 0)), null, at + new Point(1.2, 1.8), r, r);
         var ball = new RadialGradientBrush
         {
             Center = new RelativePoint(0.35, 0.3, RelativeUnit.Relative), GradientOrigin = new RelativePoint(0.35, 0.3, RelativeUnit.Relative),
@@ -1232,8 +1243,8 @@ static class TableDrag
 /// The box dragged round points to select them.
 static class Band
 {
-    static readonly IBrush Fill = new SolidColorBrush(Color.FromArgb(45, 120, 170, 255));
-    static readonly Pen Edge = new(new SolidColorBrush(Color.FromRgb(120, 170, 255)), 1, dashStyle: DashStyle.Dash);
+    static readonly IBrush Fill = AppTheme.Brush(Color.FromArgb(45, 120, 170, 255));
+    static readonly Pen Edge = new(AppTheme.Brush(Color.FromRgb(120, 170, 255)), 1, dashStyle: DashStyle.Dash);
 
     public static Rect Of(Point a, Point b) => new(Math.Min(a.X, b.X), Math.Min(a.Y, b.Y), Math.Abs(a.X - b.X), Math.Abs(a.Y - b.Y));
 
@@ -1287,10 +1298,10 @@ public sealed class TableSurface : Control
 
     static readonly Typeface Face = new(MainWindow.MonoFont);
     static readonly Typeface BoldFace = new(MainWindow.MonoFont, FontStyle.Normal, FontWeight.Bold);
-    static readonly IBrush PlateBg = new SolidColorBrush(Color.FromArgb(200, 14, 15, 18));
-    static readonly IBrush RowInk = new SolidColorBrush(Color.FromRgb(255, 190, 110));
-    static readonly IBrush ColInk = new SolidColorBrush(Color.FromRgb(120, 200, 255));
-    static readonly IBrush ValueInk = new SolidColorBrush(Color.FromRgb(170, 240, 150));
+    static readonly IBrush PlateBg = AppTheme.Brush(Color.FromArgb(200, 14, 15, 18));
+    static readonly IBrush RowInk = AppTheme.Brush(Color.FromRgb(255, 190, 110));
+    static readonly IBrush ColInk = AppTheme.Brush(Color.FromRgb(120, 200, 255));
+    static readonly IBrush ValueInk = AppTheme.Brush(Color.FromRgb(170, 240, 150));
 
     public TableSurface()
     {
@@ -1318,6 +1329,9 @@ public sealed class TableSurface : Control
         SetView("reset");
         return true;
     }
+
+    /// Turn the view to an exact angle (the pictures of the 3D view being turned round).
+    public void SetAngles(double yaw, double pitch) { _yaw = yaw; _pitch = pitch; InvalidateVisual(); }
 
     /// "reset" (where it starts), "top", "front", "side", "under", "left" / "right" (an eighth of a turn), "up" / "down" (tilt).
     public void SetView(string view)
@@ -1453,7 +1467,7 @@ public sealed class TableSurface : Control
                 bool hot = new[] { (r * m.Cols) + c, (r * m.Cols) + c1, (r1 * m.Cols) + c, (r1 * m.Cols) + c1 }.Any(i => m.Heat.TryGetValue(i, out var h) && h >= 0.75);
                 quads.Add(((a.depth + b.depth + d.depth + e.depth) / 4, new[] { a.p, b.p, d.p, e.p }, m.CellColor(v), hot));
             }
-        var edge = new Pen(new SolidColorBrush(Color.FromArgb(140, 20, 20, 24)), 0.6);
+        var edge = new Pen(AppTheme.Brush(Color.FromArgb(140, 20, 20, 24)), 0.6);
         foreach (var q in quads.OrderByDescending(q => q.depth))
         {
             _quads.Add(q.pts);
@@ -1464,7 +1478,7 @@ public sealed class TableSurface : Control
                 for (int k = 1; k < 4; k++) g.LineTo(q.pts[k]);
                 g.EndFigure(true);
             }
-            ctx.DrawGeometry(new SolidColorBrush(q.hot ? TableModel.TraceColor : q.color), q.hot ? new Pen(Dark.Text, 1.2) : edge, geo);
+            ctx.DrawGeometry(AppTheme.Brush(q.hot ? TableModel.TraceColor : q.color), q.hot ? new Pen(Dark.Text, 1.2) : edge, geo);
         }
 
         // the scales on the near edges, over the surface so they are never hidden
@@ -1478,7 +1492,7 @@ public sealed class TableSurface : Control
         for (int k = 0; k < 40; k++)
         {
             double t0 = 1 - (k / 40.0);
-            ctx.FillRectangle(new SolidColorBrush(m.CellColor(lo + (span * t0))), new Rect(keyX, keyY + (keyH * k / 40), 14, (keyH / 40) + 0.5));
+            ctx.FillRectangle(AppTheme.Brush(m.CellColor(lo + (span * t0))), new Rect(keyX, keyY + (keyH * k / 40), 14, (keyH / 40) + 0.5));
         }
         ctx.DrawRectangle(null, new Pen(Dark.Axis, 1), new Rect(keyX, keyY, 14, keyH));
         Plate(ctx, m.Format(hi), new Point(keyX - 4, keyY), 11, Dark.Text, align: 1);
@@ -1491,7 +1505,7 @@ public sealed class TableSurface : Control
             double x = m.Cols == 1 ? 0 : (tc.Col * 2 / (m.Cols - 1)) - 1, y = m.Rows == 1 ? 0 : (tc.Row * 2 / (m.Rows - 1)) - 1;
             int r0 = (int)Math.Round(tc.Row), c0 = (int)Math.Round(tc.Col);
             var p = Project(x, y, Z(Math.Clamp(r0, 0, m.Rows - 1), Math.Clamp(c0, 0, m.Cols - 1)) + 0.03);
-            ctx.DrawEllipse(Brushes.White, new Pen(Brushes.Black, 1.5), p.p, 5, 5);
+            ctx.DrawEllipse(Brushes.White, new Pen(AppTheme.Black, 1.5), p.p, 5, 5);
         }
         // the points: the selected cells and the one under the pointer, large enough to take hold of
         var sel = Keys?.Model == m ? Keys.Selection() : [];
@@ -1499,7 +1513,7 @@ public sealed class TableSurface : Control
         {
             var q = PointOf(i);
             bool active = i == _hoverIndex || i == _dragIndex;
-            ctx.DrawEllipse(new SolidColorBrush(active ? Colors.White : TableModel.TrailColor), new Pen(Brushes.Black, 1.2), q, active ? 7 : 5, active ? 7 : 5);
+            ctx.DrawEllipse(AppTheme.Brush(active ? Colors.White : TableModel.TrailColor), new Pen(AppTheme.Black, 1.2), q, active ? 7 : 5, active ? 7 : 5);
         }
         if (_hoverIndex >= 0 && _hoverIndex < m.Values.Length)
         {
@@ -1625,9 +1639,9 @@ public static class UiStyles
 /// Colours for the dark-theme chart views (the table grid keeps the the tuning software white look).
 static class Dark
 {
-    public static readonly IBrush Back = new SolidColorBrush(Color.FromRgb(0x1e, 0x1f, 0x22));
-    public static readonly IBrush Grid = new SolidColorBrush(Color.FromRgb(0x33, 0x36, 0x3c));
-    public static readonly IBrush Axis = new SolidColorBrush(Color.FromRgb(0x8a, 0x8f, 0x98));
-    public static readonly IBrush Text = new SolidColorBrush(Color.FromRgb(0xd7, 0xda, 0xe0));
-    public static readonly IBrush Dim = new SolidColorBrush(Color.FromRgb(0x80, 0x84, 0x8c));
+    public static readonly IBrush Back = AppTheme.Brush(Color.FromRgb(0x1e, 0x1f, 0x22));
+    public static readonly IBrush Grid = AppTheme.Brush(Color.FromRgb(0x33, 0x36, 0x3c));
+    public static readonly IBrush Axis = AppTheme.Brush(Color.FromRgb(0x8a, 0x8f, 0x98));
+    public static readonly IBrush Text = AppTheme.Brush(Color.FromRgb(0xd7, 0xda, 0xe0));
+    public static readonly IBrush Dim = AppTheme.Brush(Color.FromRgb(0x80, 0x84, 0x8c));
 }

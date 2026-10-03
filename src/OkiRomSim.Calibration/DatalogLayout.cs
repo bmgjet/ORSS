@@ -113,9 +113,11 @@ public static class DatalogLayout
             ulong end = _sim.Cpu.Cycles + (ulong)(timeoutMs / 1000.0 * Bus.CpuHz);
             while (_rx.Count < count && _sim.Cpu.Cycles < end)
             {
+                ulong before = _sim.Cpu.Cycles;
                 for (int i = 0; i < 2000 && _sim.StepOne() != null; i++)
                     if ((_sim.Cpu.Instructions & 1023) == 0) _sim.SyncSensors();
                 foreach (var b in _sim.Bus.TakeSerialTx()) _rx.Enqueue(b);
+                if (_sim.Cpu.Cycles == before) break;      // the ROM has stopped (faulted): nothing more will come
             }
             int n = 0;
             while (n < count && _rx.Count > 0) buffer[offset + n++] = _rx.Dequeue();

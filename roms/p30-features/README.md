@@ -42,8 +42,11 @@ File > New ROM > Create reads it:
 ## Limiters and switches: lib.asm
 
 Modules that cut fuel or spark, or drive an output, define `NEED_MODLIB` and run from the tick. Each module
-has its own slot (`SLOT_...` in `lib.asm`): the tick is the same whatever the rpm, while the main loop drops
-to a few passes a second at high rpm. A tick module looks like this:
+runs on one tick in 16, its slot (`SLOT_...`): the tick is the same whatever the rpm, while the main loop drops
+to a few passes a second at high rpm. The slots are handed out when the ROM is built, in `features.inc`: the heaviest
+modules first, one slot each, then the lighter ones sharing (0..15, 15..0, 0..15). The tick is the timer 1 interrupt and
+keeps every other interrupt waiting while it runs, so keep a module's tick short and put a new module in the list in
+`features.inc` where its measured cost (`SkeletonTest --isrtime` on a build with it) puts it. A tick module looks like this:
 
 ```
 if XP == XP_TICK
@@ -108,6 +111,7 @@ module provides, only when the module asks for it in its `XP_DEFS` part. One mod
 | `NEED_IACV` | `mod_iacv` | main loop, before the idle valve duty word is stored | A = the duty word; raise or replace it. er0 is free. |
 | `NEED_CFGOVERRIDE` | `mod_cfgoverride` | each time the option bytes / board resistors are decoded (bank page 2) | Change the feature flags 216h/217h/219h/227h. |
 | `NEED_INJSKIP` | `mod_injskip` | injector interrupt, each time injectors are about to open | A (byte) = the injectors to open (a 0 bit opens one); return it, FFh opens none. Keep every register, and return in byte mode (after `POPS A`, `LB A, ACC`). |
+| `NEED_VTECHOOK` | `mod_vtec` | main loop, before the stock VTEC decision (its rpm flags and load point worked out) | C clear: the stock decision. C set: A (byte) = 0 no VTEC at all, 1 off for now, 2 on. r0, r1, r6, r7 are free; keep the rest. |
 | `NEED_DECELPOP` | | | A hook in the skeleton with no module using it. |
 
 `FEAT_CYLTRIM` takes the closed-loop condition off the stock per-cylinder fuel trims. `FEAT_IGNCUTMOD` takes

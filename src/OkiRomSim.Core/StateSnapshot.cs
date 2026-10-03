@@ -151,8 +151,7 @@ public static class StateSnapshot
                 }
                 else if (v != null && ft.IsGenericType && Collection(ft) is { } kind)
                 {
-                    // a list, queue, set or dictionary of plain values (the injector pulses still open, the serial bytes
-                    // on their way in, the pins forced): its items as their bytes
+                    // a list, queue, set or dictionary of plain values (the injector pulses still open, the serial bytes on their way in, the pins forced): its items as their bytes
                     var m = typeof(StateSnapshot).GetMethod(kind, BindingFlags.NonPublic | BindingFlags.Static)!.MakeGenericMethod(ft.GetGenericArguments());
                     if (save != null) save[key] = Convert.ToBase64String((byte[])m.Invoke(null, [v, null])!);
                     else if (load!.TryGetValue(key, out var s)) { m.Invoke(null, [v, Convert.FromBase64String(s)]); restored?.Invoke(); }

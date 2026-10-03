@@ -129,7 +129,7 @@ public sealed class BinToolWindow : Window
             });
             var path = file?.TryGetLocalPath();
             if (path == null) return;
-            File.WriteAllBytes(path, [.. low, .. high]);
+            OkiRomSim.Core.SafeFile.WriteAllBytes(path, [.. low, .. high]);
             _status.Text = $"Saved {path}: 65,536 bytes, the lower half at 0000-7FFF and the upper at 8000-FFFF.";
         }
         catch (Exception ex) { _status.Text = "Could not save: " + ex.Message; }
@@ -151,8 +151,8 @@ public sealed class BinToolWindow : Window
             var dir = System.IO.Path.GetDirectoryName(path)!;
             var name = System.IO.Path.GetFileNameWithoutExtension(path);
             string lowPath = System.IO.Path.Combine(dir, name + "_low.bin"), highPath = System.IO.Path.Combine(dir, name + "_high.bin");
-            File.WriteAllBytes(lowPath, data[..Half]);
-            File.WriteAllBytes(highPath, data[Half..]);
+            OkiRomSim.Core.SafeFile.WriteAllBytes(lowPath, data[..Half]);
+            OkiRomSim.Core.SafeFile.WriteAllBytes(highPath, data[Half..]);
             bool lowBlank = data[..Half].All(b => b == 0xFF) || data[..Half].All(b => b == 0);
             _status.Text = $"Saved {System.IO.Path.GetFileName(lowPath)} (0000-7FFF{(lowBlank ? ", blank" : "")}) and {System.IO.Path.GetFileName(highPath)} (8000-FFFF) beside it.";
         }

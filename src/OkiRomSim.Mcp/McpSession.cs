@@ -5,7 +5,7 @@ using OkiRomSim.Calibration;
 
 namespace OkiRomSim.Mcp;
 
-/// The ROM open in the desktop app, as the in-app MCP server sees it. Tools called without a `path` work on it; every change goes through the app, which shows it (the Calibration page selects the table being edited, the Debug page logs the call). The app implements this; the stand-alone okirom-mcp server has no session and works on files only.
+/// The ROM open in the desktop app, as the in-app MCP server sees it. Tools called without a `path` work on it; every change goes through the app, which shows it (the Calibration page selects the table being edited, the Debug page logs the call). The app implements this; the stand-alone romsim-mcp server has no session and works on files only.
 public interface IMcpSession
 {
     /// One line: what is open, whether it has unsaved changes.

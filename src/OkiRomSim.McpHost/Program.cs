@@ -1,11 +1,7 @@
 // Copyright (c) bmgjet. All rights reserved.
 using OkiRomSim.Mcp;
 
-// okirom-mcp: MCP server for OKI MSM66207 ROM development.
-//
-// okirom-mcp [--root DIR]... stdio (for local client launchers) okirom-mcp --http [--port 8765] [--remote] [--password PW] [--cert file.pfx --cert-password PW] [--root DIR]... okirom-mcp --read-only ... refuse every write
-//
-// The password can also come from the OKIROMSIM_MCP_PASSWORD environment variable (keeps it out of process listings). --remote listens on all interfaces and requires a password.
+// romsim-mcp: MCP server for OKI MSM66207 ROM development. romsim-mcp [--root DIR]... stdio (for local client launchers) romsim-mcp --http [--port 8765] [--remote] [--password PW] [--cert file.pfx --cert-password PW] [--root DIR]... romsim-mcp --read-only ... refuse every write. The password can also come from the OKIROMSIM_MCP_PASSWORD environment variable (keeps it out of process listings). --remote listens on all interfaces and requires a password.
 var roots = new List<string>();
 bool http = false, remote = false, readOnly = false;
 int port = 8765;
@@ -25,7 +21,7 @@ for (int i = 0; i < args.Length; i++)
         case "--cert-password": certPw = Next(); break;
         case "--read-only": readOnly = true; break;
         case "-h" or "--help":
-            Console.Error.WriteLine("okirom-mcp [--root DIR]... [--read-only] [--http [--port N] [--remote] [--password PW] [--cert f.pfx --cert-password PW]]");
+            Console.Error.WriteLine("romsim-mcp [--root DIR]... [--read-only] [--http [--port N] [--remote] [--password PW] [--cert f.pfx --cert-password PW]]");
             return 0;
         default: Console.Error.WriteLine($"unknown argument {args[i]}"); return 2;
     }

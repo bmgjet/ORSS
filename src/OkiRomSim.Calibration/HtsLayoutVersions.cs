@@ -1,6 +1,4 @@
-// Copyright (c) bmgjet. All rights reserved.
-// Generated from HTS-master Rom.cs (LoadECtuneAddresses, NewLocation115, NewLocationP13): where each setting of the 1.15
-// layout sits in the other layouts of the same family.
+// Copyright (c) bmgjet. All rights reserved. Generated from HTS-master Rom.cs (LoadECtuneAddresses, NewLocation115, NewLocationP13): where each setting of the 1.15 layout sits in the other layouts of the same family.
 namespace OkiRomSim.Calibration;
 
 public static partial class HtsLayout

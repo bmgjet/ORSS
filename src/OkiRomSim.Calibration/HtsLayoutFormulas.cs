@@ -1,6 +1,4 @@
-// Copyright (c) bmgjet. All rights reserved.
-// Generated from HTS-master: how its pages read each field (the conversion around the read), by where the field is in
-// the 1.15 layout. Gives a scaling to a definition of an HTS-family ROM that has none of its own.
+// Copyright (c) bmgjet. All rights reserved. Generated from HTS-master: how its pages read each field (the conversion around the read), by where the field is in the 1.15 layout. Gives a scaling to a definition of an HTS-family ROM that has none of its own.
 namespace OkiRomSim.Calibration;
 
 public static partial class HtsLayout

@@ -6,7 +6,7 @@ using System.Runtime.Loader;
 
 namespace OkiRomSim.Desktop;
 
-/// A distribution build (dotnet publish -p:Bundle=true) carries its libraries - Avalonia, the assembler, the calibration code, and the rest - inside OkiRomSimStudio.dll, so there are only a few files to hand out. They are loaded from there the first time they are needed. What differs between platforms stays in the runtimes folder beside it: the native libraries (drawing, text) and the per-platform builds of a few libraries (serial ports), picked for the machine it runs on. Nothing in here may touch Avalonia: it runs before anything else, to be ready when the first library is asked for.
+/// A distribution build (dotnet publish -p:Bundle=true) carries its libraries - Avalonia, the assembler, the calibration code, and the rest - inside RomSimStudio.dll, so there are only a few files to hand out. They are loaded from there the first time they are needed. What differs between platforms stays in the runtimes folder beside it: the native libraries (drawing, text) and the per-platform builds of a few libraries (serial ports), picked for the machine it runs on. Nothing in here may touch Avalonia: it runs before anything else, to be ready when the first library is asked for.
 static class EmbeddedLibraries
 {
     const string Prefix = "deps/";

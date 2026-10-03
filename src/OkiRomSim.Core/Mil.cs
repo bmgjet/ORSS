@@ -29,12 +29,12 @@ public sealed class MilMonitor
     {
         [1] = "O2 sensor", [3] = "MAP sensor (voltage)", [4] = "crank position (CKP)", [5] = "MAP sensor (range)",
         [6] = "coolant temp (ECT)", [7] = "throttle position (TPS)", [8] = "TDC sensor", [9] = "cylinder position (CYP)",
-        [10] = "intake air temp (IAT)", [11] = "ECU internal / checksum", [12] = "EGR lift sensor", [13] = "baro sensor",
+        [10] = "intake air temp (IAT)", [11] = "EGR valve lift sensor", [12] = "EGR lift sensor", [13] = "baro sensor",
         [14] = "idle air control (IACV)", [15] = "ignition output", [16] = "fuel injector", [17] = "vehicle speed (VSS)",
         [18] = "ignition timing adjust", [19] = "A/T lockup solenoid", [20] = "electrical load detector (ELD)",
         [21] = "VTEC solenoid", [22] = "VTEC pressure switch", [23] = "knock sensor",
         [24] = "knock circuit check (port A bits 0-2)", [30] = "A/T signal A", [31] = "A/T signal B",
-        [35] = "P4.6 test (fault bit 25)", [36] = "P4.6 test (fault bit 26)",
+        [35] = "P4.6 feedback check", [36] = "analog input 5 out of range",
         [41] = "O2 sensor heater", [43] = "fuel supply system",
     };
 

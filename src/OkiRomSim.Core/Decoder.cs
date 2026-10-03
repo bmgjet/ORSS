@@ -1,12 +1,4 @@
-// Copyright (c) bmgjet. All rights reserved.
-//
-// OKI MSM66207 table-driven instruction decoder.
-//
-// The 66207 encodes the *addressing mode* in the first byte and the *operation* in a later byte (e.g. `C5 EB 98 46` is `MOVB 0ebh, #046h`, where C5 selects the direct-byte operand and 98 selects MOV-immediate). A flat switch on the opcode byte therefore cannot decode this ISA -- patterns have to be matched whole.
-//
-// Patterns come from FullOpcodes.Table, derived from the 66207.op opcode spec.
-//
-// The DD flag (word/byte mode) is part of the decode context: some encodings are shared between a word form and a byte form and are told apart only by DD -- 0x18 is `ADC A, er0` when DD=1 but `ADCB A, r0` when DD=0. Instructions marked 'S'/'R' in the table set/reset DD for what follows.
+// Copyright (c) bmgjet. All rights reserved. OKI MSM66207 table-driven instruction decoder. The 66207 encodes the *addressing mode* in the first byte and the *operation* in a later byte (e.g. `C5 EB 98 46` is `MOVB 0ebh, #046h`, where C5 selects the direct-byte operand and 98 selects MOV-immediate). A flat switch on the opcode byte therefore cannot decode this ISA -- patterns have to be matched whole. Patterns come from FullOpcodes.Table, derived from the 66207.op opcode spec. The DD flag (word/byte mode) is part of the decode context: some encodings are shared between a word form and a byte form and are told apart only by DD -- 0x18 is `ADC A, er0` when DD=1 but `ADCB A, r0` when DD=0. Instructions marked 'S'/'R' in the table set/reset DD for what follows.
 
 namespace OkiRomSim.Core;
 

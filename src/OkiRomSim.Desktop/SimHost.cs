@@ -56,6 +56,10 @@ public sealed class SimHost
     public DefinitionSet? Definitions { get; private set; }
     public string? LoadedPath { get; private set; }
     public bool IsRunning { get { lock (_lock) return _running; } }
+    /// The simulated clock (CPU cycles): the simulator link's timeouts run on it.
+    public ulong SimCycles { get { lock (_lock) return Sim.Cpu.Cycles; } }
+    /// The 8255 PPI as it stands: port A (as read), B, C and the control word.
+    public (byte A, byte B, byte C, byte Control) PpiState() { lock (_lock) { var p = Sim.Bus.Ppi; return (p.Read(0), p.PortB, p.PortC, p.Control); } }
     /// The simulated VTEC solenoid is on: the ROM is reading the high-cam maps.
     public bool VtecActive { get { lock (_lock) return Sim.Bus.VtecSolenoidActive; } }
     public double Speed { get { lock (_lock) return _speed; } set { lock (_lock) _speed = Math.Max(0, value); } }
@@ -517,7 +521,7 @@ public sealed class SimHost
         while (_frames.Count > 0 && sspInsn > _frames[^1].Ssp) _frames.RemoveAt(_frames.Count - 1);
         var d = e?.Decoded;
         if (d != null && sspInsn == (ushort)(sspBefore - 2) &&
-            (d.Mnemonic.StartsWith("CAL") || d.Mnemonic.StartsWith("SCAL") || d.Mnemonic.StartsWith("VCAL")))
+            (d.Mnemonic.StartsWith("CAL", StringComparison.Ordinal) || d.Mnemonic.StartsWith("SCAL", StringComparison.Ordinal) || d.Mnemonic.StartsWith("VCAL", StringComparison.Ordinal)))
         {
             ushort entry = irq ? Sim.Bus.ReadDataU16(sspInsn) : Sim.Cpu.Pc;
             _frames.Add(new Frame(entry, (ushort)(pcBefore + d.Len), sspInsn, false));
@@ -563,14 +567,22 @@ public sealed class SimHost
         }
     }
 
+    bool _timerRaised;
+
     /// One pass of the run loop: a slice of instructions, playback and the serial port.
     void Slice()
     {
         {
             bool running;
             lock (_lock) running = _running;
+            // finer sleeps while running (see HiResTimer), given back when stopped
+            if (running && !_timerRaised) { HiResTimer.Begin(); _timerRaised = true; }
             // stopped: sleep until told to run (or 250 ms, for the serial port and playback), not wake 60 times a second for nothing
-            if (!running) { _wake.Wait(250); _wake.Reset(); return; }
+            if (!running)
+            {
+                if (_timerRaised) { HiResTimer.End(); _timerRaised = false; }
+                _wake.Wait(250); _wake.Reset(); return;
+            }
             lock (_lock)
             {
                 // Run in short time slices and let go of the lock between them, so the UI (and an MCP client) always gets in - at unlimited speed too.
@@ -936,8 +948,7 @@ public sealed class SimHost
                 var i = t.IndexOf('|');
                 if (i > 0 && ushort.TryParse(t[..i], System.Globalization.NumberStyles.HexNumber, null, out var pc)) _trace.Enqueue(new TraceEntry(pc, t[(i + 1)..]));
             }
-            // the sensor readings the ROM last latched came back with the fields; worked out afresh now they would be
-            // this moment's, not the ones it had (an older project, without them, gets fresh ones)
+            // the sensor readings the ROM last latched came back with the fields; worked out afresh now they would be this moment's, not the ones it had (an older project, without them, gets fresh ones)
             if (st.Fields.Count == 0) Sim.SyncSensors();
             ResetRates();
             _stopReason = "project restored";
@@ -1003,6 +1014,30 @@ public sealed class SimHost
     public T EditDefinitions<T>(Func<DefinitionSet, T> change)
     {
         lock (_lock) { var r = change(Defs()); Interlocked.Increment(ref _version); return r; }
+    }
+
+    /// The MAP sensor the ROM says is fitted: its pressure formulas rebuilt to suit, and the datalog's MAP read on the same scale.
+    public void RefreshMapSensor()
+    {
+        lock (_lock)
+        {
+            var defs = Defs();
+            var rom = RomBytes(0, Bus.RomSize);
+            MapSensorScale.ApplyFormulas(defs, rom);
+            HondaDatalog.MapSensor = MapSensorScale.Of(defs, rom) ?? MapSensorScale.Stock;
+            // the functions' state channels are named from this build's symbols
+            ModuleDebug.Name(Assembly?.Symbols.Values.Where(sy => sy.Kind is SymbolKind.Equate or SymbolKind.Define).Select(sy => (sy.Name, (long)sy.Value)));
+            // ...and the RAM addresses picked on the ROM's Datalog page, for what the memory map says is at each
+            var user = defs.Items.FirstOrDefault(i => i.Name.Equals("DatalogUserAddress", StringComparison.OrdinalIgnoreCase) || i.HasSlot("dlextra.user"));
+            var ram = user != null ? RamMapNow() : [];
+            for (int k = 0; k < 8; k++)
+            {
+                int at = user == null || user.Address + (k * 2) + 1 >= rom.Length ? 0 : rom[user.Address + (k * 2)] | (rom[user.Address + (k * 2) + 1] << 8);
+                if (at is < 0x80 or >= RamMap.RamEnd) at = 0;
+                UserRam.Set(k, at, ram.FirstOrDefault(e => e.Address == at)?.Name);
+            }
+            Interlocked.Increment(ref _version);
+        }
     }
 
     // ------------------------------------------------------------------ outputs & pins
@@ -1262,8 +1297,18 @@ public sealed class SimHost
         }
     }
 
+    /// What each engine input can be, from what the sensor or the ECU's input can report: a value from an MCP client, a script or a car's datalog outside these is held to them, and one that is not a number is ignored.
+    public static readonly Dictionary<string, (double Min, double Max)> InputLimits = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["rpm"] = (0, 12000), ["map"] = (0, 400), ["tps"] = (0, 100), ["ect"] = (-40, 150), ["iat"] = (-40, 150),
+        ["o2"] = (0, 5), ["vbatt"] = (0, 20), ["speed"] = (0, 300), ["baro"] = (50, 110), ["eld"] = (0, 5),
+        ["egr"] = (0, 100), ["crankvbatt"] = (0, 16),
+    };
+
     public void SetInput(string name, double value)
     {
+        if (double.IsNaN(value) || double.IsInfinity(value)) return;
+        if (InputLimits.TryGetValue(name, out var lim)) value = Math.Clamp(value, lim.Min, lim.Max);
         lock (_lock)
         {
             _inputs[name] = value;
@@ -1380,7 +1425,7 @@ public sealed class SimHost
         lock (_lock)
         {
             var defs = Defs();
-            if (raw) RomData.WriteRawCell(Sim.Bus.Rom, item, index, value);
+            if (raw) RomData.WriteRawCell(Sim.Bus.Rom, item, index, value, defs);
             else RomData.Write(defs, Sim.Bus.Rom, item, index, value);
             BalanceChecksum();
             Sim.InvalidateDecodeCache();
@@ -1410,7 +1455,7 @@ public sealed class SimHost
             var defs = Defs();
             foreach (var (i, v) in cells)
             {
-                if (raw) RomData.WriteRawCell(Sim.Bus.Rom, item, i, v);
+                if (raw) RomData.WriteRawCell(Sim.Bus.Rom, item, i, v, defs);
                 else RomData.Write(defs, Sim.Bus.Rom, item, i, v);
             }
             BalanceChecksum();
@@ -1616,10 +1661,10 @@ public sealed class SimHost
     public string EmulatorDownload(out string path)
     {
         var there = Emulator.Download(Bus.RomSize);
-        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "OkiRomSim ROMs");
+        var dir = AppPaths.Roms;
         Directory.CreateDirectory(dir);
         path = Path.Combine(dir, $"emulator-{DateTime.Now:yyyyMMdd-HHmmss}.bin");
-        File.WriteAllBytes(path, there);
+        SafeFile.WriteAllBytes(path, there);
         EmulatorStatus = $"{Emulator.Version}: read {there.Length} bytes out of the emulator into {path}";
         AppLog.Write(LogKind.Serial, "emulator", EmulatorStatus);
         return EmulatorStatus;
@@ -1671,7 +1716,7 @@ public sealed class SimHost
         lock (_lock)
         {
             if (File.Exists(path)) File.Copy(path, path + ".bak", overwrite: true);
-            File.WriteAllBytes(path, [.. Sim.Bus.Rom]);
+            SafeFile.WriteAllBytes(path, [.. Sim.Bus.Rom]);
             RomDirty = false;
         }
     }

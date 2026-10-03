@@ -1,7 +1,4 @@
-// Copyright (c) bmgjet. All rights reserved.
-// Assembles .asm source for the simulator.
-//
-// Uses the managed OkiRomSim.Assembler, driven by the OKI 66207 grammar, so it needs nothing to install and behaves the same on Windows, Linux and macOS (x64 and ARM).
+// Copyright (c) bmgjet. All rights reserved. Assembles .asm source for the simulator. Uses the managed OkiRomSim.Assembler, driven by the OKI 66207 grammar, so it needs nothing to install and behaves the same on Windows, Linux and macOS (x64 and ARM).
 using OkiRomSim.Assembler;
 
 namespace OkiRomSim.Core;

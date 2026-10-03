@@ -1,12 +1,12 @@
 <Project>
   <!-- One place for the version every part of the program reports (title bar, Settings > General, the Debug page and the MCP handshake all read it through OkiRomSim.Core.BuildInfo). -->
   <PropertyGroup>
-    <Version>0.0.0.3</Version>
-    <AssemblyVersion>0.0.0.3</AssemblyVersion>
-    <FileVersion>0.0.0.3</FileVersion>
-    <InformationalVersion>0.0.0.3</InformationalVersion>
+    <Version>0.0.0.5</Version>
+    <AssemblyVersion>0.0.0.5</AssemblyVersion>
+    <FileVersion>0.0.0.5</FileVersion>
+    <InformationalVersion>0.0.0.5</InformationalVersion>
     <Company>bmgjet</Company>
-    <Product>Oki ROM Studio</Product>
+    <Product>Rom Sim Studio</Product>
     <Authors>bmgjet</Authors>
     <Copyright>Copyright (c) bmgjet. All rights reserved.</Copyright>
   </PropertyGroup>

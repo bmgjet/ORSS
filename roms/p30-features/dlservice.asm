@@ -36,7 +36,7 @@ DL_SVC              EQU     002ffh              ; bits: 0 injectors off, 1 timin
 DL_SVCX             EQU     001f7h              ; bits: 0 the lamp is taken for the flashing (tick), 1 clear the codes (set by the
                                                 ;   receive interrupt, cleared by the main loop). Single-instruction bit set and
                                                 ;   clear only, so the three never undo each other.
-DLSVC_SLOT          EQU     3                   ; the tick slot it runs on (tick mod 16: about 30 times a second)
+; its tick slot (SLOT_DLSERVICE) comes from features.inc: tick mod 16, about 30 times a second
 endif
 
 if XP == XP_BOOT
@@ -55,7 +55,7 @@ endif
 if XP == XP_TICK
                 LB      A, 0feh
                 ANDB    A, #00fh
-                CMPB    A, #DLSVC_SLOT
+                CMPB    A, #SLOT_DLSERVICE
                 JNE     dls_tick_skip
                 CAL     dls_tick
 dls_tick_skip:
@@ -71,7 +71,11 @@ if XP == XP_CODE
 dls_boot:       L       A, DP
                 PUSHS   A
                 MOV     DP, #DL_SVC
+ifdef DLSVC_TEST
+                MOVB    [DP], #001h            ; (a diagnostic build: injectors off from power-up, so the lamp flashes at once)
+else
                 MOVB    [DP], #000h
+endif
                 MOV     DP, #DL_SVCX
                 MOVB    [DP], #000h
                 POPS    A

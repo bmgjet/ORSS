@@ -71,6 +71,17 @@ public sealed record CalPage(string Key, string Name, string Category, string Bl
     public static readonly string[] InputsAlwaysOn = [.. GpoInputs[..7], "Always on", "Disabled"];
     public static readonly int[] InputValuesAlwaysOn = [1, 2, 4, 8, 16, 32, 64, 128, 0];
 
+    /// A skeleton ROM with the serial inputs built in takes them as switch inputs too: C0h-C7h, on while the value is not 0.
+    public static readonly string[] SerialSwitchInputs = [.. Enumerable.Range(1, 8).Select(i => $"Serial input {i} (on when not 0)")];
+    public static readonly int[] SerialSwitchValues = [0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7];
+
+    /// A switch-input row's choices for this ROM: the serial inputs added when it has them (SerialInputNumber is the serial inputs module's).
+    public static (string[] Options, int[]? Values) WithSerialInputs(DefinitionSet defs, string[] options, int[]? values)
+    {
+        bool switchRow = values != null && (values.SequenceEqual(InputValues) || values.SequenceEqual(InputValuesAlwaysOn));
+        return switchRow && defs.Find("SerialInputNumber") != null ? ([.. options, .. SerialSwitchInputs], [.. values!, .. SerialSwitchValues]) : (options, values);
+    }
+
     /// The general-purpose output pages, laid out exactly as the established tuning software lays them out: the input and output it is wired to, the window of conditions that switches it, and the options.
     public static CalPage Gpo(int n) => new(
         $"gpo{n}", $"General purpose output {n}", "GPO",

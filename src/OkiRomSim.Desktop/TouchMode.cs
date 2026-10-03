@@ -63,14 +63,14 @@ public sealed class TouchPad : Border
     readonly Action<string> _setAmount;
     readonly ToggleButton _extend = Toggle("Select\nmore", "On: the arrows grow the selection (as Shift+arrows do). Off: they move it.");
 
-    static readonly IBrush Up = new SolidColorBrush(Color.FromRgb(0x2f, 0x7d, 0x46));
-    static readonly IBrush Down = new SolidColorBrush(Color.FromRgb(0x9a, 0x3b, 0x2c));
+    static readonly IBrush Up = AppTheme.Brush(Color.FromRgb(0x2f, 0x7d, 0x46));
+    static readonly IBrush Down = AppTheme.Brush(Color.FromRgb(0x9a, 0x3b, 0x2c));
 
     /// adjust: the page's actions on the selection ("set", "add", "pct" with the amount box, "ih", "iv", "smooth"); the amount box is read and written through amount / setAmount (the keypad fills it).
     public TouchPad(TableGrid grid, Action<string> adjust, Func<string?> amount, Action<string> setAmount, Action undo, Action redo)
     {
         _grid = grid; _adjust = adjust; _amount = amount; _setAmount = setAmount;
-        Background = new SolidColorBrush(Color.FromRgb(0x1b, 0x1c, 0x20));
+        Background = AppTheme.Brush(Color.FromRgb(0x1b, 0x1c, 0x20));
         CornerRadius = new CornerRadius(6);
         Padding = new Thickness(6);
         Margin = new Thickness(6, 0, 0, 0);

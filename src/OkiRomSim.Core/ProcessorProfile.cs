@@ -29,6 +29,8 @@ public sealed class ProcessorProfile
     public List<string> QfpPins { get; set; } = [];
     /// What the board connects to each port pin ("P2.0" -> "injector 1 pattern bit").
     public Dictionary<string, string> PinFunctions { get; set; } = [];
+    /// What each pin of the board's 8255 PPI does ("PA7", "PB0", "PC4"...): drawn beside the processor in the chip view. Empty: the board has none, or it is not traced.
+    public Dictionary<string, string> PpiFunctions { get; set; } = [];
     /// Descriptions of the power / control pins ("OSC0" -> "10 MHz crystal").
     public Dictionary<string, string> OtherPins { get; set; } = [];
     /// Cylinder number of each injector pattern bit P2.0..P2.3 (the firing order on the P28).
@@ -140,8 +142,23 @@ public sealed class ProcessorProfile
         QfpPins = [.. QfpDefault],
         PinFunctions = new()
         {
-            ["P0.7"] = "P0 latch -> 8255 PB7: fuel pump relay (low = on)",
-            ["P1.0"] = "P1 latch -> 8255 PC0: VTEC solenoid (high = on)",
+            // the outputs flashed one at a time on a car (2026-10): P0 is mirrored on the 8255's port B, P1 on its port C
+            ["P0.0"] = "P0 latch -> 8255 PB0: A/C compressor clutch relay (pin A15, low = on)",
+            ["P0.1"] = "P0 latch -> 8255 PB1: EVAP purge solenoid (pin A20)",
+            ["P0.2"] = "P0 latch -> 8255 PB2: AltC",
+            ["P0.3"] = "P0 latch -> 8255 PB3: radiator fan",
+            ["P0.4"] = "P0 latch -> 8255 PB4: A/T lock-up",
+            ["P0.5"] = "P0 latch -> 8255 PB5: alternator control (pin A16)",
+            ["P0.6"] = "P0 latch -> 8255 PB6: not traced",
+            ["P0.7"] = "P0 latch -> 8255 PB7: fuel pump relay (low = on: the pump should buzz)",
+            ["P1.0"] = "P1 latch -> 8255 PC0: VTEC solenoid (high = on: may click)",
+            ["P1.1"] = "P1 latch -> 8255 PC1: not traced",
+            ["P1.2"] = "P1 latch -> 8255 PC2: O2 sensor heater (pin A6)",
+            ["P1.3"] = "P1 latch -> 8255 PC3: not traced",
+            ["P1.4"] = "P1 latch -> 8255 PC4: check-engine lamp (pin A13)",
+            ["P1.5"] = "P1 latch -> 8255 PC5: the LED on the ECU board",
+            ["P1.6"] = "P1 latch -> 8255 PC6: not traced",
+            ["P1.7"] = "P1 latch -> 8255 PC7: not traced",
             ["P2.0"] = "injector 1 pattern bit (low = selected)",
             ["P2.1"] = "injector 3 pattern bit (low = selected)",
             ["P2.2"] = "injector 4 pattern bit (low = selected)",
@@ -160,7 +177,7 @@ public sealed class ProcessorProfile
             ["P3.7"] = "timer-3 compare output (ignition timing)",
             ["P4.1"] = "power-good sense (low = on)",
             ["P4.2"] = "EGR (PWM0)",
-            ["P4.3"] = "A/T lockup (PWM1)",
+            ["P4.3"] = "boost solenoid output of the EBC (stock: A/T lock-up PWM1, pin A17)",
             ["P4.4"] = "cylinder position CYP (TRNS0)",
             ["P4.5"] = "ICM test: igniter feedback (TRNS1)",
             ["P4.6"] = "injector test: driver feedback (TRNS2); some ROMs also test it in VTEC logic",
@@ -172,6 +189,21 @@ public sealed class ProcessorProfile
             ["P5.5"] = "spare input (battery voltage is on the U6 mux)",
             ["P5.6"] = "MAP sensor",
             ["P5.7"] = "throttle position TPS",
+        },
+        PpiFunctions = new()
+        {
+            ["PA0"] = "knock detector output (sampled at every spark)", ["PA1"] = "knock detector output (sampled at every spark)",
+            ["PA2"] = "must keep changing or code 24 sets (the board model feeds it a square wave)", ["PA3"] = "power-steering pressure switch (B8)",
+            ["PA4"] = "unused", ["PA5"] = "VTEC solenoid feedback (low while it is on; code 21)", ["PA6"] = "O2 sensor heater feedback (code 41)",
+            ["PA7"] = "service check connector (D4)",
+            ["PB0"] = "A/C compressor clutch relay (pin A15, low = on) - mirrors P0.0", ["PB1"] = "EVAP purge solenoid (pin A20) - mirrors P0.1",
+            ["PB2"] = "AltC - mirrors P0.2", ["PB3"] = "radiator fan - mirrors P0.3", ["PB4"] = "A/T lock-up - mirrors P0.4",
+            ["PB5"] = "alternator control (pin A16) - mirrors P0.5", ["PB6"] = "not traced - mirrors P0.6",
+            ["PB7"] = "fuel pump relay (low = on: the pump should buzz) - mirrors P0.7",
+            ["PC0"] = "VTEC solenoid (high = on: may click) - mirrors P1.0", ["PC1"] = "not traced - mirrors P1.1",
+            ["PC2"] = "O2 sensor heater (pin A6) - mirrors P1.2", ["PC3"] = "not traced - mirrors P1.3",
+            ["PC4"] = "check-engine lamp (pin A13) - mirrors P1.4", ["PC5"] = "the LED on the ECU board - mirrors P1.5",
+            ["PC6"] = "not traced - mirrors P1.6", ["PC7"] = "not traced - mirrors P1.7",
         },
         OtherPins = new()
         {

@@ -14,6 +14,7 @@ namespace OkiRomSim.Desktop;
 /// Settings: appearance, panel zoom, colours, hot keys, datalogging (ports, protocol, wideband, aux channels), hit trace and the ROM emulator, the processor profile, and the MCP server for other programs. Works on a copy; Save hands it back and the main window applies it.
 public sealed class SettingsWindow : Window
 {
+    static readonly JsonSerializerOptions McpJson = new() { WriteIndented = true };
     readonly AppSettings _s;
     readonly Func<string> _mcpStatus;
     public AppSettings? Result { get; private set; }
@@ -60,6 +61,29 @@ public sealed class SettingsWindow : Window
         tabs.Items.Add(Page("Hot keys", HotKeys(), out var keyBar));
         keyBar.Children.Add(Button("Reset hot keys", () => { _s.HotKeys = AppSettings.DefaultHotKeys(); _s.TableHotKeys = TableKeys.Defaults(); Reopen(tabs, "Hot keys", HotKeys()); }));
         _tabs = tabs;
+        tabs.Items.Add(Page("Units", UnitsPage(), out var unitBar));
+        unitBar.Children.Add(Button("All metric", () => { _s.Units = UnitSettings.Metric(); Reopen(tabs, "Units", UnitsPage()); }));
+        unitBar.Children.Add(Button("All imperial (US)", () => { _s.Units = UnitSettings.ImperialUs(); Reopen(tabs, "Units", UnitsPage()); }));
+        unitBar.Children.Add(Button("UK mix (mph, lb-ft, °C)", () => { _s.Units = UnitSettings.ImperialUk(); Reopen(tabs, "Units", UnitsPage()); }));
+        unitBar.Children.Add(Button("As it was", () => { _s.Units = new UnitSettings(); Reopen(tabs, "Units", UnitsPage()); }));
+        tabs.Items.Add(Page("Dyno", DynoPage(), out var dynoBar));
+        dynoBar.Children.Add(Button("Restore the default profiles", () =>
+        {
+            int n = DynoWindow.RestoreDefaultProfiles();
+            _dynoNote.Text = $"{n} default profile(s) written to {DynoWindow.ProfilesDir} (any you changed or deleted with those names is put back).";
+        }));
+        dynoBar.Children.Add(Button("Clear all saved runs…", async () =>
+        {
+            int count = Directory.Exists(DynoWindow.RunsDir) ? Directory.GetFiles(DynoWindow.RunsDir, "*.json").Length : 0;
+            if (count == 0) { _dynoNote.Text = "There are no saved runs."; return; }
+            if (!await Dialogs.Confirm(this, "Delete every run?", $"Delete all {count} saved dyno run(s)? They cannot be brought back. The profiles stay.", "Delete them all", "Keep")) return;
+            _dynoNote.Text = $"{DynoWindow.ClearAllRuns()} run(s) deleted (an open dyno window shows them until it is opened again).";
+        }));
+        dynoBar.Children.Add(Button("Open the dyno folder", () =>
+        {
+            try { Directory.CreateDirectory(DynoWindow.Folder); System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(DynoWindow.Folder) { UseShellExecute = true }); } catch { }
+        }));
+        dynoBar.Children.Add(Button("Reset these settings", () => { _s.Dyno = new DynoSettings(); Reopen(tabs, "Dyno", DynoPage()); }));
         tabs.Items.Add(Page("Emulator & datalog", EmulatorAndDatalog()));
         tabs.Items.Add(Page("Targets", Targets(), out var targetBar));
         tabs.Items.Add(Page("Corrections", Corrections()));
@@ -437,7 +461,7 @@ public sealed class SettingsWindow : Window
             box.Children.Add(body);
             outer.Children.Add(new Border
             {
-                BorderBrush = new SolidColorBrush(Color.FromArgb(64, 255, 255, 255)),
+                BorderBrush = AppTheme.Brush(Color.FromArgb(64, 255, 255, 255)),
                 BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4),
                 Margin = new Thickness(0, 0, 0, 10), Child = box,
             });
@@ -560,6 +584,35 @@ public sealed class SettingsWindow : Window
         var version = new TextBlock { Text = BuildInfo.Version, VerticalAlignment = VerticalAlignment.Center, FontFamily = MainWindow.MonoFont, IsHitTestVisible = true };
         p.Children.Add(Row("Version", version, "Which build of " + BuildInfo.Product + " this is. Quote it when reporting something so the version can be matched."));
 
+        var langs = Lang.Available();
+        var language = new ComboBox
+        {
+            ItemsSource = langs.Select(l => l.English.Length > 0 && l.English != l.Language ? $"{l.Language}  ({l.English})" : l.Language).ToList(),
+            SelectedIndex = Math.Max(0, langs.FindIndex(l => l.Code.Equals(_s.Language, StringComparison.OrdinalIgnoreCase))), Width = 260,
+        };
+        language.SelectionChanged += (_, _) => { if (language.SelectedIndex >= 0) _s.Language = langs[language.SelectedIndex].Code; };
+        var langRow = new WrapPanel();
+        langRow.Children.Add(language);
+        var langFolder = new Button { Content = "Folder", Margin = new Thickness(6, 0, 0, 0) };
+        ToolTip.SetTip(langFolder, "Open your lang folder: a .json file put here (a copy of one of the program's, changed) is offered in the list the next time the app starts.");
+        langFolder.Click += (_, _) =>
+        {
+            var dir = Path.Combine(AppSettings.Dir, "lang");
+            try { Directory.CreateDirectory(dir); System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dir) { UseShellExecute = true }); } catch { }
+        };
+        langRow.Children.Add(langFolder);
+        var missing = new Button { Content = "Save the text not translated yet", Margin = new Thickness(6, 0, 0, 0) };
+        ToolTip.SetTip(missing, "With a language in use: write the English text seen on screen that has no translation yet to lang\\missing-<language>.json in your lang folder, ready to fill in.");
+        missing.Click += (_, _) =>
+        {
+            if (Lang.Current == "en") { missing.Content = "Pick a language and restart first"; return; }
+            try { var f = Lang.WriteMissing(); missing.Content = $"{Lang.MissingCount} written to {Path.GetFileName(f)}"; } catch (Exception ex) { missing.Content = ex.Message; }
+        };
+        langRow.Children.Add(missing);
+        p.Children.Add(Row("Language", langRow,
+            "The language the app is shown in. Each one is a .json file in the lang folder beside the program (and in yours): English text and its translation, " +
+            "easy to edit by hand. Text not in a file stays English. Takes full effect when the app starts again."));
+
         string[] starts = ["simulator", "tuner", "last"];
         var startIn = new ComboBox
         {
@@ -652,6 +705,80 @@ public sealed class SettingsWindow : Window
         return Grouped(p);
     }
 
+    /// Settings > Units: the unit each kind of measurement is shown in, any mix of metric and imperial.
+    Control UnitsPage()
+    {
+        var p = new StackPanel();
+        p.Children.Add(Note("Every value the app shows - the datalog, its graph and gauges, the maps and settings, the virtual dyno - is shown in these units, " +
+                            "and what you type in them is put back into the unit the ROM keeps. Mix them as you like: the buttons above set them all at once. " +
+                            "\"as is\" keeps a pressure in the unit the ROM or log has it in (kPa for MAP, mBar on a load axis)."));
+        foreach (var q in Enum.GetValues<Quantity>())
+        {
+            var choices = Units.Choices[q];
+            var box = new ComboBox { ItemsSource = choices, Width = 140, SelectedIndex = Math.Max(0, Array.IndexOf(choices, _s.Units.Get(q))) };
+            box.SelectionChanged += (_, _) => { if (box.SelectedItem is string u) _s.Units.Set(q, u); };
+            p.Children.Add(Row(Units.Names[q], box, $"{Units.Names[q]}: {string.Join(", ", choices)}."));
+        }
+        p.Children.Add(Note($"Lambda is worked out from AFR with the stoichiometric ratio set on the Emulator & datalog page (now {_s.StoichAfr:0.0#})."));
+        return Grouped(p);
+    }
+
+    readonly TextBlock _dynoNote = new() { FontSize = 11, Opacity = 0.85, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4) };
+
+    /// Settings > Dyno: what the virtual dyno shows and how it works it out, the same for every profile.
+    Control DynoPage()
+    {
+        var d = _s.Dyno;
+        var p = new StackPanel();
+        p.Children.Add(_dynoNote);
+        p.Children.Add(Note("The dyno window keeps what changes from car to car - the car or the roller, the air on the day, the triggers. These are the same for every profile. " +
+                            "Power, torque, weight, speed and pressure are in the units picked on the Units page."));
+        NumericUpDown Num(double v, double min, double max, double step, string fmt, Action<double> set)
+        {
+            var n = new NumericUpDown { Minimum = (decimal)min, Maximum = (decimal)max, Increment = (decimal)step, Value = (decimal)Math.Clamp(v, min, max), FormatString = fmt, Width = 140 };
+            n.ValueChanged += (_, e) => { if (e.NewValue is decimal x) set((double)x); };
+            return n;
+        }
+        p.Children.Add(Section("Results"));
+        p.Children.Add(Check("Show the crank estimate (else at the wheels)", d.ShowCrank, v => d.ShowCrank = v,
+            "The power at the wheels with the drivetrain loss added back: an estimate of what the engine makes at the crank."));
+        p.Children.Add(Row("Drivetrain loss (%)", Num(d.DrivetrainLossPct, 0, 50, 1, "0", v => d.DrivetrainLossPct = v), "For the crank estimate: about 12-15 % for a front-wheel-drive manual."));
+        p.Children.Add(Row("Smoothing (0-10)", Num(d.Smoothing, 0, 10, 1, "0", v => d.Smoothing = (int)v), "How much the acceleration is smoothed: 0 is raw, 5 suits most logs."));
+        p.Children.Add(Row("Rpm step", Num(d.RpmStep, 25, 500, 25, "0", v => d.RpmStep = v), "The curve is averaged in steps of this many rpm."));
+        var xs = new[] { "rpm", "time", "speed" };
+        var x = new ComboBox { ItemsSource = xs, SelectedIndex = Math.Max(0, Array.IndexOf(xs, d.XAxis)), Width = 140 };
+        x.SelectionChanged += (_, _) => { if (x.SelectedItem is string v) d.XAxis = v; };
+        p.Children.Add(Row("Graph against", x, "What the graph is drawn against when the dyno opens."));
+
+        p.Children.Add(Section("Correction to standard air"));
+        string[] corr = ["None (as measured)", "SAE J1349", "DIN 70020", "SAE J607 (STD)", "ECE / EEC"];
+        var c = new ComboBox { ItemsSource = corr, SelectedIndex = (int)d.Correction, Width = 220 };
+        c.SelectionChanged += (_, _) => { if (c.SelectedIndex >= 0) d.Correction = (DynoCorrection)c.SelectedIndex; };
+        p.Children.Add(Row("Standard", c, "What the engine would make on a standard day: SAE J1349 (25 °C, 99 kPa dry) is the usual one."));
+        p.Children.Add(Check("Air temperature and pressure from the ECU (intake air, baro) when it logs them", d.AirFromEcu, v => d.AirFromEcu = v,
+            "Else the air on the day typed into the dyno window's profile is used."));
+        p.Children.Add(Row("Humidity (%)", Num(d.HumidityPct, 0, 100, 1, "0", v => d.HumidityPct = v), "The air's relative humidity, for the correction."));
+
+        p.Children.Add(Section("AFR"));
+        var chans = new[] { "afr", "lambda", "o2_v", "wb_v", "egr_in_v", "b6_in_v", "egr_v", "b6_v", "serin1", "serin2", "serin3", "serin4" };
+        var ch = new ComboBox { ItemsSource = chans, SelectedItem = chans.Contains(d.AfrChannel) ? d.AfrChannel : "afr", Width = 140 };
+        ch.SelectionChanged += (_, _) => { if (ch.SelectedItem is string v) d.AfrChannel = v; };
+        p.Children.Add(Row("From the channel", ch, "afr: a wideband on its own port, or an aux channel. o2_v / wb_v / egr_in_v / b6_in_v: a wideband's analog output wired to an ECU input (convert it below)."));
+        p.Children.Add(Check("The channel is volts: convert it", d.AfrFromVolts, v => d.AfrFromVolts = v, "AFR = the AFR at 0 V + (at 5 V - at 0 V) x volts / 5."));
+        p.Children.Add(Row("AFR at 0 V", Num(d.AfrAt0V, 0, 30, 0.1, "0.0", v => d.AfrAt0V = v), "From the wideband's manual: most read 10 AFR at 0 V and 20 at 5 V (AEM UEGO: 8.5 - 18)."));
+        p.Children.Add(Row("AFR at 5 V", Num(d.AfrAt5V, 0, 40, 0.1, "0.0", v => d.AfrAt5V = v), "The AFR the wideband's output reads at 5 V."));
+        p.Children.Add(Row("Offset (AFR)", Num(d.AfrOffset, -5, 5, 0.05, "0.00", v => d.AfrOffset = v), "Added after the conversion: to match a gauge, or a voltage the ECU reads low."));
+
+        p.Children.Add(Section("Runs"));
+        var keys = new ComboBox { ItemsSource = VirtualDyno.HotKeys, SelectedItem = VirtualDyno.HotKeys.Contains(d.HotKey) ? d.HotKey : "Space", Width = 140 };
+        keys.SelectionChanged += (_, _) => { if (keys.SelectedItem is string v) d.HotKey = v; };
+        p.Children.Add(Row("Hotkey", keys, "Starts and ends a run like the Start button, wherever the focus is in the dyno window."));
+        p.Children.Add(Check("Auto start on when the dyno opens", d.ArmOnOpen, v => d.ArmOnOpen = v,
+            "On: the dyno waits for the start conditions as soon as it opens. Off: it starts idle, and Auto start (or the Start button) begins."));
+        p.Children.Add(Note($"Profiles and runs are kept in {DynoWindow.Folder}. A project saves them too (File > Save project)."));
+        return Grouped(p);
+    }
+
     static readonly (string Key, string Label)[] Panels =
     {
         ("Source", "Source editor"), ("Pinout", "Chip pinout"), ("Inputs", "Engine inputs"), ("Right", "CPU / disassembly / outputs"),
@@ -684,6 +811,13 @@ public sealed class SettingsWindow : Window
     Control Colours()
     {
         var p = new StackPanel();
+        // the theme: dark (the default), light, or high contrast for the sun
+        var theme = new ComboBox { Width = 200, ItemsSource = new[] { "Dark", "Light", "High contrast" }, SelectedIndex = (int)AppTheme.Parse(_s.Theme) };
+        theme.SelectionChanged += (_, _) => _s.Theme = AppTheme.Name((AppTheme.Mode)Math.Max(0, theme.SelectedIndex));
+        p.Children.Add(Row("Theme", theme,
+            "Dark is the default. Light: dark text on white. High contrast, for a laptop out in the sun: every window in black and white, " +
+            "with the colours that mean something (outputs, warnings, the graphs' traces) at full strength and faded text brought up. " +
+            "Every window changes at once; Ctrl+Shift+H goes round the three."));
         void Colour(string label, Func<string> get, Action<string> set, string tip)
         {
             var picker = new ColorPicker { Color = Parse(get()), Width = 90 };
@@ -743,8 +877,7 @@ public sealed class SettingsWindow : Window
             {
                 var key = Norm(get());
                 var other = key.Length == 0 ? [] : AllKeys().Where(k => k.Key == key && !(k.Where == where && k.Action == action)).ToList();
-                // a table key the same as a program key is fine while the table has the keyboard (the table's wins), but worth knowing
-                // a null brush draws nothing: the text went invisible. Clear it back to the theme's colour instead
+                // a table key the same as a program key is fine while the table has the keyboard (the table's wins), but worth knowing a null brush draws nothing: the text went invisible. Clear it back to the theme's colour instead
                 if (other.Count > 0) box.Foreground = Brushes.Orange; else box.ClearValue(TextBox.ForegroundProperty);
                 ToolTip.SetTip(box, other.Count > 0
                     ? "Also: " + string.Join(", ", other.Select(o => $"{o.Action} ({o.Where})")) +
@@ -1234,7 +1367,9 @@ public sealed class SettingsWindow : Window
                 // a second a port: one that does not answer in that time (or hangs opening) is left to finish on its own
                 bool gaveUp = false;
                 var probe = Task.Run(() => ProbeEmulatorPort(port, _s.EmulatorBaud, () => gaveUp));
-                if (await Task.WhenAny(probe, Task.Delay(1000)) == probe) hit = probe.Result;
+                bool answered;
+                try { await probe.WaitAsync(TimeSpan.FromSeconds(1)); answered = true; } catch (TimeoutException) { answered = false; }
+                if (answered) hit = probe.Result;
                 else { gaveUp = true; AppLog.Write(LogKind.Serial, "emulator", $"detect {port}: no answer in 1 s, next port"); }
                 if (hit != null) break;
             }
@@ -1374,13 +1509,13 @@ public sealed class SettingsWindow : Window
 
         p.Children.Add(Note("Status: " + _mcpStatus()));
 
-        var exe = Environment.ProcessPath ?? "OkiRomSimStudio.exe";
+        var exe = Environment.ProcessPath ?? "RomSimStudio.exe";
         string root = _s.McpRoots.FirstOrDefault() ?? "<your ROM folder>";
-        string stdio = JsonSerializer.Serialize(new { mcpServers = new { okirom = new { command = exe, args = new[] { "--mcp", "--root", root } } } }, new JsonSerializerOptions { WriteIndented = true });
+        string stdio = JsonSerializer.Serialize(new { mcpServers = new { okirom = new { command = exe, args = new[] { "--mcp", "--root", root } } } }, McpJson);
         string http = JsonSerializer.Serialize(new
         {
             mcpServers = new { okirom = new { type = "http", url = $"http://{(_s.McpRemote ? Environment.MachineName : "127.0.0.1")}:{_s.McpPort}/mcp", headers = new Dictionary<string, string> { ["Authorization"] = "Bearer <password>" } } },
-        }, new JsonSerializerOptions { WriteIndented = true });
+        }, McpJson);
         p.Children.Add(Code("Local clients over stdio (the client starts the server itself: run \"" + exe + "\" --mcp --root <folder>)", stdio));
         p.Children.Add(Code("Clients connecting to this app's HTTP server (they work on the ROM open here)", http));
         return Grouped(p);

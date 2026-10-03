@@ -21,7 +21,7 @@ static class Form
         foreach (var r in rows) inner.Children.Add(r);
         return new Border
         {
-            BorderBrush = new SolidColorBrush(Color.FromArgb(70, 255, 255, 255)),
+            BorderBrush = AppTheme.Brush(Color.FromArgb(70, 255, 255, 255)),
             BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4),
             Margin = new Thickness(0, 4, 0, 8),
             Child = new StackPanel
@@ -115,9 +115,11 @@ static class Form
 
 // ---------------------------------------------------------------- injectors
 
-/// Injector calibration, laid out the way the established tuning software does it: the size the calibration was written for, the size fitted, the multiplier that follows from the two, the injector offset (dead time) and the fuel trims. The multiplier is the whole point: bigger injectors flow more, so the same air needs a shorter pulse, and every fuel table is scaled by stock / fitted. Where the ROM's definitions carry a multiplier, an offset or a trim setting of their own, those are written too, so the ECU is told the same thing twice over rather than only having its maps moved.
+/// Injector calibration, laid out the way the established tuning software does it: the size the calibration was written for, the size fitted, the multiplier that follows from the two, the injector offset and the dead time against battery voltage - picked from the injector presets, or typed in and kept as your own - and the fuel trims. The size change is made once, the way the ROM does it best: on a skeleton ROM with the injector size module, its stock and fitted sizes (the module scales every pulse, the other modules' trims with it); on an HTS ROM, its own multiplier (stock / fitted on every pulse, held to x2 - past that the fuel maps take the rest); otherwise every fuel table is scaled. Never two of them, which would scale the fuel twice.
 public sealed class InjectorWindow : Window
 {
+    enum Way { StockFitted, Multiplier, Maps }
+
     readonly SimHost _host;
     // two lines at most; the whole report is on its tooltip
     readonly TextBlock _preview = new()
@@ -129,65 +131,221 @@ public sealed class InjectorWindow : Window
     readonly TextBlock _multiplier = new() { FontFamily = MainWindow.MonoFont, VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeight.Bold };
     readonly CheckBox _scaleMaps = new() { Content = "scale every fuel table by the multiplier", IsChecked = true, Margin = new Thickness(0, 6, 0, 0) };
     readonly CheckBox _trimsToo = new() { Content = "set the cranking and tip-in trims to suit the new injectors", Margin = new Thickness(0, 2, 0, 0) };
-    readonly ItemDef? _dMult, _dOffset, _dOverall, _dCrank, _dPost, _dTip;
+    readonly ItemDef? _dEnable, _dStock, _dFitted, _dMult, _dOffset, _dOverall, _dCrank, _dPost, _dTip;
+    readonly Way _way;
+    /// The most the HTS multiplier word holds (FFFFh / 8000h).
+    const double MultMax = 65535.0 / 32768;
+
+    // the dead time against battery voltage: the injector picked, and the 7 points it gives (or that were typed)
+    readonly ComboBox _lagPick = new() { MinWidth = 300, MaxWidth = 360 };
+    readonly NumericUpDown[] _volts = new NumericUpDown[7], _lagMs = new NumericUpDown[7];
+    readonly CheckBox _sizeFromPick = new() { Content = "set the new injector size from the injector picked", IsChecked = true, Margin = new Thickness(0, 4, 0, 0) };
+    readonly TextBox _myName = new() { Watermark = "name for your own", Width = 180 };
+    readonly InjectorPreset? _romLag;
+    List<InjectorPreset> _lags = [];
+    List<InjectorPreset> _mine = [];
+    bool _filling;
+    /// What each box showed when the window opened: a setting is written only when its box was changed, so a value shown rounded (a dead time of 0.026 ms as 0.03) is never written back slightly different.
+    readonly Dictionary<NumericUpDown, decimal?> _opened = [];
+
     public bool Applied { get; private set; }
+
+    /// Your own injectors' dead times: kept beside the settings, offered first wherever an injector is picked.
+    public static string MyInjectorsPath => Path.Combine(AppSettings.Dir, "injectors.json");
+
+    /// Every injector to pick from: your own first, then the presets.
+    public static List<InjectorPreset> AllLags(out List<InjectorPreset> mine)
+    {
+        mine = InjectorLag.LoadUser(MyInjectorsPath);
+        var all = new List<InjectorPreset>(mine);
+        try { if (NewRomWindow.Templates() is { } t) all.AddRange(PresetLibrary.Load(Path.Combine(t, "Presets")).Injectors); }
+        catch (Exception ex) { AppLog.Error("injectors", "presets could not be read", ex); }
+        return all;
+    }
 
     public InjectorWindow(SimHost host)
     {
         _host = host;
         Title = "Injector calibration";
         // sized to what it holds, so every control is on screen when it opens
-        Width = 520; MinWidth = 460; SizeToContent = SizeToContent.Height; MaxHeight = 760;
+        Width = 600; MinWidth = 520; SizeToContent = SizeToContent.Height; MaxHeight = 900;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
         var defs = _host.Defs();
-        _dMult = Form.Find(defs, "injmultiplier", "injectormultiplier", "fuelmultiplier");
-        _dOffset = Form.Find(defs, "deadtime", "injoffset", "injectoroffset", "injlatency");
-        _dOverall = Form.Find(defs, "totalfueltrim", "overallfuel", "globalfuel", "fueltrim");
-        _dCrank = Form.Find(defs, "crankfuel", "crankingtrim", "cranktrim");
-        _dPost = Form.Find(defs, "poststartfuel", "poststarttrim", "afterstart");
-        _dTip = Form.Find(defs, "tpstipin", "tipin");
+        ItemDef? Slot(string slot, params string[] words) => CalPage.Bound(defs, slot) ?? (words.Length > 0 ? Form.Find(defs, words) : null);
+        _dEnable = CalPage.Bound(defs, "injector.enable");
+        _dStock = CalPage.Bound(defs, "injector.stock");
+        _dFitted = CalPage.Bound(defs, "injector.fitted");
+        _dMult = Slot("injector.multiplier", "injmultiplier", "injectormultiplier");
+        _dOffset = Slot("injector.deadtime", "deadtime", "injoffset", "injectoroffset", "injlatency");
+        _dOverall = Slot("injector.overall") ?? Slot("injector.trim", "totalfueltrim", "overallfuel", "globalfuel");
+        _dCrank = Slot("injector.crank", "crankfuel", "crankingtrim", "cranktrim");
+        _dPost = Slot("injector.postfuel", "poststartfuel", "poststarttrim", "afterstart");
+        _dTip = Slot("injector.tipin", "tpstipin", "tipin");
+        _way = _dStock != null && _dFitted != null ? Way.StockFitted : _dMult != null ? Way.Multiplier : Way.Maps;
 
-        _stock = Form.Num(240, 1, 3000, 10, "0");
-        _fitted = Form.Num(310, 1, 3000, 10, "0");
-        _offset = Form.Num(Read(_dOffset, 0.9), 0, 10, 0.05, "0.00");
+        double stock = 240, fitted = 240;
+        if (_way == Way.StockFitted) { stock = Read(_dStock, 240); fitted = Read(_dFitted, 240); }
+        else if (_way == Way.Multiplier && Read(_dMult, 1) is var m && m > 0.01) fitted = Math.Round(stock / m);
+        _stock = Form.Num(stock, 1, 3000, 10, "0");
+        _fitted = Form.Num(fitted, 1, 3000, 10, "0");
+        _offset = Form.Num(Read(_dOffset, 0), 0, 10, 0.01, "0.00");
         _overall = Form.Num(Read(_dOverall, 0), -50, 50, 0.5, "0.0");
         _crank = Form.Num(Read(_dCrank, 0), -50, 50, 0.5, "0.0");
         _postStart = Form.Num(Read(_dPost, 0), -50, 50, 0.5, "0.0");
         _tipIn = Form.Num(Read(_dTip, 0), -50, 50, 0.5, "0.0");
         foreach (var n in new[] { _stock, _fitted, _offset, _overall, _crank, _postStart, _tipIn })
+        {
+            _opened[n] = n.Value;
             n.ValueChanged += (_, _) => Preview();
+        }
         _scaleMaps.IsCheckedChanged += (_, _) => Preview();
+        _scaleMaps.IsVisible = _way == Way.Maps;
         _trimsToo.IsCheckedChanged += (_, _) => Preview();
+
+        // the dead time against battery voltage
+        _romLag = InjectorLag.Read(defs, _host.RomCopy());
+        for (int i = 0; i < 7; i++)
+        {
+            _volts[i] = SmallNum(_romLag != null && i < _romLag.Volts.Length ? _romLag.Volts[i] : 0, 0, 30, "0.00");
+            _lagMs[i] = SmallNum(_romLag != null && i < _romLag.LagMs.Length ? _romLag.LagMs[i] : 0, 0, 10, "0.00");
+            _volts[i].ValueChanged += (_, _) => { if (!_filling) Preview(); };
+            _lagMs[i].ValueChanged += (_, _) => { if (!_filling) Preview(); };
+        }
+        FillLagList(null);
+        _lagPick.SelectionChanged += (_, _) => PickLag();
 
         // The explanations live in tooltips (hover a row); on the page each row is just the label, the box and the unit, plus a dash when this ROM has no such setting to write.
         var page = Form.Page();
-        page.Children.Add(Form.Note("Every fuel table is scaled by stock / fitted. Any unit works for the sizes - only the ratio matters."));
+        page.Children.Add(Form.Note(_way switch
+        {
+            Way.StockFitted => "The ROM's injector size setting scales every pulse (and every other trim with it). The fuel maps are left as they are.",
+            Way.Multiplier => "The ROM's multiplier (stock / fitted) scales every pulse. The fuel maps are left as they are, unless the change is more than it holds (x2).",
+            _ => "Every fuel table is scaled by stock / fitted. Any unit works for the sizes - only the ratio matters.",
+        }));
         page.Children.Add(Form.Group("Injector calibration",
-            Row("Stock injector", _stock, "cc", null,
+            Row("Stock injector", _stock, "cc", _dStock,
                 "The injectors the calibration was written for. Together with the size fitted this gives the multiplier."),
-            Row("New injector", _fitted, "cc", null,
+            Row("New injector", _fitted, "cc", _dFitted,
                 "The injectors in the engine now. Bigger ones get a shorter pulse."),
             Row("Final multiplier", _multiplier, "", _dMult,
-                "Stock divided by fitted: what every fuel table (and the ROM's own multiplier, where it has one) is scaled by."),
+                "Stock divided by fitted: what every pulse is scaled by."),
             Row("Injector offset", _offset, "ms", _dOffset,
-                "Dead time: how long an injector takes to start flowing after it is switched on."),
+                "Added to every pulse, on top of the dead time below: how long an injector takes to start flowing after it is switched on."),
             _scaleMaps,
             _trimsToo));
+        page.Children.Add(Form.Group("Dead time against battery voltage", LagRows()));
         page.Children.Add(Form.Group("Fuel trim",
             Row("Overall fuel", _overall, "%", _dOverall, "A trim on everything the fuel maps ask for."),
             Row("Cranking trim", _crank, "%", _dCrank, "Extra (or less) fuel while the starter is turning."),
             Row("Post start trim", _postStart, "%", _dPost, "Extra fuel for the first moments after it fires."),
             Row("TPS tip-in", _tipIn, "%", _dTip, "Extra fuel when the throttle is opened quickly.")));
-        var tables = FuelTables().ToList();
-        var tableNote = Form.Note(tables.Count == 0
-            ? "No fuel tables defined yet - press Detect on the Calibration page first."
-            : $"{tables.Count} fuel table{(tables.Count == 1 ? "" : "s")} will be scaled (hover for the list).");
-        if (tables.Count > 0) ToolTip.SetTip(tableNote, string.Join("\n", tables.Select(t => t.Name)));
-        page.Children.Add(tableNote);
+        if (_way == Way.Maps || _way == Way.Multiplier)
+        {
+            var tables = FuelTables().ToList();
+            var tableNote = Form.Note(tables.Count == 0
+                ? (_way == Way.Maps ? "No fuel tables defined yet - press Detect on the Calibration page first." : "")
+                : $"{tables.Count} fuel table{(tables.Count == 1 ? "" : "s")} {(_way == Way.Maps ? "will be scaled" : "take any change past x2")} (hover for the list).");
+            if (tables.Count > 0) ToolTip.SetTip(tableNote, string.Join("\n", tables.Select(t => t.Name)));
+            page.Children.Add(tableNote);
+        }
 
         Content = Form.Shell(this, "Injector calibration", page, _preview, Apply);
         Preview();
+    }
+
+    static NumericUpDown SmallNum(double v, double min, double max, string format) => new()
+    {
+        Value = (decimal)Math.Clamp(v, min, max), Minimum = (decimal)min, Maximum = (decimal)max, Increment = 0.01m, FormatString = format,
+        ShowButtonSpinner = false, Width = 50, MinWidth = 0, Padding = new Thickness(3, 2), HorizontalContentAlignment = HorizontalAlignment.Right,
+    };
+
+    /// The injector list, the 7 points (volts over ms), and keeping your own.
+    Control[] LagRows()
+    {
+        if (_romLag == null)
+            return [Form.Note("This ROM has no dead time table bound (Detect, or a ROM with the injector lag table), so there is nothing to set here.")];
+        ToolTip.SetTip(_lagPick, "The injector fitted: its dead time against battery voltage. Your own are at the top (★), then the presets. " +
+                                 "Typing in the points below changes them however they were picked.");
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("40," + string.Join(",", Enumerable.Repeat("Auto", 7))), RowDefinitions = new RowDefinitions("Auto,Auto"), Margin = new Thickness(0, 6, 0, 0) };
+        void Cell(Control c, int col, int row) { Grid.SetColumn(c, col); Grid.SetRow(c, row); c.Margin = new Thickness(0, 0, 4, 4); grid.Children.Add(c); }
+        Cell(new TextBlock { Text = "volts", FontSize = 11.5, Opacity = 0.75, VerticalAlignment = VerticalAlignment.Center }, 0, 0);
+        Cell(new TextBlock { Text = "ms", FontSize = 11.5, Opacity = 0.75, VerticalAlignment = VerticalAlignment.Center }, 0, 1);
+        for (int i = 0; i < 7; i++) { Cell(_volts[i], i + 1, 0); Cell(_lagMs[i], i + 1, 1); }
+        ToolTip.SetTip(grid, "The dead time (ms) at each battery voltage, highest voltage first as the ROM keeps it. Type your injector's own figures from its data sheet.");
+        var save = Form.Btn("Save as my own", SaveMine, "Keep these 7 points under the name typed, to pick again on any ROM (and in the Set-up wizard).");
+        var delete = Form.Btn("Delete", DeleteMine, "Take the injector picked out of your own list (only your own can be deleted).");
+        var mineRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 2, 0, 0), Children = { _myName, save, delete } };
+        return [Form.Row("Injector", _lagPick), grid, _sizeFromPick, mineRow];
+    }
+
+    void FillLagList(string? select)
+    {
+        _lags = AllLags(out _mine);
+        var names = new List<string> { "As in the ROM" };
+        names.AddRange(_lags.Select((l, i) => (i < _mine.Count ? "★ " : "") + l.Name));
+        _filling = true;
+        _lagPick.ItemsSource = names;
+        int at = select == null ? -1 : _lags.FindIndex(l => l.Name == select);
+        _lagPick.SelectedIndex = at < 0 ? 0 : at + 1;
+        _filling = false;
+    }
+
+    /// The UI check: pick the first injector whose name has this in it, and say what would be written.
+    internal string PickForCheck(string contains)
+    {
+        int i = _lags.FindIndex(l => l.Name.Contains(contains, StringComparison.OrdinalIgnoreCase));
+        if (i < 0) return "no injector named " + contains;
+        _lagPick.SelectedIndex = i + 1;
+        return $"{_lags[i].Name}: new size {_fitted.Value}, multiplier {_multiplier.Text} | {Build()?.Summary}";
+    }
+
+    InjectorPreset? Picked => _lagPick.SelectedIndex <= 0 ? _romLag : _lagPick.SelectedIndex - 1 < _lags.Count ? _lags[_lagPick.SelectedIndex - 1] : null;
+
+    void PickLag()
+    {
+        if (_filling || Picked is not { } p) return;
+        _filling = true;
+        for (int i = 0; i < 7; i++)
+        {
+            if (i < p.Volts.Length) _volts[i].Value = (decimal)Math.Clamp(p.Volts[i], 0, 30);
+            if (i < p.LagMs.Length) _lagMs[i].Value = (decimal)Math.Clamp(p.LagMs[i], 0, 10);
+        }
+        _filling = false;
+        if (_lagPick.SelectedIndex > 0 && _sizeFromPick.IsChecked == true && InjectorLag.SizeCc(p.Name) is int cc) _fitted.Value = cc;
+        Preview();
+    }
+
+    /// The 7 points as they are in the boxes now.
+    InjectorPreset Typed(string name) => new(name, [.. _volts.Select(Form.V)], [.. _lagMs.Select(Form.V)]);
+
+    void SaveMine()
+    {
+        var name = (_myName.Text ?? "").Trim();
+        if (name.Length == 0) { _preview.Text = "type a name for it first (the injector's make, size and ohms, say)"; return; }
+        var mine = _mine.Where(m => !m.Name.Equals(name, StringComparison.OrdinalIgnoreCase)).Prepend(Typed(name)).ToList();
+        try
+        {
+            InjectorLag.SaveUser(MyInjectorsPath, mine);
+            FillLagList(name);
+            _preview.Text = $"saved as your own: {name}";
+            AppLog.Action("injectors", "saved own dead time curve " + name);
+        }
+        catch (Exception ex) { _preview.Text = "could not save it: " + ex.Message; }
+    }
+
+    void DeleteMine()
+    {
+        int i = _lagPick.SelectedIndex - 1;
+        if (i < 0 || i >= _mine.Count) { _preview.Text = "pick one of your own (★) to delete it"; return; }
+        var name = _mine[i].Name;
+        try
+        {
+            InjectorLag.SaveUser(MyInjectorsPath, _mine.Where((_, k) => k != i));
+            FillLagList(null);
+            _preview.Text = $"{name} deleted from your own";
+        }
+        catch (Exception ex) { _preview.Text = "could not delete it: " + ex.Message; }
     }
 
     double Read(ItemDef? item, double fallback)
@@ -201,8 +359,8 @@ public sealed class InjectorWindow : Window
     static Control Row(string label, Control editor, string unit, ItemDef? writes, string tip)
     {
         bool settable = writes != null || unit == "cc";
-        var row = Form.Row(label, editor, unit, settable ? null : "\u2013",
-            tip + (unit == "cc" ? "" : "\n" + Where(writes)));
+        var row = Form.Row(label, editor, unit, settable ? null : "–",
+            tip + (unit == "cc" && writes == null ? "" : "\n" + Where(writes)));
         if (!settable) editor.Opacity = 0.6;
         return row;
     }
@@ -227,7 +385,7 @@ public sealed class InjectorWindow : Window
     void PreviewCore()
     {
         double f = Factor;
-        _multiplier.Text = f.ToString("0.000", CultureInfo.InvariantCulture);
+        _multiplier.Text = f.ToString("0.000", CultureInfo.InvariantCulture) + (_way == Way.Multiplier && f > MultMax ? "  (the ROM holds x2.000: the maps take the rest)" : "");
         if (_trimsToo.IsChecked == true)
         {
             double trim = Math.Round((1 - f) * 100, 1);
@@ -249,14 +407,42 @@ public sealed class InjectorWindow : Window
             var rom = _host.RomCopy();
             double f = Factor;
             var report = new ScaleReport($"injectors {Form.V(_stock):0} -> {Form.V(_fitted):0}: fuel x {f:0.###}", 0, 0, 0, []);
-            if (_scaleMaps.IsChecked == true && Math.Abs(f - 1) > 1e-6)
-                foreach (var t in FuelTables()) report = report.Merge(Rescale.ScaleTable(defs, rom, t, f));
-            report = report.Merge(Setting(defs, rom, _dMult, f, "multiplier"));
-            report = report.Merge(Setting(defs, rom, _dOffset, Form.V(_offset), "injector offset"));
-            report = report.Merge(Setting(defs, rom, _dOverall, Form.V(_overall), "overall fuel"));
-            report = report.Merge(Setting(defs, rom, _dCrank, Form.V(_crank), "cranking trim"));
-            report = report.Merge(Setting(defs, rom, _dPost, Form.V(_postStart), "post start trim"));
-            report = report.Merge(Setting(defs, rom, _dTip, Form.V(_tipIn), "TPS tip-in"));
+            // the size change, made once
+            switch (_way)
+            {
+                case Way.StockFitted:
+                    if (_stock.Value == _opened[_stock] && _fitted.Value == _opened[_fitted]) break;
+                    report = report.Merge(Setting(defs, rom, _dStock, Form.V(_stock), "injectors the maps were written for"));
+                    report = report.Merge(Setting(defs, rom, _dFitted, Form.V(_fitted), "injectors fitted"));
+                    if (Math.Abs(f - 1) > 1e-6) report = report.Merge(Setting(defs, rom, _dEnable, 1, "injector scaling on"));
+                    break;
+                case Way.Multiplier:
+                    if (_stock.Value == _opened[_stock] && _fitted.Value == _opened[_fitted]) break;
+                    report = report.Merge(Setting(defs, rom, _dMult, Math.Min(f, MultMax), "multiplier"));
+                    // past what the word holds, the maps take the rest
+                    if (f > MultMax)
+                        foreach (var t in FuelTables()) report = report.Merge(Rescale.ScaleTable(defs, rom, t, f / MultMax));
+                    break;
+                default:
+                    if (_scaleMaps.IsChecked == true && Math.Abs(f - 1) > 1e-6)
+                        foreach (var t in FuelTables()) report = report.Merge(Rescale.ScaleTable(defs, rom, t, f));
+                    break;
+            }
+            foreach (var (box, item, what) in new[] { (_offset, _dOffset, "injector offset"), (_overall, _dOverall, "overall fuel"), (_crank, _dCrank, "cranking trim"),
+                                                      (_postStart, _dPost, "post start trim"), (_tipIn, _dTip, "TPS tip-in") })
+                if (box.Value != _opened[box]) report = report.Merge(Setting(defs, rom, item, Form.V(box), what));
+            // the dead time against battery voltage
+            if (_romLag != null && Typed("").LagMs.Zip(_romLag.LagMs).Concat(Typed("").Volts.Zip(_romLag.Volts)).Any(p => Math.Abs(p.First - p.Second) > 0.004))
+            {
+                var copy = (byte[])rom.Clone();
+                var lag = Typed(_lagPick.SelectedIndex > 0 ? Picked?.Name ?? "typed in" : "typed in");
+                if (InjectorLag.Write(defs, copy, lag))
+                {
+                    var patches = new List<BytePatch>();
+                    for (int a = 0; a < rom.Length; a++) if (copy[a] != rom[a]) { patches.Add(new BytePatch(a, copy[a])); rom[a] = copy[a]; }
+                    if (patches.Count > 0) report = report.Merge(new ScaleReport($"dead time: {lag.Name} ({string.Join(", ", lag.LagMs.Select(v => v.ToString("0.00", CultureInfo.InvariantCulture)))} ms)", 1, 0, 0, patches));
+                }
+            }
             return report;
         }
         catch (Exception ex) { return ScaleReport.Nothing("cannot work that out: " + ex.Message); }
@@ -286,8 +472,9 @@ public sealed class InjectorWindow : Window
             int n = _host.ApplyPatches(r.Patches, $"injectors {Form.V(_stock):0} -> {Form.V(_fitted):0}");
             Applied = true;
             AppLog.Action("calibration", "injector calibration: " + r.Summary);
-            // the sizes have moved on: the calibration now matches the injectors fitted
-            _stock.Value = _fitted.Value;
+            // with the maps scaled the calibration now matches the injectors fitted; a ROM setting keeps both sizes
+            if (_way == Way.Maps) _stock.Value = _fitted.Value;
+            foreach (var k in _opened.Keys.ToList()) _opened[k] = k.Value;
             _preview.Text = $"{n} byte(s) written - Undo puts them back.";
             ToolTip.SetTip(_preview, r.Summary);
         }
@@ -358,6 +545,14 @@ public sealed class MapSensorWindow : Window
         _newMin = Form.Num(Sensors[2].Min, -2000, 5000, 5, "0");
         _newMax = Form.Num(Sensors[2].Max, 100, 12000, 10, "0");
         _oldPick.SelectedIndex = 0; _newPick.SelectedIndex = 2;
+        // the sensor the ROM says it is set up for, when it says
+        if (MapSensorScale.Of(_host.Defs(), _host.RomCopy()) is { } now)
+        {
+            int at = Array.FindIndex(Sensors, x => Math.Abs(x.Min - now.Zero) < 1 && Math.Abs(x.Max - now.Full) < 1);
+            if (now.Zero == MapSensorScale.Stock.Zero) at = 0;
+            _oldPick.SelectedIndex = at >= 0 ? at : Sensors.Length;
+            _oldMin.Value = (decimal)Math.Round(now.Zero); _oldMax.Value = (decimal)Math.Round(now.Full);
+        }
         _oldPick.SelectionChanged += (_, _) => Fill(_oldPick, _oldMin, _oldMax);
         _newPick.SelectionChanged += (_, _) => Fill(_newPick, _newMin, _newMax);
         foreach (var (n, pick) in new[] { (_oldMin, _oldPick), (_oldMax, _oldPick), (_newMin, _newPick), (_newMax, _newPick) })
@@ -366,7 +561,8 @@ public sealed class MapSensorWindow : Window
         var page = Form.Page();
         page.Children.Add(Form.Note(
             "A sensor is described by what it reads at 0 V and at 5 V. Every load breakpoint of every map holds a count that means a pressure " +
-            "on the sensor the calibration was written for; Apply moves each one to the count that means the same pressure on the sensor fitted. " +
+            "on the sensor the calibration was written for; Apply moves each one to the count that means the same pressure on the sensor fitted - " +
+            "and every setting that is a pressure (a boost cut, a GIO window) with them - and records the sensor in the ROM, so its pressures read true. " +
             "The maps themselves are not touched - only the load axes they are read against."));
         page.Children.Add(Form.Group("Sensor in the calibration",
             Form.Row("Sensor", _oldPick, "", "what the ROM was written for", "The sensor the load breakpoints were set up around."),
@@ -418,8 +614,14 @@ public sealed class MapSensorWindow : Window
     {
         try
         {
-            return Rescale.MapSensorRange(_host.Defs(), _host.RomCopy(), Maps(),
-                                          Form.V(_oldMin), Form.V(_oldMax), Form.V(_newMin), Form.V(_newMax));
+            // on a copy of the ROM and of the formulas (the swap rebuilds the pressure ones): nothing changes until Apply
+            var d = _host.Defs();
+            var copy = new DefinitionSet { Name = d.Name, RomSize = d.RomSize, Formulas = [.. d.Formulas], Items = d.Items, Symbols = d.Symbols };
+            var rom = _host.RomCopy();
+            var work = (byte[])rom.Clone();
+            var said = MapSensorScale.Swap(copy, work, (Form.V(_oldMin), Form.V(_oldMax)), (Form.V(_newMin), Form.V(_newMax)));
+            var patches = MapImport.Diff(rom, work);
+            return new ScaleReport(said, patches.Count, 0, 0, patches);
         }
         catch (Exception ex) { return ScaleReport.Nothing("cannot work that out: " + ex.Message); }
     }
@@ -431,6 +633,7 @@ public sealed class MapSensorWindow : Window
         try
         {
             int n = _host.ApplyPatches(r.Patches, $"MAP sensor {Form.V(_oldMax):0} -> {Form.V(_newMax):0} mBar");
+            _host.RefreshMapSensor();
             Applied = true;
             AppLog.Action("calibration", "MAP sensor: " + r.Summary);
             // the calibration now belongs to the sensor that was fitted

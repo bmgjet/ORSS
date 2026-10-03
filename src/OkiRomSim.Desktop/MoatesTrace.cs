@@ -102,10 +102,7 @@ public sealed class MoatesTrace : IDisposable
                 $"no emulator answered on {portName} at {baud} baud: {why}. " +
                 "Check the port, and that the baud rate in Settings > Emulator & datalog matches the device (115200 or 921600 for an Ostrich).");
         }
-        // the banks, the way the established tuning software sets them up on each device:
-        //   Ostrich family: BRR asks the read/write bank (00 = bank 0, all is well); anything else, BS 0 (answers 'O')
-        //   Demon:          BRR the same, and BR 0 when it is not 0 (answers 'O'); then BER and BES, which answer 01
-        //                   on a Demon that is set up to emulate (never BS 0 - the Demon has no business with it)
+        // the banks, the way the established tuning software sets them up on each device: Ostrich family: BRR asks the read/write bank (00 = bank 0, all is well); anything else, BS 0 (answers 'O') Demon: BRR the same, and BR 0 when it is not 0 (answers 'O'); then BER and BES, which answer 01 on a Demon that is set up to emulate (never BS 0 - the Demon has no business with it)
         if (Device is "Ostrich" or "ECU-Tamer" or "CobraRTP")
         {
             if (!Command("bank read", [(byte)'B', (byte)'R', (byte)'R'], 0x00, soft: true))

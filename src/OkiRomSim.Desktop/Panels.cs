@@ -10,10 +10,10 @@ namespace OkiRomSim.Desktop;
 /// The pieces the pages are dressed in, so they all look alike: a card (a titled, rounded panel), a bar of buttons along the top of a page, and a line of small print.
 public static class Panels
 {
-    public static readonly IBrush CardBack = new SolidColorBrush(Color.FromRgb(0x23, 0x25, 0x2a));
-    public static readonly IBrush CardLine = new SolidColorBrush(Color.FromRgb(0x33, 0x36, 0x3d));
-    public static readonly IBrush BarBack = new SolidColorBrush(Color.FromRgb(0x25, 0x27, 0x2c));
-    public static readonly IBrush Accent = new SolidColorBrush(DarkChrome.Accent);
+    public static readonly IBrush CardBack = AppTheme.Brush(Color.FromRgb(0x23, 0x25, 0x2a));
+    public static readonly IBrush CardLine = AppTheme.Brush(Color.FromRgb(0x33, 0x36, 0x3d));
+    public static readonly IBrush BarBack = AppTheme.Brush(Color.FromRgb(0x25, 0x27, 0x2c));
+    public static readonly IBrush Accent = AppTheme.Brush(DarkChrome.Accent);
 
     /// A titled panel: the title small and upper case on the left of its head, anything in `extras` on the right.
     public static Border Card(string title, Control body, params Control[] extras)
@@ -91,9 +91,9 @@ public sealed class CpuView : Control
     static readonly Typeface Mono = new(MainWindow.MonoFont);
     static readonly Typeface MonoBold = new(MainWindow.MonoFont, FontStyle.Normal, FontWeight.Bold);
     static readonly Typeface Ui = new(FontFamily.Default);
-    static readonly IBrush Lamp = new SolidColorBrush(Color.FromArgb(200, 0x3c, 0xc8, 0x5a));
-    static readonly IBrush LampOff = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
-    static readonly IBrush Cell = new SolidColorBrush(Color.FromArgb(14, 255, 255, 255));
+    static readonly IBrush Lamp = AppTheme.Brush(Color.FromArgb(200, 0x3c, 0xc8, 0x5a));
+    static readonly IBrush LampOff = AppTheme.Brush(Color.FromArgb(40, 255, 255, 255));
+    static readonly IBrush Cell = AppTheme.Brush(Color.FromArgb(14, 255, 255, 255));
     const double CellW = 116, CellH = 22, Pad = 10;
 
     public void Update(SimHost.Snapshot s, string label, string hot)

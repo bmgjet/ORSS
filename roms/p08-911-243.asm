@@ -1,14 +1,10 @@
 ;==================================================================================================
 ; p08-911-243.asm -- annotation pass (labels/comments only; firmware bytes unchanged)
 ; Assembles to the original image byte for byte.
-; Label sources: HTS115 (matched code), CromeGold, the custom1 and custom2 ROMs and p30 (secondary),
 ; otherwise structural names built from what the labelled code does:
 ;   <context>_<action>   context = nearest named routine that reaches this block,
 ;                        action  = first instruction (load_/store_/cmp_/if_<ram>_b<n>_set/goto_/call_...)
 ;   ramXXX = RAM address XXXh, stk = user-stack frame slot.
-; Comment lines tagged [H] were carried over from HTS115 (comments credited to bmgjet) onto code that
-; is instruction-for-instruction identical to the HTS115 code they describe. Lines tagged [CG], [C1],
-; [C2], [P30] were carried the same way from CromeGold, custom1, custom2 and p30.
 ;==================================================================================================
                 org 0000h
 int_start_vec:            DW  int_start
@@ -40,68 +36,68 @@ vcal_5_vec:               DW  vcal_5
 vcal_6_vec:               DW  vcal_6
 vcal_7_vec:               DW  vcal_7
 code_start:     DB  000h,01Ch,04Ah,001h
-; [H] NMI Interrupt Service Routine
-; [H] NMI handler: on entry, tests+clears edge-detect bit 00230h.7; if it had just
-; [H] gone 1->0, latches DP into 00084h[X1] (some kind of "last DP at NMI" snapshot).
-; [H] Then runs two short busy-wait/poll loops (DP as a down-counter; P4.1 pin poll),
-; [H] and unconditionally reprograms a block of peripheral control registers
-; [H] (P2, TCON0, ADSCAN/ADSEL, IE, TCON1, IRQ, P4SF, TM1, SBYCON, STPACP, sysFlags_b7.1)
-; [H] before a final check on trapReasonCode that either forces trapReasonCode=047h or falls into BRK.
-; [H] NOTE: confirmed against the OKI MSM66207 datasheet -- SBYCON is the Standby Control Register
-; [H] and STPACP is the Stop Code Acceptor, so this reprogramming pass is indeed preparing to enter
-; [H] a STOP/HALT low-power mode (register list above also checks out: P2/TCON0/TCON1/P4SF/TM1 are
-; [H] the port and timer control/data registers, ADSCAN/ADSEL the A/D scan and channel-select
-; [H] registers, IE/IRQ the interrupt enable/request registers -- all named per the datasheet's SFR
-; [H] table). Mechanism is confirmed; the specific reason this NMI path enters standby (vs. e.g.
-; [H] int_break's) is not derived here.
+; NMI Interrupt Service Routine
+; NMI handler: on entry, tests+clears edge-detect bit 00230h.7; if it had just
+; gone 1->0, latches DP into 00084h[X1] (some kind of "last DP at NMI" snapshot).
+; Then runs two short busy-wait/poll loops (DP as a down-counter; P4.1 pin poll),
+; and unconditionally reprograms a block of peripheral control registers
+; (P2, TCON0, ADSCAN/ADSEL, IE, TCON1, IRQ, P4SF, TM1, SBYCON, STPACP, sysFlags_b7.1)
+; before a final check on trapReasonCode that either forces trapReasonCode=047h or falls into BRK.
+; NOTE: confirmed against the OKI MSM66207 datasheet -- SBYCON is the Standby Control Register
+; and STPACP is the Stop Code Acceptor, so this reprogramming pass is indeed preparing to enter
+; a STOP/HALT low-power mode (register list above also checks out: P2/TCON0/TCON1/P4SF/TM1 are
+; the port and timer control/data registers, ADSCAN/ADSEL the A/D scan and channel-select
+; registers, IE/IRQ the interrupt enable/request registers -- all named per the datasheet's SFR
+; table). Mechanism is confirmed; the specific reason this NMI path enters standby (vs. e.g.
+; int_break's) is not derived here.
 int_NMI:        CLR     PSW
-                MOV     LRB, #00041h  ; [H] local register base = #00041h (base address 0x0208)
-                RB      off(00230h).7  ; [H] test-and-reset edge-detect bit 00230h.7
-                JEQ     int_NMI_goto_7a85  ; [H] skip snapshot if bit was already 0
-                L       A, DP  ; [H] bit just transitioned 1->0: snapshot DP
-                ST      A, 00084h[X1]  ; [H] ...into 00084h[X1]
+                MOV     LRB, #00041h  ; local register base = #00041h (base address 0x0208)
+                RB      off(00230h).7  ; test-and-reset edge-detect bit 00230h.7
+                JEQ     int_NMI_goto_7a85  ; skip snapshot if bit was already 0
+                L       A, DP  ; bit just transitioned 1->0: snapshot DP
+                ST      A, 00084h[X1]  ; ...into 00084h[X1]
 int_NMI_goto_7a85:
                 J       int_NMI_load_dp
-nmi_poll_p4_1:  MB      C, P4.1  ; [H] sample pin P4.1 into carry
-                JGE     nmi_check_0f5  ; [H] JGE branches on Carry=0 (arch.ml) -> as soon as P4.1 reads 0, jump ahead immediately
-                JRNZ    DP, nmi_poll_p4_1  ; [H] else (P4.1 still 1) keep polling until DP counts out, then fall through anyway
-                MOVB    P2, #0ffh  ; [H] drive P2 all-high
-                RB      TCON0.2  ; [H] clear TCON0.2
-                SB      TCON0.2  ; [H] ...then set TCON0.2 (pulse it)
+nmi_poll_p4_1:  MB      C, P4.1  ; sample pin P4.1 into carry
+                JGE     nmi_check_0f5  ; JGE branches on Carry=0 (arch.ml) -> as soon as P4.1 reads 0, jump ahead immediately
+                JRNZ    DP, nmi_poll_p4_1  ; else (P4.1 still 1) keep polling until DP counts out, then fall through anyway
+                MOVB    P2, #0ffh  ; drive P2 all-high
+                RB      TCON0.2  ; clear TCON0.2
+                SB      TCON0.2  ; ...then set TCON0.2 (pulse it)
                 CLRB    A
-                STB     A, ADSCAN  ; [H] stop A/D scan
-                STB     A, ADSEL  ; [H] clear A/D channel select
-                MOV     IE, #00040h  ; [H] mask interrupt-enable to one source
+                STB     A, ADSCAN  ; stop A/D scan
+                STB     A, ADSEL  ; clear A/D channel select
+                MOV     IE, #00040h  ; mask interrupt-enable to one source
                 MOVB    TCON1, #0e0h
-                CLR     IRQ  ; [H] clear pending IRQ flags
+                CLR     IRQ  ; clear pending IRQ flags
                 SB      P4SF.1
-                MOV     TM1, #0ffffh  ; [H] reload timer1 to max (effectively stop it counting down soon)
+                MOV     TM1, #0ffffh  ; reload timer1 to max (effectively stop it counting down soon)
                 SB      TCON1.4
-                SB      SBYCON.2  ; [H] standby-control bit set (see routine note above)
+                SB      SBYCON.2  ; standby-control bit set (see routine note above)
                 LB      A, #005h
 ; [C1] STPACP = "Stop Code Acceptor" per the MSM66207 datasheet -- not a clock prescaler. Writing
 ; [C1] N then N<<1 (5, then 10) is the write-unlock sequence this register requires before STOP/HALT
 ; [C1] mode will actually be entered; it's a safety interlock against accidental entry, not a divider.
-                STB     A, STPACP  ; [H] stop-code-acceptor unlock write, step 1: N=5
-                SLLB    A  ; [H] ...step 2: N<<1=10
-                STB     A, STPACP  ; [H] unlock write, step 2
-                SB      SBYCON.0  ; [H] standby-control bit 0 set (likely the actual STOP-mode trigger)
+                STB     A, STPACP  ; stop-code-acceptor unlock write, step 1: N=5
+                SLLB    A  ; ...step 2: N<<1=10
+                STB     A, STPACP  ; unlock write, step 2
+                SB      SBYCON.0  ; standby-control bit 0 set (likely the actual STOP-mode trigger)
                 RB      0b7h.1
-nmi_check_0f5:  LB      A, 0f5h  ; [H] read watchdog/status-like byte trapReasonCode
-                JNE     nmi_brk  ; [H] if nonzero, fall straight to BRK
-                MOVB    0f5h, #047h  ; [H] else stamp trapReasonCode with sentinel 047h first
-nmi_brk:        BRK  ; [H] forces a BRK -> re-enters int_break (full reinit),
-; [H] Timer 0 Interrupt Service Routine
-; [H] involves a lot of bit-twiddling of r6(aka 00116h), r7 (00117h) and 00197h
-; [H] also affects er0-er2 (00110h-00115h)
-; [H] ultimately changes the state of Port2 pins 3,2,1 and 0
-; [H] however, the exact behavior is still unclear
+nmi_check_0f5:  LB      A, 0f5h  ; read watchdog/status-like byte trapReasonCode
+                JNE     nmi_brk  ; if nonzero, fall straight to BRK
+                MOVB    0f5h, #047h  ; else stamp trapReasonCode with sentinel 047h first
+nmi_brk:        BRK  ; forces a BRK -> re-enters int_break (full reinit),
+; Timer 0 Interrupt Service Routine
+; involves a lot of bit-twiddling of r6(aka 00116h), r7 (00117h) and 00197h
+; also affects er0-er2 (00110h-00115h)
+; ultimately changes the state of Port2 pins 3,2,1 and 0
+; however, the exact behavior is still unclear
 int_timer_0:    MOV     LRB, #00022h
-; [H] --- Timer0 ISR: bit-shifts a value (r6, 16 bits across er0/er1/er2 chain) out one bit per
-; [H] timer period, reloading TMR0 for the next bit's timing, tracking bit count in r7 (0-15,
-; [H] matching a 16-bit shift register), accumulating into off(00197h) and driving P2 with the
-; [H] result. Reads as a software bit-banged serial or pulse-train output; no calibration anchors
-; [H] to identify the specific protocol/signal.
+; --- Timer0 ISR: bit-shifts a value (r6, 16 bits across er0/er1/er2 chain) out one bit per
+; timer period, reloading TMR0 for the next bit's timing, tracking bit count in r7 (0-15,
+; matching a 16-bit shift register), accumulating into off(00197h) and driving P2 with the
+; result. Reads as a software bit-banged serial or pulse-train output; no calibration anchors
+; to identify the specific protocol/signal.
                 ANDB    TCON0, #0fbh
                 CMPB    r7, #00fh
                 JEQ     timer0_return
@@ -187,12 +183,12 @@ timer0_sequence_done:
                 STB     A, r7
                 STB     A, off(0018fh)
                 SJ      timer0_sequence_reset
-; [H] Timer 1 Interrupt Service Routine
-; [H] toggles (TCON1).3, (000b6h).5
-; [H] modifies er1, er2, r6, TMR1
-; [H] also influenced by er0
-; [H] This routine seems to systematically modify TMR1 based on er0, er1 and ADCR4
-; [H] (what is connected to ADC channel 4??)
+; Timer 1 Interrupt Service Routine
+; toggles (TCON1).3, (000b6h).5
+; modifies er1, er2, r6, TMR1
+; also influenced by er0
+; This routine seems to systematically modify TMR1 based on er0, er1 and ADCR4
+; (what is connected to ADC channel 4??)
 int_timer_1:    MOV     LRB, #00013h
                 JBR     off(TCON1).3, timer1_tmr1_reload
                 RB      off(000b6h).5
@@ -218,13 +214,13 @@ timer1_tmr1_reload:
                 ST      A, er1
                 ADD     off(TMR1), off(00098h)
                 RTI
-; [H] Timer 2 Interrupt Service Routine
+; Timer 2 Interrupt Service Routine
 int_timer_2:    MOV     LRB, #00014h
-; [H] --- Timer2 ISR (0x160-0x1E9+): reschedules TMR2/TMR3 relative to each other and TM3,
-; [H] tracking a small state counter (r0/r2, states 0-4/5) and TCON3 bits. Likely supporting
-; [H] crank/cam signal period measurement alongside int_INT1's tooth-decode logic (references
-; [H] TRNSIT and sysFlags_b7.2, both touched there too). No calibration anchors; named at the
-; [H] mechanism level.
+; --- Timer2 ISR (0x160-0x1E9+): reschedules TMR2/TMR3 relative to each other and TM3,
+; tracking a small state counter (r0/r2, states 0-4/5) and TCON3 bits. Likely supporting
+; crank/cam signal period measurement alongside int_INT1's tooth-decode logic (references
+; TRNSIT and sysFlags_b7.2, both touched there too). No calibration anchors; named at the
+; mechanism level.
                 LB      A, r2
                 CMPB    A, #003h
                 JGE     timer2_state1_check
@@ -297,7 +293,7 @@ timer3_reload_store:
                 ST      A, off(TMR3)
                 ORB     off(TCON3), #008h
                 J       timer2_irq_clear
-; [H] Ext. Interrupt 0 Service Routine
+; Ext. Interrupt 0 Service Routine
 int_INT0:       L       A, 0fah
                 ST      A, IE
                 L       A, TM2
@@ -561,13 +557,13 @@ crank_tooth_count_store:
 int1_exit_jump: J       crank_cycle_dispatch2
 int_serial_rx_BRG:
                 L       A, #000a0h
-; [H] NOTE: despite the vector-table name (inherited from the OKI 66207's default peripheral
-; [H] vector list), this handler's actual content -- storing to off(0011ah)/(0011ch)/(0011eh)
-; [H] (the exact addresses refresh_engine_flags_snapshot reads from), managing a tooth/sync
-; [H] counter (0xA2/0xA3), and touching sysFlags_b7 bits 0/2 -- looks like crank/cam sync-pattern
-; [H] handling, not serial-receive-baud-rate-generator work. Likely this vector/trigger source is
-; [H] repurposed by this firmware for a different signal than its datasheet name implies. Flagging
-; [H] rather than asserting a replacement name without more certainty.
+; NOTE: despite the vector-table name (inherited from the OKI 66207's default peripheral
+; vector list), this handler's actual content -- storing to off(0011ah)/(0011ch)/(0011eh)
+; (the exact addresses refresh_engine_flags_snapshot reads from), managing a tooth/sync
+; counter (0xA2/0xA3), and touching sysFlags_b7 bits 0/2 -- looks like crank/cam sync-pattern
+; handling, not serial-receive-baud-rate-generator work. Likely this vector/trigger source is
+; repurposed by this firmware for a different signal than its datasheet name implies. Flagging
+; rather than asserting a replacement name without more certainty.
                 ST      A, IE
                 MOV     PSW, #00102h
                 MOV     LRB, #00021h
@@ -753,7 +749,7 @@ crank_sync_flag2_check_if_ram11f_bit7_set:
                 JBS     off(0011fh).7, crank_sync_flag2_check_goto_7aca
                 LB      A, off(0013ch)
                 ANDB    A, #001h
-                TRB     off(00128h)  ; [H] mnemonic was "TBR" (letter transposition)
+                TRB     off(00128h)  ; mnemonic was "TBR" (letter transposition)
                 JNE     crank_cycle_exit_early
                 CLR     A
                 LB      A, off(00134h)
@@ -822,7 +818,7 @@ injbase_calc_start:
 injbase_store:  ST      A, off(00196h)
                 LB      A, off(0013ch)
                 ANDB    PSWH, #0feh
-                TRB     off(00117h)  ; [H] mnemonic was "TBR" (letter transposition); confirmed as TRB against HondaTuningSuiteRom120.asm, same opcode C41713
+                TRB     off(00117h)  ; mnemonic was "TBR" (letter transposition); confirmed as TRB against HondaTuningSuiteRom120.asm, same opcode C41713
                 JNE     tm0_sync_alt
                 JBR     off(00128h).2, tm0_sync_common
                 L       A, TM0
@@ -1206,10 +1202,10 @@ dtc07_tps_latch:
                 JGE     tps_delta_store1
 tps_delta_clamp1:
                 LB      A, #0ffh
-; [H] --- Repeated rate-of-change/plausibility check pattern applied to several TPS-related raw
-; [H] values (0xD0/0xD2/0xD4/0xD6) across 0x852-0x8C9: compute delta, clamp to 0xFF, trigger
-; [H] VCAL 7 (erratic-sensor diagnostic, same call used for RPM plausibility earlier) if out of
-; [H] range. No calibration anchors; likely dual/redundant TPS channel handling.
+; --- Repeated rate-of-change/plausibility check pattern applied to several TPS-related raw
+; values (0xD0/0xD2/0xD4/0xD6) across 0x852-0x8C9: compute delta, clamp to 0xFF, trigger
+; VCAL 7 (erratic-sensor diagnostic, same call used for RPM plausibility earlier) if out of
+; range. No calibration anchors; likely dual/redundant TPS channel handling.
 tps_delta_store1:
                 STB     A, 0d4h
                 L       A, er0
@@ -2958,11 +2954,11 @@ postfuel_tps_delta_finalize:
                 J       postinj_rpm_check
 notcranking_entry:
                 RB      0b7h.0
-; [H] --- Post-start enrichment decay: selects a decay-rate table (PostFuelDecay/2/3, chosen by
-; [H] TPS/RPM conditions), then subtracts the selected decay amount from the enrichment value
-; [H] (0x170) each cycle, floored at a minimum of 0x2000, with an ECT-gated (0x2E threshold) exit
-; [H] once fully decayed. This is what makes post-start enrichment taper off over time rather than
-; [H] cutting off abruptly.
+; --- Post-start enrichment decay: selects a decay-rate table (PostFuelDecay/2/3, chosen by
+; TPS/RPM conditions), then subtracts the selected decay amount from the enrichment value
+; (0x170) each cycle, floored at a minimum of 0x2000, with an ECT-gated (0x2E threshold) exit
+; once fully decayed. This is what makes post-start enrichment taper off over time rather than
+; cutting off abruptly.
                 JEQ     postfuel_decay_table_select
                 CLRB    off(0013dh)
 postfuel_decay_table_select:
@@ -3192,13 +3188,13 @@ ve_accel_tps_threshold_check:
                 LB      A, r0
                 JBS     off(00126h).3, ve_accel_tps_threshold_check_goto_7bf1
                 LB      A, #080h
-; [H] --- TPS-acceleration-enrichment tail (0x1734-0x17B7+): further scaling/clamping of the
-; [H] enrichment value against working RAM (0x17D/0x244/0x1C5/0x1B0/0x18F) and two more small
-; [H] lookup tables (tbl_ve_accel_1/tbl_ve_accel_2, RPM-indexed, selected by off(00127h).1). Low confidence on
-; [H] exact per-flag semantics (no calibration-field anchors in this stretch); named at the
-; [H] mechanism level. Ends by copying the ignition-cut output flag (off(00124h).4, set by the
-; [H] fuel-cut/rev-limiter block) into off(0012eh).4 -- linking this enrichment stage back into
-; [H] the ignition-cut state.
+; --- TPS-acceleration-enrichment tail (0x1734-0x17B7+): further scaling/clamping of the
+; enrichment value against working RAM (0x17D/0x244/0x1C5/0x1B0/0x18F) and two more small
+; lookup tables (tbl_ve_accel_1/tbl_ve_accel_2, RPM-indexed, selected by off(00127h).1). Low confidence on
+; exact per-flag semantics (no calibration-field anchors in this stretch); named at the
+; mechanism level. Ends by copying the ignition-cut output flag (off(00124h).4, set by the
+; fuel-cut/rev-limiter block) into off(0012eh).4 -- linking this enrichment stage back into
+; the ignition-cut state.
                 MULB
                 SLLB    A
                 LB      A, ACCH
@@ -3241,13 +3237,13 @@ to_ve_accel_common:
                 SJ      ve_accel_state_store_clear_ram12f_bit7
 ve_accel_next_stage:
                 MOVB    r0, off(0017fh)
-; [H] --- TPS-acceleration-enrichment tail (0x1734-0x17B7+): further scaling/clamping of the
-; [H] enrichment value against working RAM (0x17D/0x244/0x1C5/0x1B0/0x18F) and two more small
-; [H] lookup tables (tbl_ve_accel_1/tbl_ve_accel_2, RPM-indexed, selected by off(00127h).1). Low confidence on
-; [H] exact per-flag semantics (no calibration-field anchors in this stretch); named at the
-; [H] mechanism level. Ends by copying the ignition-cut output flag (off(00124h).4, set by the
-; [H] fuel-cut/rev-limiter block) into off(0012eh).4 -- linking this enrichment stage back into
-; [H] the ignition-cut state.
+; --- TPS-acceleration-enrichment tail (0x1734-0x17B7+): further scaling/clamping of the
+; enrichment value against working RAM (0x17D/0x244/0x1C5/0x1B0/0x18F) and two more small
+; lookup tables (tbl_ve_accel_1/tbl_ve_accel_2, RPM-indexed, selected by off(00127h).1). Low confidence on
+; exact per-flag semantics (no calibration-field anchors in this stretch); named at the
+; mechanism level. Ends by copying the ignition-cut output flag (off(00124h).4, set by the
+; fuel-cut/rev-limiter block) into off(0012eh).4 -- linking this enrichment stage back into
+; the ignition-cut state.
                 MULB
                 SLLB    A
                 LB      A, ACCH
@@ -4660,10 +4656,10 @@ deadtime_voltage_flag_store_rom_load_tbl_6106_dp:
                 SJ      to_gio_mode_dispatch
 deadtime_retry_check:
                 MB      C, 0b7h.0
-; [H] --- Injector deadtime/battery-voltage compensation (0x21A5-0x2225ish): selects an ECT/
-; [H] battery-voltage-indexed offset into InjectorTable (real calibration field -- injector-size
-; [H] dependent deadtime compensation), applies it, then computes effective injector pulse width
-; [H] after subtracting deadtime.
+; --- Injector deadtime/battery-voltage compensation (0x21A5-0x2225ish): selects an ECT/
+; battery-voltage-indexed offset into InjectorTable (real calibration field -- injector-size
+; dependent deadtime compensation), applies it, then computes effective injector pulse width
+; after subtracting deadtime.
                 JGE     deadtime_retry_store
                 LB      A, #005h
 deadtime_retry_store:
@@ -5172,13 +5168,13 @@ clear_0x324_high_nibble:
                 RC
 fuelpump_prime_check:
                 MB      off(00230h).5, C
-; [H] --- Runtime state init: A/D channel setup, initial sensor snapshot, working-RAM seeding,
-; [H] and diagnostic-serial baud/config setup, run once during boot after the self-test/RAM-clear
-; [H] passes above. Ends by jumping to stack_sanity_check (0x3359) before falling into the main loop.
-; [H] Individual working-RAM addresses here (0xD8-0xE1, 0xDC-0xDF, etc.) are not yet traced to
-; [H] specific named parameters -- confidently identified: ADCR2H/ADCR4/ADCR6 (A/D conversion
-; [H] results), tbl_boot_copy_block (a calibration table copied verbatim into 0x1D1-0x1DD), and
-; [H] STTM/STTMR/STTMC/STCON/SRCON (serial timer + control regs -- diagnostic link baud setup).
+; --- Runtime state init: A/D channel setup, initial sensor snapshot, working-RAM seeding,
+; and diagnostic-serial baud/config setup, run once during boot after the self-test/RAM-clear
+; passes above. Ends by jumping to stack_sanity_check (0x3359) before falling into the main loop.
+; Individual working-RAM addresses here (0xD8-0xE1, 0xDC-0xDF, etc.) are not yet traced to
+; specific named parameters -- confidently identified: ADCR2H/ADCR4/ADCR6 (A/D conversion
+; results), tbl_boot_copy_block (a calibration table copied verbatim into 0x1D1-0x1DD), and
+; STTM/STTMR/STTMC/STCON/SRCON (serial timer + control regs -- diagnostic link baud setup).
                 MOV     USP, #00180h
                 CLR     A
                 ST      A, IE
@@ -5555,11 +5551,11 @@ scheduler_ect_sign_check:
                 RB      off(00224h).7
 scheduler_task_done:
                 MOV     DP, #000ceh
-; [H] --- VSS (vehicle speed) calculation (0x274A-0x27E4ish): measures a speed-sensor pulse
-; [H] period (0xA8/0xAC), divides vssSpeedNumerator by the pulse period and a plausibility-range check
-; [H] (0x373-0x397D), applying sub_clamp_helper/mul_scale_helper2-style scaling, then clamps and stores
-; [H] the final VSS byte to 0xCC -- the same VSS value read throughout the session (fuel-cut,
-; [H] boost, wastegate, etc).
+; --- VSS (vehicle speed) calculation (0x274A-0x27E4ish): measures a speed-sensor pulse
+; period (0xA8/0xAC), divides vssSpeedNumerator by the pulse period and a plausibility-range check
+; (0x373-0x397D), applying sub_clamp_helper/mul_scale_helper2-style scaling, then clamps and stores
+; the final VSS byte to 0xCC -- the same VSS value read throughout the session (fuel-cut,
+; boost, wastegate, etc).
                 JBS     off(00214h).0, vss_calc_skip
                 RB      0b6h.2
                 JEQ     vss_calc_gate2
@@ -8014,7 +8010,7 @@ percyl_counter_dp_select:
                 DEC     DP
 percyl_counter_increment:
                 INCB    0039ah[X1]
-                TRB     [DP]  ; [H] mnemonic was "TBR" (letter transposition); confirmed as TRB against HondaTuningSuiteRom120.asm, same opcode C213
+                TRB     [DP]  ; mnemonic was "TBR" (letter transposition); confirmed as TRB against HondaTuningSuiteRom120.asm, same opcode C213
                 JNE     percyl_wrap_check1
                 LB      A, 0039ah[X1]
                 ANDB    A, #007h
@@ -8244,11 +8240,11 @@ regbank_selftest2_default:
                 L       A, #003fah
 irqmode_dispatch:
                 MOV     DP, #00394h
-; [H] --- Interrupt-priority/mode switch: calls VCAL 3 (the scheduler), then based on off(00212h).3
-; [H] and off(00217h).2 flags, reprograms IE and its shadow bytes (0xFA/0xF8) to one of two
-; [H] distinct bitmasks (0x2BAF/0xA9A7 -- likely "engine running" vs "cranking/idle" interrupt
-; [H] priority sets), plus TCON3 bits. Distinct from the register self-test above despite similar
-; [H] surrounding code shape.
+; --- Interrupt-priority/mode switch: calls VCAL 3 (the scheduler), then based on off(00212h).3
+; and off(00217h).2 flags, reprograms IE and its shadow bytes (0xFA/0xF8) to one of two
+; distinct bitmasks (0x2BAF/0xA9A7 -- likely "engine running" vs "cranking/idle" interrupt
+; priority sets), plus TCON3 bits. Distinct from the register self-test above despite similar
+; surrounding code shape.
                 ST      A, [DP]
                 VCAL    3
                 L       A, 0fah
@@ -8288,12 +8284,12 @@ irqmode_done:   ORB     PSWH, #001h
                 ST      A, IE
 stack_sanity_check:
                 CMP     SSP, #0047eh
-; [H] --- Post-init peripheral verification: re-reads SSP, LRB, every port direction/special-
-; [H] function register, all four timer control regs, PWM control regs, A/D select/scan, and the
-; [H] diagnostic-serial baud/control regs, comparing each against the exact values int_break's
-; [H] init sequence (0x235F periph_init_start onward) programmed them to. Any mismatch -> stamps
-; [H] trapReasonCode=0x50 (selftest_fail_050) and BRKs, forcing a full re-init retry. This is a
-; [H] "did my own initialization actually stick" check, not a fresh self-test of new hardware.
+; --- Post-init peripheral verification: re-reads SSP, LRB, every port direction/special-
+; function register, all four timer control regs, PWM control regs, A/D select/scan, and the
+; diagnostic-serial baud/control regs, comparing each against the exact values int_break's
+; init sequence (0x235F periph_init_start onward) programmed them to. Any mismatch -> stamps
+; trapReasonCode=0x50 (selftest_fail_050) and BRKs, forcing a full re-init retry. This is a
+; "did my own initialization actually stick" check, not a fresh self-test of new hardware.
                 JNE     selftest_fail_050
                 MOV     DP, #00400h
                 L       A, [DP]
@@ -8389,12 +8385,12 @@ periph_init_verify_done:
                 L       A, 0f8h
                 ST      A, IE
                 L       A, X1
-; [H] --- Oscillator/timer cross-check: snapshots TM0/TM1/TM2 into X1/X2/DP, re-enables
-; [H] interrupts briefly (IE/PSWH toggling), re-snapshots into er0/er1/er2, then verifies the
-; [H] deltas fall within expected ranges (0x22, 0x80, 0x22, a ratio check against er1>>2) --
-; [H] confirms the timers are actually counting at the rate the code expects (i.e. the clock
-; [H] source/oscillator is running correctly) before trusting any timing-dependent logic
-; [H] (ignition/injection scheduling) downstream. Out-of-range -> selftest_fail_04b.
+; --- Oscillator/timer cross-check: snapshots TM0/TM1/TM2 into X1/X2/DP, re-enables
+; interrupts briefly (IE/PSWH toggling), re-snapshots into er0/er1/er2, then verifies the
+; deltas fall within expected ranges (0x22, 0x80, 0x22, a ratio check against er1>>2) --
+; confirms the timers are actually counting at the rate the code expects (i.e. the clock
+; source/oscillator is running correctly) before trusting any timing-dependent logic
+; (ignition/injection scheduling) downstream. Out-of-range -> selftest_fail_04b.
                 SUB     A, er0
                 ST      A, er0
                 JEQ     selftest_fail_04b
@@ -8447,19 +8443,19 @@ clock_selftest_passed:
                 MOVB    r0, #006h
 warmcold_ie_setup:
                 L       A, 0fah
-; [H] COLD vs WARM RESTART FORK (0x3480-0x353C+): this is the transition point flagged much
-; [H] earlier in this file as needing dedicated tracing -- now traced. warmcold_tm2_check compares
-; [H] the current TM2 reading against a saved value (0xAE/0xEE) to detect whether the engine
-; [H] appears to still be running/turning (a brief ECU reset while cranking) vs a genuine cold
-; [H] power-up:
-; [H] - coldstart_full_reset (warm check failed -> true cold start): zeroes currentRPMByte, the
-; [H] ignition/injector hardware timer-prep registers (0x360-0x372, 0x3A6, 0x357/0x358/0x35D/
-; [H] 0x35E), VTEC/mode flags (0x124/0x126/0x127/0x128/0x21C/0x21E/0x21F/0x221/0x232), and
-; [H] drives P4.0/P1 low -- a full reset of all per-cycle working state built up over this
-; [H] session's traced routines.
-; [H] - warmrestart_path/warmrestart_tm3_resync (warm check passed -> engine still turning):
-; [H] skips the reset entirely, just resyncs TM3 -- preserves ignition/fuel/VTEC state across
-; [H] the brief reset instead of losing sync with a spinning engine.
+; COLD vs WARM RESTART FORK (0x3480-0x353C+): this is the transition point flagged much
+; earlier in this file as needing dedicated tracing -- now traced. warmcold_tm2_check compares
+; the current TM2 reading against a saved value (0xAE/0xEE) to detect whether the engine
+; appears to still be running/turning (a brief ECU reset while cranking) vs a genuine cold
+; power-up:
+; - coldstart_full_reset (warm check failed -> true cold start): zeroes currentRPMByte, the
+; ignition/injector hardware timer-prep registers (0x360-0x372, 0x3A6, 0x357/0x358/0x35D/
+; 0x35E), VTEC/mode flags (0x124/0x126/0x127/0x128/0x21C/0x21E/0x21F/0x221/0x232), and
+; drives P4.0/P1 low -- a full reset of all per-cycle working state built up over this
+; session's traced routines.
+; - warmrestart_path/warmrestart_tm3_resync (warm check passed -> engine still turning):
+; skips the reset entirely, just resyncs TM3 -- preserves ignition/fuel/VTEC state across
+; the brief reset instead of losing sync with a spinning engine.
                 ST      A, IE
                 ANDB    PSWH, #0feh
                 RB      off(00231h).5
@@ -8622,12 +8618,12 @@ tps_learn_alt_path:
                 JLE     fueltbl_sanitize_loop
 fueltbl_default_load:
                 L       A, 00382h[X1]
-; [H] --- Fuel table shadow-copy sanitization (0x35AE-0x35E8): walks the FUEL1_Hi_Extended
-; [H] region in RAM (0x300-0x30C), and for any entry outside a plausible range (0x9862 max,
-; [H] FUEL1_Hi_Extended min) resets it to a default 0x8000 -- guards against corrupted/garbage
-; [H] fuel-table data. Followed by a knock-related check (knock_helper1 onward, comparing against
-; [H] tbl_knock_sanity) gated by a critical-section register snapshot -- likely a knock-retard sanity
-; [H] check, not fully confirmed.
+; --- Fuel table shadow-copy sanitization (0x35AE-0x35E8): walks the FUEL1_Hi_Extended
+; region in RAM (0x300-0x30C), and for any entry outside a plausible range (0x9862 max,
+; FUEL1_Hi_Extended min) resets it to a default 0x8000 -- guards against corrupted/garbage
+; fuel-table data. Followed by a knock-related check (knock_helper1 onward, comparing against
+; tbl_knock_sanity) gated by a critical-section register snapshot -- likely a knock-retard sanity
+; check, not fully confirmed.
                 ST      A, 0030ch[X1]
 fueltbl_sanitize_loop:
                 MOV     DP, #00300h
@@ -9535,10 +9531,10 @@ revlimit_table_select_load_ram0bc:
                 MOV     X1, #tbl_revlimit_cold3
 iat_table_select:
                 LB      A, 0d8h
-; [H] --- Continues the correction chain: IAT (0xD8) indexed lookups into IATFuelCorrect,
-; [H] IATScaler2, IATScaler (real calibration fields, IAT-based fuel correction factors),
-; [H] results stored to a small working-RAM cluster at 0x3EA onward. Same VCAL 0/1/3 pattern as
-; [H] the ECT correction chain earlier.
+; --- Continues the correction chain: IAT (0xD8) indexed lookups into IATFuelCorrect,
+; IATScaler2, IATScaler (real calibration fields, IAT-based fuel correction factors),
+; results stored to a small working-RAM cluster at 0x3EA onward. Same VCAL 0/1/3 pattern as
+; the ECT correction chain earlier.
                 VCAL    1
                 CMPB    0d9h, A
                 MB      off(00219h).1, C
@@ -10833,11 +10829,11 @@ dtc_scan_new_code:
                 STB     A, [DP]
 dtc_debounce_init:
                 VCAL    3
-; [H] --- DTC debounce/persistence tracking (0x43C8-0x4432ish): maintains a per-fault debounce
-; [H] countdown array at 0x1D1 (44 entries, dtc_debounce_loop) and a second array at 0x1DC (16
-; [H] more entries with a fixed 0xBB3 sentinel when active) -- each potential fault condition gets
-; [H] its own countdown before being confirmed/latched, rather than triggering on a single sample.
-; [H] Feeds the same 0xF4 "active DTC index" tracked by the bit-scanner above.
+; --- DTC debounce/persistence tracking (0x43C8-0x4432ish): maintains a per-fault debounce
+; countdown array at 0x1D1 (44 entries, dtc_debounce_loop) and a second array at 0x1DC (16
+; more entries with a fixed 0xBB3 sentinel when active) -- each potential fault condition gets
+; its own countdown before being confirmed/latched, rather than triggering on a single sample.
+; Feeds the same 0xF4 "active DTC index" tracked by the bit-scanner above.
                 MOVB    r7, #021h
                 CLR     A
                 XCHG    A, 0b4h
@@ -11179,9 +11175,9 @@ injenable_reset_all:
                 SJ      inj_accum1_store_new
 inj_accum2_direct:
                 ADD     A, er1
-; [H] --- Dual-accumulator injector timing calc (0x46A3-0x4723ish): manages two 16-bit
-; [H] accumulators (0x110/0x112, capped/wrapped at 0x100) feeding TMR0 reschedule -- likely
-; [H] timing for two injector groups/banks. No calibration anchors; named at the mechanism level.
+; --- Dual-accumulator injector timing calc (0x46A3-0x4723ish): manages two 16-bit
+; accumulators (0x110/0x112, capped/wrapped at 0x100) feeding TMR0 reschedule -- likely
+; timing for two injector groups/banks. No calibration anchors; named at the mechanism level.
                 ST      A, TMR0
                 SJ      inj_p2_calc_start
 inj_accum_check1:
@@ -11501,10 +11497,10 @@ crank_a8_p1_output:
                 RT
 ign_angle_to_timer_convert:
                 CLRB    A
-; [H] --- Converts a computed ignition angle/trim (r4) into a hardware timer-compare value
-; [H] (scaling via MULB by 3 and combining with er1), used when programming the two ignition
-; [H] coil-channel hardware timers (igntiming_output_coil1 and the DP=0x35D channel that follows).
-; [H] Clamps the result if it would exceed 0xFE00 range (CMPB ACC,#0feh check).
+; --- Converts a computed ignition angle/trim (r4) into a hardware timer-compare value
+; (scaling via MULB by 3 and combining with er1), used when programming the two ignition
+; coil-channel hardware timers (igntiming_output_coil1 and the DP=0x35D channel that follows).
+; Clamps the result if it would exceed 0xFE00 range (CMPB ACC,#0feh check).
                 STB     A, r3
                 SUBB    A, r4
                 MOVB    r0, #003h
@@ -11545,11 +11541,11 @@ knockretard_sub_result:
                 J       table_interp_delta_calc
 table_interp_lookup:
                 CMPCB   A, 00002h[X1]
-; [H] --- Generic 1D linear-interpolation table lookup, used 50 times throughout the file (flex
-; [H] fuel, boost/wastegate control, GIO trims, ignition/O2 corrections, etc). Given a table
-; [H] pointer in X1 (entries are (X,Y) byte pairs) and an input value in A, walks the table to
-; [H] find the bracketing X segment, then linearly interpolates the corresponding Y. This is the
-; [H] same routine flex-fuel notes describe as "the shared interpolation helper".
+; --- Generic 1D linear-interpolation table lookup, used 50 times throughout the file (flex
+; fuel, boost/wastegate control, GIO trims, ignition/O2 corrections, etc). Given a table
+; pointer in X1 (entries are (X,Y) byte pairs) and an input value in A, walks the table to
+; find the bracketing X segment, then linearly interpolates the corresponding Y. This is the
+; same routine flex-fuel notes describe as "the shared interpolation helper".
                 JGE     table_interp_bracket_found
                 INC     X1
                 INC     X1
@@ -11729,10 +11725,10 @@ injtimer_bank_calc1_add:
                 RT
                 DB  0E2h
 vcal_4:         ROL     A
-; [H] --- RESOLVED: VCAL 4 is a saturating signed 16-bit add-to-er3 helper (clamps to 0 if the
-; [H] result would go negative). VCAL 5 (below) is similar but clamps to 0xFFFF on overflow
-; [H] instead. Both are widely used throughout the session (idle PID, injector timer calcs, etc)
-; [H] -- this resolves the "not yet identified" hedge attached to several VCAL 4/5 call sites.
+; --- RESOLVED: VCAL 4 is a saturating signed 16-bit add-to-er3 helper (clamps to 0 if the
+; result would go negative). VCAL 5 (below) is similar but clamps to 0xFFFF on overflow
+; instead. Both are widely used throughout the session (idle PID, injector timer calcs, etc)
+; -- this resolves the "not yet identified" hedge attached to several VCAL 4/5 call sites.
                 JGE     vcal4_negative_path
                 ROR     A
                 ADD     A, er3
@@ -11750,8 +11746,8 @@ vcal5_store:    ST      A, er3
                 DB  0E2h
 signextend_helper:
                 ROL     A
-; [H] --- 16-bit signed saturating add helper (sign-extends r7's high bit, adds to er3, clamps to
-; [H] 0x7FFF/0x8000 on overflow rather than wrapping). Used in RPM/period calculations.
+; --- 16-bit signed saturating add helper (sign-extends r7's high bit, adds to er3, clamps to
+; 0x7FFF/0x8000 on overflow rather than wrapping). Used in RPM/period calculations.
                 JLT     signext_negative_path
                 ROR     A
                 MB      C, r7.7
@@ -11842,9 +11838,9 @@ scaler_div_final:
                 RT
 table2d_lookup_interp:
                 CLR     A
-; [H] --- Generic 2D table lookup/interpolation helper (row x column, e.g. RPM x Load). Given a
-; [H] table base in X1, row width in r0, row index in r1, column offset in r2, column count in r3.
-; [H] Companion to the 1D table_interp_lookup used elsewhere.
+; --- Generic 2D table lookup/interpolation helper (row x column, e.g. RPM x Load). Given a
+; table base in X1, row width in r0, row index in r1, column offset in r2, column count in r3.
+; Companion to the 1D table_interp_lookup used elsewhere.
                 LB      A, r2
                 ADD     X1, A
                 MOV     DP, X1
@@ -12220,13 +12216,13 @@ crank_edge_helper:
                 RT
 refresh_engine_flags_snapshot:
                 L       A, (00212h-00280h)[USP]
-; [H] --- Copies a 5-word input/condition snapshot (captured elsewhere, likely synchronized with
-; [H] the crank-angle interrupt) into the working flag bytes off(0011Ah)/(0011Ch)/(0011Eh)/
-; [H] (00120h)/(00122h). These are the same flag bytes tested throughout GIO1/2/3, ignition
-; [H] timing, and elsewhere in this file (e.g. "JBR off(0011eh).5, ..."), refreshed once per call
-; [H] here rather than being live hardware registers -- worth knowing when tracing any of those
-; [H] bit tests: they reflect the state as of the last refresh_engine_flags_snapshot call, not the
-; [H] instantaneous pin state.
+; --- Copies a 5-word input/condition snapshot (captured elsewhere, likely synchronized with
+; the crank-angle interrupt) into the working flag bytes off(0011Ah)/(0011Ch)/(0011Eh)/
+; (00120h)/(00122h). These are the same flag bytes tested throughout GIO1/2/3, ignition
+; timing, and elsewhere in this file (e.g. "JBR off(0011eh).5, ..."), refreshed once per call
+; here rather than being live hardware registers -- worth knowing when tracing any of those
+; bit tests: they reflect the state as of the last refresh_engine_flags_snapshot call, not the
+; instantaneous pin state.
                 ST      A, off(0011ah)
                 L       A, (00214h-00280h)[USP]
                 ST      A, off(0011ch)
@@ -12375,11 +12371,11 @@ cfgvariant_result_common:
                 SJ      cfgvariant_eval_result
 cfgvariant_check_v3:
                 CMPB    r6, #003h
-; [H] --- cfgvariant_eval_condition's dispatch body: for each specific variant index (3, 6, 7, 10,
-; [H] 11, 13, 20, 26), checks the sign of that variant's associated sensor/config byte (0xBB,
-; [H] 0x3D4, 0x3A4, 0x3CC, 0x3D2, 0x3CD, 0x3D2 again, 0xD7) and increments r0 if negative --
-; [H] reads as a per-variant "is this variant's associated input plausible/connected" check,
-; [H] feeding cfgvariant_eval_result.
+; --- cfgvariant_eval_condition's dispatch body: for each specific variant index (3, 6, 7, 10,
+; 11, 13, 20, 26), checks the sign of that variant's associated sensor/config byte (0xBB,
+; 0x3D4, 0x3A4, 0x3CC, 0x3D2, 0x3CD, 0x3D2 again, 0xD7) and increments r0 if negative --
+; reads as a per-variant "is this variant's associated input plausible/connected" check,
+; feeding cfgvariant_eval_result.
                 JNE     cfgvariant_check_v6
                 LB      A, 0bbh
                 SLLB    A

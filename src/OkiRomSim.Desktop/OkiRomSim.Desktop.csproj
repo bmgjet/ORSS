@@ -4,7 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>OkiRomSimStudio</AssemblyName>
+    <AssemblyName>RomSimStudio</AssemblyName>
     <RootNamespace>OkiRomSim.Desktop</RootNamespace>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -20,6 +20,9 @@
   <ItemGroup>
     <!-- File > New ROM lists these -->
     <None Include="..\..\Templates\*.asm" Link="Templates\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- the translations: one .json per language, read at start-up (users add their own beside them) -->
+    <None Include="..\..\lang\*.json;..\..\lang\README.md" Link="lang\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\Templates\Presets\*" Link="Templates\Presets\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <!-- File > New ROM > Create: the skeleton ROMs and their feature modules -->
     <None Include="..\..\roms\*-skeleton.asm" Link="Templates\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\roms\*-features\**\*" Link="Templates\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
@@ -46,7 +49,7 @@
     <ProjectReference Include="..\OkiRomSim.Mcp\OkiRomSim.Mcp.csproj" />
   </ItemGroup>
   <!-- A distribution build: dotnet publish -c Release -p:Bundle=true
-       The libraries (Avalonia and the rest, and this solution's own) go inside OkiRomSimStudio.dll and are loaded from
+       The libraries (Avalonia and the rest, and this solution's own) go inside RomSimStudio.dll and are loaded from
        there (EmbeddedLibraries.cs); the runtimes folder - each platform's native files and platform builds - stays beside it. -->
   <PropertyGroup Condition="'$(Bundle)' == 'true'">
     <GenerateDependencyFile>false</GenerateDependencyFile>

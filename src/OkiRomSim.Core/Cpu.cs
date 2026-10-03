@@ -1,5 +1,4 @@
-// Copyright (c) bmgjet. All rights reserved.
-// OKI MSM66207 / 66201 CPU Registers & Flags. Used in Honda OBD1 ECUs (P28, P30, P72, etc.)
+// Copyright (c) bmgjet. All rights reserved. OKI MSM66207 / 66201 CPU Registers & Flags. Used in Honda OBD1 ECUs (P28, P30, P72, etc.)
 namespace OkiRomSim.Core;
 
 public sealed class Cpu

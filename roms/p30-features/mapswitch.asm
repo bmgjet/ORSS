@@ -5,7 +5,7 @@
 ;> category: Fuel
 ;> pages: dualmap
 ;> conflicts: FEAT_DUALMAPS
-;> ram: module RAM (4 bytes)
+;> ram: module RAM (5 bytes)
 ;> about: A second tune for a switch input: while it is on, fuel and timing change by two tables against
 ;>        rpm - race fuel against pump fuel, a valet tune, or a nitrous map with the timing pulled. Off
 ;>        with the switch off. Off until enabled.

@@ -4,7 +4,7 @@
 ;> name: Rolling idle
 ;> category: Idle
 ;> pages: rollidle
-;> ram: 0FBh (event count), 0FCh bit 1, 0FDh bits 3-4, module RAM (2 bytes)
+;> ram: 0FBh (event count), 0FCh bit 1, 0FDh bits 3-4, module RAM (4 bytes)
 ;> about: At idle, one injector opening (or one spark) in every few is left out, so a different cylinder
 ;>        misses each time round and the idle rolls and lopes like a big-cam engine. Only below an rpm
 ;>        and a throttle, at a standstill, with the coolant warm and (optionally) a switch on. Skipping
@@ -26,6 +26,10 @@ define MODRAM_NEXT (rollidle_hold + 1)
 rollidle_last       EQU     MODRAM_NEXT
 undef MODRAM_NEXT
 define MODRAM_NEXT (rollidle_last + 1)
+rollidle_cyl        EQU     MODRAM_NEXT         ; the event left out last, for the datalog: its injector as a 1 bit (P2.0-P2.3), E0h a spark
+rollidle_drops      EQU     MODRAM_NEXT + 1     ; ...and how many have been left out (counts round)
+undef MODRAM_NEXT
+define MODRAM_NEXT (rollidle_cyl + 2)
 endif
 
 if XP == XP_TICK
@@ -47,7 +51,7 @@ if XP == XP_CAL
 rollidle_enable:        DB  000h
 ;@ RollingIdleMode type=u8 formula=raw category="Rolling idle" slot=rollidle.mode desc="What is left out: 0 an injector opening, 1 a spark."
 rollidle_mode:          DB  000h
-;@ RollingIdleEvery type=u8 formula=raw category="Rolling idle" slot=rollidle.every desc="Leave out one event in this many (2-20). With four cylinders an odd number moves the miss to another cylinder each time: 5 or 7 rolls, 3 is rough."
+;@ RollingIdleEvery type=u8 formula=raw min=3 max=19 category="Rolling idle" slot=rollidle.every desc="Leave out one event in this many (3-19, odd: an even number is taken as the odd one above it, so the miss moves round all four cylinders instead of wearing one). 5 or 7 rolls, 3 is rough."
 rollidle_every:         DB  005h
 ;@ RollingIdleInput type=u8 formula=raw category="Rolling idle" slot=rollidle.input desc="A switch that must be on: 01h power steering, 02h service connector, 04h start, 08h VTEC pressure, 10h A/C, 20h brake, 40h park/neutral, 80h always (no switch needed)."
 rollidle_input:         DB  080h
@@ -118,18 +122,21 @@ rollidle_off:   RB      0fdh.3
                 ANDB    0fch, #0fdh            ; no spark left out
 rollidle_done:  J       mod_tick_exit
 
-; The count down to the next event left out: 2 to 20 events apart.
+; The count down to the next event left out: 3 to 19 events apart, always odd. With four cylinders an even
+; count lands every miss on the same one or two cylinders (wear, plug fouling, a hot or washed bore); an odd
+; one moves it round all four. An even setting is taken as the odd number above it.
 rollidle_reload:
                 CLRB    A
                 LCB     A, rollidle_every
-                CMPB    A, #002h
+                CMPB    A, #003h
                 JGE     rollidle_reload_hi
-                LB      A, #002h
+                LB      A, #003h
 rollidle_reload_hi:
-                CMPB    A, #014h
+                CMPB    A, #013h
                 JLT     rollidle_reload_st
-                LB      A, #014h
+                LB      A, #013h
 rollidle_reload_st:
+                ORB     A, #001h
                 STB     A, 0fbh
                 RT
 
@@ -153,7 +160,27 @@ rollidle_inj_ret:
                 RT
 rollidle_inj_skip:
                 CAL     rollidle_reload
+                POPS    A                      ; the pattern (word mode): 0 bits open, with those already open
+                LB      A, ACC
+                XORB    A, #0ffh
+                ANDB    A, P2                  ; the one opening now: asked to open and not open yet (P2 low)
+                ANDB    A, #00fh               ; a 1 bit: P2.0 injector 1, P2.1 3, P2.2 4, P2.3 2
+                XCHGB   A, 0fbh                ; that into 0FBh for a moment, the count into A
+                PUSHS   A
+                L       A, DP
+                PUSHS   A
+                MOV     DP, #rollidle_cyl
+                LB      A, 0fbh
+                STB     A, [DP]                ; the injector left out (for the datalog)
+                INC     DP
+                LB      A, [DP]
+                ADDB    A, #001h
+                STB     A, [DP]                ; one more left out
                 POPS    A
+                MOV     DP, A
+                POPS    A                      ; the count back
+                LB      A, ACC
+                STB     A, 0fbh
                 LB      A, #0ffh               ; this one opens nothing
                 RT
 
@@ -185,6 +212,12 @@ rollidle_spark: MB      C, 0fdh.4
                 SJ      rollidle_spark_done
 rollidle_spark_out:
                 CAL     rollidle_reload
+                MOV     DP, #rollidle_cyl      ; for the datalog: a spark left out, and one more of them
+                MOVB    [DP], #0e0h
+                INC     DP
+                LB      A, [DP]
+                ADDB    A, #001h
+                STB     A, [DP]
                 MOV     DP, #rollidle_hold
                 LB      A, 0adh                ; hold: half an interval
                 STB     A, [DP]

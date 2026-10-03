@@ -5,7 +5,7 @@
 ;> category: Boost
 ;> pages: ebc
 ;> conflicts: FEAT_BOOSTMANUAL, FEAT_STOCK_AT
-;> ram: module RAM (3 bytes)
+;> ram: module RAM (2 bytes)
 ;> about: Drives a boost control solenoid on P4.3 (the stock A/T lock-up output) at 19.5 Hz: a base duty
 ;>        against rpm, corrected towards a target boost against rpm (closed loop, set the gain to 0 for
 ;>        open loop). Below a throttle opening the solenoid is off and the wastegate holds its spring

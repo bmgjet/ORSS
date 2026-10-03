@@ -12,7 +12,7 @@ using OkiRomSim.Core;
 
 namespace OkiRomSim.Desktop;
 
-/// A plugin: a .dll picked in Settings > Plugins with a public class that implements this. It is made once when the app starts (or when it is added), Start is called on the UI thread with everything it may use, and Stop when the app closes or the plugin is switched off. A plugin runs inside the app with the app's own rights: it can read and change the ROM, the definitions and the simulator, add menu entries, buttons, tabs, windows, pages and settings, and feed the datalog. To make one: a class library for the same .NET as the app that references OkiRomStudio's OkiRomSimStudio.dll (with Private=false, so the app's own copy is used), and a class like public sealed class MyPlugin : IOkiPlugin { public string Name => "My plugin"; public string Description => "What it does."; public string Version => "1.0"; public void Start(PluginContext app) => app.AddMenuItem("Say hello", () => app.SetStatus("hello")); public void Stop() { } } The ScanTool plugin (src/Plugins/ScanTool) is a complete one to start from.
+/// A plugin: a .dll picked in Settings > Plugins with a public class that implements this. It is made once when the app starts (or when it is added), Start is called on the UI thread with everything it may use, and Stop when the app closes or the plugin is switched off. A plugin runs inside the app with the app's own rights: it can read and change the ROM, the definitions and the simulator, add menu entries, buttons, tabs, windows, pages and settings, and feed the datalog. To make one: a class library for the same .NET as the app that references OkiRomStudio's RomSimStudio.dll (with Private=false, so the app's own copy is used), and a class like public sealed class MyPlugin : IOkiPlugin { public string Name => "My plugin"; public string Description => "What it does."; public string Version => "1.0"; public void Start(PluginContext app) => app.AddMenuItem("Say hello", () => app.SetStatus("hello")); public void Stop() { } } The ScanTool plugin (src/Plugins/ScanTool) is a complete one to start from.
 public interface IOkiPlugin
 {
     string Name { get; }
@@ -24,7 +24,30 @@ public interface IOkiPlugin
     void Stop();
 }
 
-/// What a plugin is given: the whole app (the window, the simulator and ROM, the calibration editor, the datalog, the settings) and a few ways in that keep what it adds tidy - its own menu entries, buttons, tabs, pages, settings and a folder and settings of its own. Everything here is used on the UI thread; from another thread, go through Ui().
+/// What a plugin is given: the whole app (the window, the simulator and ROM, the calibration editor, the datalog, the settings) and a few ways in that keep what it adds tidy - its own menu entries, buttons, tabs, pages, settings and a folder and settings of its own. Everything here is used on the UI thread; from another thread, go through Ui(). An emulator a plugin drives in place of the app's own (TakeOverEmulator): while it is in charge, the Emulator menu (connect, download, upload, validate, real-time update), the Datalogging menu's and the datalog page's Connect, and both status dots go to it. Called on the UI thread; long work belongs on the plugin's own threads.
+public interface IEmulatorTakeover
+{
+    /// What it is ("ALPHAemu"), for the menus and the tooltips.
+    string Name { get; }
+    /// The link to the device is up.
+    bool Connected { get; }
+    /// Connecting or reconnecting right now.
+    bool Connecting { get; }
+    /// One line on how the link is, for the tooltips.
+    string Status { get; }
+    /// Connect (the emulator and the datalog that comes over it), or disconnect when connected.
+    void ToggleConnect();
+    /// Read the ROM out of the device and open it.
+    void Download();
+    /// Send the ROM open here to the device.
+    void Upload();
+    /// Check the device's ROM against the one here.
+    void Validate();
+    /// Changes go to the running image as they are made.
+    bool RealtimeUpdate { get; }
+    void ToggleRealtime();
+}
+
 public sealed class PluginContext
 {
     readonly PluginManager _manager;
@@ -117,6 +140,19 @@ public sealed class PluginContext
         _undo.Add(() => _manager.SettingsPages.Remove((title, build)));
     }
 
+    /// Drive the emulator and its datalog from this plugin: the app's Emulator and Datalogging controls go to it (and the app's own emulator link is closed) until the plugin is switched off or calls ReleaseEmulator.
+    public void TakeOverEmulator(IEmulatorTakeover takeover)
+    {
+        _manager.SetEmulator(takeover);
+        _undo.Add(() => _manager.ClearEmulator(takeover));
+    }
+
+    /// Hand the Emulator and Datalogging controls back to the app.
+    public void ReleaseEmulator(IEmulatorTakeover takeover) => _manager.ClearEmulator(takeover);
+
+    /// Tell the app the takeover's state changed (connected, real-time...): the menus and the dots follow.
+    public void EmulatorChanged() => Dispatcher.UIThread.Post(() => _manager.RaiseEmulatorChanged());
+
     /// A line on the status bar (and in the Debug page's log).
     public void SetStatus(string text) => _manager.SetStatus($"{Name}: {text}");
 
@@ -175,6 +211,15 @@ public sealed class PluginManager
     public readonly List<(string Title, Func<Control> Build)> SettingsPages = [];
     public readonly List<Loaded> Plugins = [];
 
+    /// The plugin in charge of the emulator and its datalog, or null for the app's own.
+    public IEmulatorTakeover? Emulator { get; private set; }
+    /// It changed hands, or its state changed.
+    public event Action? EmulatorChanged;
+
+    internal void SetEmulator(IEmulatorTakeover t) { Emulator = t; RaiseEmulatorChanged(); AppLog.Action("plugins", $"{t.Name} drives the emulator and its datalog"); }
+    internal void ClearEmulator(IEmulatorTakeover t) { if (ReferenceEquals(Emulator, t)) { Emulator = null; RaiseEmulatorChanged(); AppLog.Action("plugins", $"{t.Name} handed the emulator back"); } }
+    internal void RaiseEmulatorChanged() { try { EmulatorChanged?.Invoke(); } catch (Exception ex) { AppLog.Error("plugins", "emulator change handler failed", ex); } }
+
     public sealed record Loaded(string Path, IOkiPlugin Plugin, PluginContext Context);
 
     internal PluginManager(Window window, SimHost sim, CalibrationView cal, DatalogView log, Func<AppSettings> settings,
@@ -223,7 +268,9 @@ public sealed class PluginManager
             foreach (var plugin in found)
             {
                 var ctx = new PluginContext(this, plugin.Name);
-                plugin.Start(ctx);
+                // a Start that fails half way has already added some of its buttons and pages: they come out again, or nothing could ever remove them
+                try { plugin.Start(ctx); }
+                catch { ctx.TakeBack(); throw; }
                 Plugins.Add(new Loaded(path, plugin, ctx));
                 AppLog.Action("plugins", $"started {plugin.Name} {plugin.Version} from {path}");
             }

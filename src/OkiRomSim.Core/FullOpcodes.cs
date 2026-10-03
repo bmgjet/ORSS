@@ -1,5 +1,4 @@
-// Copyright (c) bmgjet. All rights reserved.
-// 100% Full-Coverage OKI 66207 Opcode Table & Decoder. Generated from the 66207.op opcode spec (2,623 instructions). This file is data-only: machine-generated, not hand-written.
+// Copyright (c) bmgjet. All rights reserved. 100% Full-Coverage OKI 66207 Opcode Table & Decoder. Generated from the 66207.op opcode spec (2,623 instructions). This file is data-only: machine-generated, not hand-written.
 namespace OkiRomSim.Core;
 
 /// <summary> One entry in the OKI 66207 opcode table: a display-form mnemonic, the DD (word/byte mode) gate it requires ('1' = word-mode only, '0' = byte-mode only, 'S'/'R' = this instruction forces DD to true/false afterward, 'U' = unaffected/no gate), and the literal+placeholder byte pattern that must match at the instruction's address for this entry to decode. </summary>

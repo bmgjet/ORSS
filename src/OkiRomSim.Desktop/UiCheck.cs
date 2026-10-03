@@ -10,7 +10,7 @@ using OkiRomSim.Core;
 
 namespace OkiRomSim.Desktop;
 
-/// `OkiRomSimStudio --ui-check <folder>`: opens every window and page at 1920 x 1080 and 1366 x 768, saves a picture of each, and lists every input that is off the window, clipped by the panel it sits in, or lying over a piece of text - the "the box covers its label" and "I have to stretch the window to see the inputs" kind of fault. Writes report.txt to the folder, then quits.
+/// `RomSimStudio --ui-check <folder>`: opens every window and page at 1920 x 1080 and 1366 x 768, saves a picture of each, and lists every input that is off the window, clipped by the panel it sits in, or lying over a piece of text - the "the box covers its label" and "I have to stretch the window to see the inputs" kind of fault. Writes report.txt to the folder, then quits.
 public static class UiCheck
 {
     /// Running the check: nothing it does to the windows is saved.
@@ -29,7 +29,98 @@ public static class UiCheck
         var report = new List<string>();
         try
         {
+            // OKIROM_UICHECK_HC=1: everything in high contrast OKIROM_UICHECK_THEME=light / contrast: everything in that theme
+            AppTheme.Set(AppTheme.Parse(Environment.GetEnvironmentVariable("OKIROM_UICHECK_THEME") ?? (Environment.GetEnvironmentVariable("OKIROM_UICHECK_HC") == "1" ? "contrast" : "dark")));
             await Settle();
+            // OKIROM_UICHECK_OPEN=rom.asm: open that ROM first (the windows then show its settings)
+            if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_OPEN") is { Length: > 0 } open)
+            {
+                main.OpenFileForCheck(open);
+                for (int i = 0; i < 120 && !string.Equals(main.Host.LoadedPath, Path.GetFullPath(open), StringComparison.OrdinalIgnoreCase); i++) await Task.Delay(250);
+                await Task.Delay(1500);
+            }
+            // OKIROM_UICHECK_INJPICK=550: the injector window with that injector picked, and what it would write
+            if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_INJPICK") is { Length: > 0 } pick)
+            {
+                var iw = new InjectorWindow(main.Host);
+                report.Add(iw.PickForCheck(pick));
+                File.WriteAllLines(Path.Combine(dir, "report.txt"), report);
+                (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.Shutdown();
+                return;
+            }
+            // OKIROM_UICHECK_PLUGIN=plugin.dll: load it, open everything it adds (its tab, every menu line, its settings page), and report every error it logs or throws on the way
+            if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_PLUGIN") is { Length: > 0 } pluginPath && main.PluginsForCheck is { } pm)
+            {
+                var errors = new List<string>();
+                void Logged(LogEntry e) { if (e.Kind is LogKind.Error or LogKind.Warning) lock (errors) errors.Add($"{e.Kind} {e.Source}: {e.Message} {e.Detail}".Trim()); }
+                AppLog.Added += Logged;
+                void Unhandled(object? _, Avalonia.Threading.DispatcherUnhandledExceptionEventArgs e) { lock (errors) errors.Add("UNHANDLED " + e.Exception); e.Handled = true; }
+                Dispatcher.UIThread.UnhandledException += Unhandled;
+                int before = pm.MenuItems.Count;
+                report.Add("load: " + (pm.Load(pluginPath) ?? "ok"));
+                await Settle();
+                var lifetime = Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime;
+                async Task ShotNew(string label, Func<Task> act)
+                {
+                    var had = lifetime?.Windows.ToList() ?? [];
+                    int e0; lock (errors) e0 = errors.Count;
+                    try { await act(); } catch (Exception ex) { lock (errors) errors.Add($"THREW in {label}: {ex}"); }
+                    for (int k = 0; k < 4; k++) await Settle();
+                    foreach (var w in (lifetime?.Windows.ToList() ?? []).Except(had))
+                    {
+                        Check(w, $"plugin {label}", dir, report);
+                        w.Close();
+                        await Settle();
+                    }
+                    lock (errors) report.Add($"  {label}: {errors.Count - e0} error(s)" + (errors.Count > e0 ? "\n    " + string.Join("\n    ", errors.Skip(e0).Take(4)) : ""));
+                }
+                // the emulator takeover: the app's Emulator / Datalogging controls go to the plugin; Connect must reach only a real device
+                if (pm.Emulator is { } emu)
+                {
+                    report.Add($"takeover: {emu.Name}, connected {emu.Connected}, status '{emu.Status}', realtime {emu.RealtimeUpdate}");
+                    await ShotNew("takeover connect", async () =>
+                    {
+                        emu.ToggleConnect();
+                        for (int k = 0; k < 20 && emu.Connecting; k++) await Task.Delay(250);
+                        report.Add($"  after Connect: connected {emu.Connected}, status '{emu.Status}'");
+                        if (emu.Connected || emu.Connecting) emu.ToggleConnect();
+                    });
+                    // OKIROM_UICHECK_PLUGIN_SIM=1: the plugin's simulated device switched on (its own setting), then the whole round
+                    if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_PLUGIN_SIM") == "1")
+                        await ShotNew("takeover simulated", async () =>
+                        {
+                            emu.ToggleConnect();
+                            for (int k = 0; k < 20 && !emu.Connected; k++) await Task.Delay(250);
+                            report.Add($"  simulated: connected {emu.Connected}, status '{emu.Status}'");
+                            emu.Validate(); await Task.Delay(1500);
+                            emu.ToggleRealtime(); report.Add($"  realtime after toggle: {emu.RealtimeUpdate}");
+                            emu.ToggleConnect(); await Task.Delay(500);
+                            report.Add($"  after disconnect: connected {emu.Connected}");
+                        });
+                }
+                else report.Add("takeover: none");
+                // its tab
+                await ShotNew("tab", async () => { main.ShowTab("ALPHAemu"); await Settle(); Check(main, "plugin tab", dir, report); });
+                // every menu line it added (Disconnect last)
+                var lines = pm.MenuItems.Skip(before).Where(m => !m.Separator).ToList();
+                foreach (var m in lines.OrderBy(m => m.Text.StartsWith("Disconnect") ? 1 : 0))
+                    await ShotNew(m.Text, () => { m.Run(); return Task.CompletedTask; });
+                // its settings pages
+                foreach (var (title, build) in pm.SettingsPages)
+                    await ShotNew("settings " + title, () =>
+                    {
+                        var win = new Window { Width = 900, Height = 700, Content = build() };
+                        win.Show();
+                        return Task.CompletedTask;
+                    });
+                await ShotNew("unload", () => { pm.Unload(pluginPath); return Task.CompletedTask; });
+                AppLog.Added -= Logged;
+                Dispatcher.UIThread.UnhandledException -= Unhandled;
+                lock (errors) { report.Add($"TOTAL errors {errors.Count}"); report.AddRange(errors); }
+                File.WriteAllLines(Path.Combine(dir, "report.txt"), report);
+                lifetime?.Shutdown();
+                return;
+            }
             // OKIROM_UICHECK_ONLY="import maps,main": just those (a quicker look at one window while working on it)
             var only = Environment.GetEnvironmentVariable("OKIROM_UICHECK_ONLY") is { Length: > 0 } o
                 ? o.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries) : null;
@@ -44,8 +135,104 @@ public static class UiCheck
                 main.LookupForCheck("0ach");
                 await Settle();
             }
-            // OKIROM_UICHECK_PERF=seconds: what the app costs - CPU, memory, garbage collections and how late the UI
-            // thread answers - sitting in Tuner mode, replaying a log there, and with the simulator running
+            // OKIROM_UICHECK_TABLES=1: the three views of a map - Table, Line and 3D - and the 3D view turned right round, one picture per 10 degrees
+            if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_TABLES") == "1")
+            {
+                async Task Shot(Window w, string file)
+                {
+                    w.Show(); await Settle();
+                    using var bmp = new RenderTargetBitmap(new PixelSize((int)w.Bounds.Width, (int)w.Bounds.Height));
+                    bmp.Render(w); bmp.Save(Path.Combine(dir, file + ".png"));
+                }
+                var grid = new TableGrid { Model = SampleMap(), ReadOnly = true, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Top };
+                var gw = new Window { Width = 620, Height = 218, Content = grid };
+                await Shot(gw, "table-grid"); gw.Close();
+                var gr = new Window { Width = 1000, Height = 560, Content = new TableGraph { Model = SampleMap() } };
+                await Shot(gr, "table-line"); gr.Close();
+                var surf = new TableSurface { Model = SampleMap(), ReadOnly = true };
+                var sw = new Window { Width = 1000, Height = 640, Content = surf };
+                sw.Show(); await Settle();
+                for (int k = 0; k < 36; k++)
+                {
+                    surf.SetAngles(-0.7 + (k * Math.PI / 18), 0.55);
+                    await Shot(sw, $"table-3d-{k:00}");
+                }
+                sw.Close();
+                (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.Shutdown();
+                return;
+            }
+            // OKIROM_UICHECK_STREAM=1: a Default skeleton ROM logged from the simulator by the channel stream; channels picked and unpicked while logging must show up (and go) in the frames, the values list and the channel lists
+            if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_STREAM") == "1")
+            {
+                var sk = Skeleton.Find(NewRomWindow.Templates()).First(s => s.Name.Contains("p30", StringComparison.OrdinalIgnoreCase) || true);
+                var dirS = Path.Combine(Path.GetTempPath(), "romsim-streamcheck");
+                Directory.CreateDirectory(dirS);
+                var rom = Path.Combine(dirS, "streamcheck.asm");
+                File.WriteAllText(rom, sk.BuildSource(SkeletonPresets.Default, sk.Path, "streamcheck"));
+                main.OpenFileForCheck(rom);
+                for (int i = 0; i < 120 && main.Host.LoadedPath == null; i++) await Task.Delay(250);
+                await Task.Delay(1500);
+                var view = main.DatalogPanel;
+                var eng = view.Engine;
+                ChannelStream.Selected = [.. DatalogChannels.Defaults];
+                eng.Good = 0;
+                _ = Task.Run(() => { try { eng.Start("simulator", "auto", 38400); } catch (Exception ex) { report.Add("start: " + ex.Message); } });
+                var t0 = DateTime.Now;
+                while ((DateTime.Now - t0).TotalSeconds < 30 && eng.Good < 10) await Task.Delay(250);
+                report.Add($"connected: {eng.Protocol?.Name ?? "-"}, {eng.Good} frames; channels {string.Join(",", eng.Latest?.Channels() ?? [])}");
+                async Task Pick(string[] picks, string what)
+                {
+                    view.SetPicksForCheck(picks);
+                    var t1 = DateTime.Now;
+                    while ((DateTime.Now - t1).TotalSeconds < 8) await Task.Delay(250);
+                    var ch = eng.Latest?.Channels().ToList() ?? [];
+                    report.Add($"{what}: frame has {string.Join(",", ch)}");
+                    report.Add($"  values list: {string.Join(",", view.ShownParameterNames())}");
+                    report.Add($"  offered channels: {string.Join(",", view.Channels())}");
+                }
+                await Pick([.. DatalogChannels.Defaults, "cuts", "limiters"], "rev limit added");
+                await Pick([.. DatalogChannels.Defaults], "rev limit taken off");
+                await Pick([.. DatalogChannels.Everything(DatalogChannels.TableSizeAll)], "everything");
+                // the functions' own state: module RAM named from the build
+                await Pick([.. DatalogChannels.Defaults, .. Enumerable.Range(0, ModuleDebug.Bytes).Select(i => $"mod{i}")], "function state");
+                report.Add($"  module RAM names: {string.Join(",", ModuleDebug.Variables.Select(v => v.Name))}");
+                // several values picked, and gauges made of them from the right-click menu
+                int before = view.Gauges.Count;
+                view.ValuesForCheck.PickKeys(["rpm", "ect_c", "map_kpa"]);
+                var items = view.ValuesForCheck.SelectionMenu?.Invoke(view.ValuesForCheck.SelectedRows).ToList() ?? [];
+                report.Add($"  picked {view.ValuesForCheck.SelectedRows.Count}: {string.Join(",", view.ValuesForCheck.SelectedRows.Select(r => r.Cells[0].Text))}; menu: {string.Join(" | ", items.Select(i => i.Text))}");
+                items.FirstOrDefault().Run?.Invoke();
+                await Settle();
+                report.Add($"  gauges {before} -> {view.Gauges.Count}");
+                main.ShowTab("Datalog"); await Settle();
+                Check(main, "datalog values picked", dir, report);
+                await Task.Run(eng.Stop);
+                File.WriteAllLines(Path.Combine(dir, "report.txt"), report);
+                (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.Shutdown();
+                return;
+            }
+            // OKIROM_UICHECK_SIMDL="a.asm;b.asm": open each ROM and datalog it from the simulator (protocol auto), as Connect does; report what it got
+            if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_SIMDL") is { Length: > 0 } simdl)
+            {
+                foreach (var rom in simdl.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
+                    main.OpenFileForCheck(rom);
+                    for (int i = 0; i < 60 && main.Host.LoadedPath == null; i++) await Task.Delay(250);
+                    await Task.Delay(1500);
+                    var eng = main.DatalogPanel.Engine;
+                    eng.Good = 0;
+                    var t0 = DateTime.Now;
+                    _ = Task.Run(() => { try { eng.Start("simulator", "auto", 38400); } catch (Exception ex) { report.Add("start: " + ex.Message); } });
+                    while ((DateTime.Now - t0).TotalSeconds < 25 && eng.Good < 20) await Task.Delay(250);
+                    report.Add($"{Path.GetFileName(rom)}: loaded {main.Host.LoadedPath != null}, running {main.Host.IsRunning}, {eng.Good} frames, {eng.Bad} missed, " +
+                               $"protocol {eng.Protocol?.Name ?? "-"}, status '{eng.Status}' after {(DateTime.Now - t0).TotalSeconds:0.0} s\n{eng.DetectReport}");
+                    await Task.Run(eng.Stop);
+                }
+                File.WriteAllLines(Path.Combine(dir, "report.txt"), report);
+                (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.Shutdown();
+                return;
+            }
+            // OKIROM_UICHECK_PERF=seconds: what the app costs - CPU, memory, garbage collections and how late the UI thread answers - sitting in Tuner mode, replaying a log there, and with the simulator running
             if (int.TryParse(Environment.GetEnvironmentVariable("OKIROM_UICHECK_PERF"), out var secs) && secs > 0)
             {
                 main.WindowState = WindowState.Maximized;
@@ -101,8 +288,7 @@ public static class UiCheck
                 main.Host.Control("pause");
                 await Measure("simulator paused");
             }
-            // OKIROM_UICHECK_PROJECT=1: what is on screen saved to a project, everything cleared away, the project opened:
-            // it all comes back
+            // OKIROM_UICHECK_PROJECT=1: what is on screen saved to a project, everything cleared away, the project opened: it all comes back
             if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_PROJECT") == "1")
             {
                 main.Host.SetInput("rpm", 3000);
@@ -138,8 +324,7 @@ public static class UiCheck
                 Is(logFrames.Count == 300 && logPos == 123 && logName == "check log" && logFrames[200].Rpm == 3000 && logFrames[7].Raw?[0] == 7, $"the datalog: {logFrames.Count} frames, at {logPos}, '{logName}'");
                 main.TunerMode(false);
             }
-            // OKIROM_UICHECK_WIDGETS=1: a widget parented to the main window must still be there after the window is
-            // minimized and brought back maximized (it used to go off the screen, or behind the window)
+            // OKIROM_UICHECK_WIDGETS=1: a widget parented to the main window must still be there after the window is minimized and brought back maximized (it used to go off the screen, or behind the window)
             if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_WIDGETS") == "1")
             {
                 var gauges = main.DatalogPanel.Gauges;
@@ -162,10 +347,23 @@ public static class UiCheck
                 }
                 gauges.CloseWidgets();
             }
+            // OKIROM_UICHECK_ONLY=chip: the pinout with the 8255 tucked away (the tab on the processor), then shown with its traces
+            if (only != null && Wanted("chip"))
+            {
+                main.WindowState = WindowState.Maximized;
+                main.TunerMode(false);
+                main.ChipForCheck.ShowPpiForCheck(false); await Settle();
+                Check(main, "chip 8255 hidden", dir, report);
+                main.ChipForCheck.ShowPpiForCheck(true); await Settle();
+                Check(main, "chip 8255 shown", dir, report);
+                main.ChipForCheck.ShowPpiForCheck(false);
+            }
             // the window as the app opens it on this screen (fitted to it, maximized), then at a 1366 x 768 laptop's size
             foreach (var (w, h) in new[] { (0, 0), (1366, 768), (2560, 1400) })
             {
                 if (!Wanted("main")) break;
+                // the simulator's own layout first, whatever the settings opened the app in
+                main.TunerMode(false);
                 if (w == 0) main.WindowState = WindowState.Maximized;
                 else { main.WindowState = WindowState.Normal; main.Width = w; main.Height = h; }
                 await Settle();
@@ -215,12 +413,26 @@ public static class UiCheck
             {
                 ("welcome", () => new WelcomeWindow()),
                 ("settings", () => new SettingsWindow(AppSettings.Load(), () => "off", ProcessorProfile.Current)),
+                ("settings units", () => { var w = new SettingsWindow(AppSettings.Load(), () => "off", ProcessorProfile.Current); w.ShowPage("Units"); return w; }),
+                ("settings dyno", () => { var w = new SettingsWindow(AppSettings.Load(), () => "off", ProcessorProfile.Current); w.ShowPage("Dyno"); return w; }),
+                ("virtual dyno imperial", () => { OkiRomSim.Calibration.Units.Now = OkiRomSim.Calibration.UnitSettings.ImperialUs(); var w = new DynoWindow(main.DatalogPanel); w.ForCheck(); w.Closed += (_, _) => OkiRomSim.Calibration.Units.Now = new(); return w; }),
                 ("gauge editor", () => new GaugeEditor(new GaugeSpec { Width = 900, Height = 160 }, ["rpm", "map_kpa"])),
                 ("scale", () => new ScaleWindow(host, host.Defs().Items.FirstOrDefault(i => i.IsTable && i.ColumnScaleAddress != null))),
                 ("compare", () => new CompareWindow(() => null, "some-rom-with-a-long-name.asm")),
                 ("check engine", () => new MilWindow(host, _ => { })),
                 ("new rom", () => new NewRomWindow()),
-                ("new rom create", () => { var w = new NewRomWindow(); w.ShowCreate(); return w; }),
+                ("new rom create", () => { var w = new NewRomWindow(); w.ShowCreate(); w.ForCheck(); return w; }),
+                ("new rom default", () => { var w = new NewRomWindow(); w.ShowCreate(); w.PickDefault(); return w; }),
+                ("change functions", () => new NewRomWindow(new NewRomWindow.ChangeRequest(Skeleton.Find(NewRomWindow.Templates()).First(),
+                    [.. SkeletonPresets.Default], @"D:\Tunes\p30-custom.asm", true, "p30-custom.asm"))),
+                ("setup wizard 1", () => new SetupWizardWindow(host)),
+                ("setup wizard 2", () => { var w = new SetupWizardWindow(host); w.ShowPage(1); return w; }),
+                ("setup wizard 3", () => { var w = new SetupWizardWindow(host); w.ShowPage(2); return w; }),
+                ("setup wizard 4", () => { var w = new SetupWizardWindow(host); w.ShowPage(3); return w; }),
+                ("setup wizard 5", () => { var w = new SetupWizardWindow(host); w.ShowPage(4); return w; }),
+                ("setup wizard 6", () => { var w = new SetupWizardWindow(host); w.ShowPage(5); return w; }),
+                ("virtual dyno", () => { var w = new DynoWindow(main.DatalogPanel); w.ForCheck(); return w; }),
+                ("virtual dyno triggers", () => { var w = new DynoWindow(main.DatalogPanel); w.ForCheck(); w.ShowTriggers(); return w; }),
                 ("feature patches", () => new FeaturePatchWindow(host)),
                 ("injectors", () => new InjectorWindow(host)),
                 ("map sensor", () => new MapSensorWindow(host)),
@@ -233,10 +445,20 @@ public static class UiCheck
                     return w;
                 }),
                 ("codes and service", () => new ServiceWindow(main.DatalogPanel.Engine, host)),
+                ("datalog channels", () => new DatalogChannelsWindow(DatalogChannels.Defaults, ["4|afr|10|0|1"], null, ["rpm", "map_kpa", "afr", "lambda"])),
                 ("demon onboard", () => new OnboardWindow(host, main.DatalogPanel, null)),
                 ("updates", () => new UpdatesWindow(Environment.GetEnvironmentVariable("OKIROM_UPDATE_SITE") ?? Updater.DefaultSite)),
                 ("line view", () => new Window { Width = 1000, Height = 560, Content = new TableGraph { Model = SampleMap() } }),
             };
+            // the virtual dyno driven as a user would: the Start button, the hotkey, auto start
+            if (Wanted("dyno run"))
+            {
+                var dw = new DynoWindow(main.DatalogPanel);
+                dw.Show(main);
+                await Settle();
+                report.Add("dyno run: " + await dw.SelfTest());
+                dw.Close();
+            }
             foreach (var (name, make) in windows)
             {
                 if (!Wanted(name)) continue;
@@ -250,6 +472,8 @@ public static class UiCheck
                     await Settle();
                     // reading another ROM takes a few seconds
                     if (name == "import maps") for (int k = 0; k < 40 && win.IsVisible; k++) await Settle();
+                    // the pick's interrupt time is measured in the simulator in the background (a second or two)
+                    if (name is "new rom create" or "new rom default") { await Task.Delay(7000); await Settle(); }
                     // the smallest the window lets itself be made
                     if (small && win.CanResize) { win.Width = Math.Max(win.MinWidth, 200); win.Height = Math.Max(win.MinHeight, 200); await Settle(); }
                     string label = $"{name}{(small ? " (smallest)" : "")}";
@@ -268,6 +492,8 @@ public static class UiCheck
         }
         catch (Exception ex) { report.Add("check failed: " + ex); }
         File.WriteAllLines(Path.Combine(dir, "report.txt"), report.Count == 0 ? ["no problems found"] : report);
+        // in another language: the English text seen with no translation, for filling the gaps
+        if (Lang.Current != "en") try { Lang.WriteMissing(dir); } catch { }
         (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.Shutdown();
     }
 
@@ -347,7 +573,10 @@ public static class UiCheck
                 if (r.Right > ar.Right + 2 && r.X < ar.Right - 2 && a.GetVisualAncestors().OfType<ScrollViewer>().FirstOrDefault()?.HorizontalScrollBarVisibility is not Avalonia.Controls.Primitives.ScrollBarVisibility.Auto)
                 { report.Add($"{label}: {what} is cut off at the side by {a.GetType().Name} ({Fmt(r)} past {ar.Right:0})"); problems++; break; }
             }
-            // lying over text
+            // lying over text: only the part of the input on screen (one scrolled half out of a list is cut off at its edge)
+            foreach (var a in c.GetVisualAncestors().OfType<Control>())
+                if (a is ScrollContentPresenter && a.TransformToVisual(win) is { } sm)
+                    r = r.Intersect(new Rect(a.Bounds.Size).TransformToAABB(sm));
             foreach (var t in texts)
             {
                 if (t.TransformToVisual(win) is not { } tm) continue;

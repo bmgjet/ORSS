@@ -21,8 +21,8 @@ public static class ModulePages
     public static readonly string[] ModOutputs =
     [
         "None", "P0.0 (A/C clutch, A15)", "P0.1 (purge valve, A20)", "P0.4 (A/T lock-up)", "P1.2 (O2 heater, A6)",
-        "P1.4 (check engine light, A13)", "P1.5 (ECU LED)", "P0.5 high (alternator control, A16)", "P0.5 low (alternator control, A16)",
-        "P0.0 held off (A/C clutch disengaged)",
+        "P1.4 (check engine light, A13)", "P1.5 (ECU LED)", "P0.2 high (alternator control, A16)", "P0.2 low (alternator control, A16)",
+        "P0.0 held off (A/C clutch disengaged)", "P0.3 (radiator fan)", "P4.3 (pin A17)",
     ];
 
     /// A general purpose output as the skeleton's GIO modules lay it out: an rpm switch point with its own off point, windows on the other readings, delays and a flash mode.
@@ -53,6 +53,51 @@ public static class ModulePages
                 S($"gpo{n}.flash", "Flash while on", "On and off, each for the on delay, while the conditions hold: a warning light.")),
         ]);
 
+    /// VTEC as the skeleton's VTEC control module lays it out: the HTS page, with the switch between its own engage points and the stock ones, and the outputs a module can drive.
+    public static CalPage VtecModule() => new("vtec", "VTEC", "Outputs",
+        "Where the cam changes over, the conditions it needs, and the checks that can be switched off. Tick \"Use these engage points\" " +
+        "for the points and conditions here; untick it and the stock points (at the bottom) decide, as on a ROM without the module.",
+        [
+            G("VTEC settings",
+                S("vtec.enable", "Enable VTEC", "Off: the solenoid is never switched on - a non-VTEC head, or a conversion not wired yet."),
+                S("vtec.custom", "Use these engage points", "On: the rpm, throttle and conditions on this page decide. Off: the stock points below do."),
+                V("vtec.minect", "Minimum ECT", "°C"),
+                V("vtec.minspeed", "Minimum speed", "km/h", "Above 0 keeps VTEC out at a standstill."),
+                V("vtec.minload", "Minimum load", "mBar")),
+            G("VTEC RPM",
+                V("vtec.rpm.high", "High load engage", "rpm", "Where VTEC comes in at or above the high load throttle."),
+                V("vtec.tps.high", "High load above TPS", "%"),
+                V("vtec.rpm.low", "Low load engage", "rpm", "Where VTEC comes in at or below the low load throttle; in between, on a straight line."),
+                V("vtec.tps.low", "Low load below TPS", "%"),
+                V("vtec.disengage", "Disengage delay", "rpm", "Once in, VTEC stays in until the rpm is this far under the engage point, so it does not chatter at the point.")),
+            G("VTEC options",
+                S("vtec.nospeed", "Disable VTEC speed check"),
+                S("vtec.notemp", "Disable VTEC temp check"),
+                S("vtec.noerror", "Disable VTEC error check", "Engage even with a sensor fault stored.")),
+            G("Alternative output",
+                S("vtec.alt.enable", "Enable alternative output"),
+                C("vtec.alt.output", "Output", ModOutputs),
+                S("vtec.alt.invert", "Invert output")),
+            HtsPages.StockVtec,
+        ]);
+
+    /// The MAP sensor a ROM built from the skeleton is set up for: the scale its pressures are shown in.
+    public static CalPage MapSensor() => new("mapsensor", "MAP sensor", "Sensors",
+        "The MAP sensor this ROM is set up for: what it reads at 0 V and at 5 V. The ECU never reads these; the app shows every pressure on " +
+        "this scale. To fit another sensor use Tools > MAP sensor size (or the set-up wizard): it moves every load breakpoint and pressure setting " +
+        "to suit and sets these. Typing here only changes how the pressures are shown.",
+        [
+            G("MAP sensor",
+                V("mapsensor.zero", "Reads at 0 V", "mBar"),
+                V("mapsensor.full", "Reads at 5 V", "mBar")),
+        ]);
+
+    /// The every-channel datalog module's own setting: eight RAM addresses of your own to log.
+    public static CalPage DatalogExtra() => new("dlextra", "Datalog: RAM addresses", "Datalog",
+        "Eight RAM addresses to log as the channels 'RAM address 1-8' (Datalogging > Channels, group Your RAM addresses): any byte from 80h to " +
+        "47Fh, 0 for none. The memory map names what each RAM byte holds.",
+        [G("RAM addresses to log", T("dlextra.user", "Addresses", "", "One a cell, 1 to 8; type them in hex as 0x1F0 or in decimal."))]);
+
     public static CalPage RollingIdle() => new("rollidle", "Rolling idle", "Idle",
         "A lumpy, big-cam idle: one injector opening (or one spark) in every few is left out at idle, so a different cylinder misses each " +
         "time round. Only below the rpm and throttle set here, at a standstill and warm.",
@@ -61,7 +106,7 @@ public static class ModulePages
                 S("rollidle.enable", "Enable rolling idle"),
                 C("rollidle.mode", "Leave out", ["An injector opening", "A spark"],
                   tip: "An injector is the gentle way. A spark sends that cylinder's fuel into the exhaust: pops, and heat in the catalyst."),
-                V("rollidle.every", "One event in every", "", "2-20. With four cylinders an odd number moves the miss round the cylinders: 5 or 7 rolls, 3 is rough."),
+                V("rollidle.every", "One event in every", "", "3-19, odd only: with four cylinders an even number would always miss on the same one or two, so the ROM takes an even setting as the odd one above it and the miss moves round all four. 5 or 7 rolls, 3 is rough."),
                 .. Input("rollidle.input", "Input", "A switch that has to be on as well. Always on: no switch.")]),
             G("Only while",
                 V("rollidle.rpm.max", "Below RPM", "rpm"),
@@ -85,7 +130,7 @@ public static class ModulePages
                 V("antistall.iacv", "Idle valve duty at least", "", "The stock top of its range is 091Fh."),
                 V("antistall.advance", "Timing added", "°"),
                 S("antistall.ac", "A/C compressor off", "Needs the stock A/C built in."),
-                C("antistall.alt", "Alternator", ["Left alone", "Control line P0.5 high", "Control line P0.5 low"], [0, 7, 8],
+                C("antistall.alt", "Alternator", ["Left alone", "Control line P0.2 high", "Control line P0.2 low"], [0, 7, 8],
                   tip: "The level of the alternator control line that turns charging down on this car.")),
         ]);
 
@@ -99,7 +144,7 @@ public static class ModulePages
                 V("smartalt.rpm", "Above RPM", "rpm"),
                 V("smartalt.batt", "Battery at least", "V", "Charging is left alone below this."),
                 V("smartalt.hold", "Kept off for at least", "ms"),
-                C("smartalt.level", "Control line level", ["P0.5 low", "P0.5 high"], [8, 7], "The level of the alternator control line (A16) that turns charging down.")),
+                C("smartalt.level", "Control line level", ["P0.2 low", "P0.2 high"], [8, 7], "The level of the alternator control line (P0.2, pin A16) that turns charging down.")),
         ]);
 
     public static CalPage WaterMeth() => new("wmi", "Water / methanol injection", "Boost",
@@ -147,17 +192,18 @@ public static class ModulePages
         "A short text kept in the ROM, stored scrambled with a check word, so a tune can be told as yours. The engine runs the same whatever it says.",
         [G("Watermark",
             new PageRow("watermark.text", "Watermark (the ROM's password)", RowKind.Text,
-                Tip: "Up to 16 characters. OkiRomSim asks for it before it opens this ROM (.bin, source or project). Only a salted hash of it is kept in the ROM."))]);
+                Tip: "Up to 16 characters. Rom Sim Studio asks for it before it opens this ROM (.bin, source or project). Only a salted hash of it is kept in the ROM."))]);
 
     /// The trouble codes the ROM can set, and whether each one is stored and lights the check-engine lamp.
     static readonly (int Code, string What)[] Codes =
     [
         (1, "O2 sensor"), (3, "MAP sensor (electrical)"), (4, "Crank position sensor"), (5, "MAP sensor (vacuum)"),
         (6, "Coolant temperature sensor"), (7, "Throttle position sensor"), (8, "TDC sensor"), (9, "Cylinder position sensor"),
-        (10, "Intake air temperature sensor"), (11, ""), (12, "EGR system"), (13, "Barometric pressure sensor"),
+        (10, "Intake air temperature sensor"), (11, "EGR valve lift sensor"), (12, "EGR system"), (13, "Barometric pressure sensor"),
         (14, "Idle air control valve"), (15, "Ignition output signal"), (16, "Fuel injector"), (17, "Road speed sensor"),
         (19, "A/T lock-up solenoid"), (20, "Electrical load detector"), (21, "VTEC solenoid"), (22, "VTEC pressure switch"),
-        (23, "Knock sensor"), (24, ""), (25, ""), (26, ""), (27, ""), (29, ""),
+        (23, "Knock sensor"), (24, "Knock sensor circuit check"), (25, "P4.6 feedback check (flashes 35)"), (26, "Analog input 5 out of range (flashes 36)"),
+        (27, "O2 sensor heater (flashes 41)"), (29, "Fuel supply system (flashes 43)"),
     ];
 
     public static CalPage CheckEngineCodes() => new("celcode", "Check engine codes", "Options",
@@ -197,9 +243,23 @@ public static class ModulePages
         "A tachometer signal on a spare output: it changes state at every spark, the signal a 4-cylinder tacho expects.",
         [G("Tachometer output", S("tach.enable", "Enable tachometer output"), C("tach.output", "Output", ModOutputs))]);
 
+    public static CalPage SerialInputs() => new("serialin", "Serial inputs", "Options",
+        "Extra inputs that come over the datalog cable instead of a wire: the laptop (Datalogging > Channels… > Send to the ECU) or a " +
+        "small board sends FFh, an input number and a value, and the ECU keeps the eight numbers listed here as serial input 1-8. " +
+        "Closed loop, lean protection and flex fuel can read them as an analog input (their inputs 4-11); every module with a switch " +
+        "input can use them as a switch, on while the value is not 0. If none come for the time set here (a cable pulled out) each " +
+        "goes back to its default, so nothing is left stuck on. Example: the laptop's wideband AFR x 10 sent as input 0, closed " +
+        "loop set to serial input 1 - closed loop on a wideband with no wire to the ECU.",
+        [
+            G("Serial inputs",
+                T("serialin.number", "Input number kept as serial input 1-8", "", "The number the device sends for each (0-253); 255: that one is not used."),
+                T("serialin.default", "Value until one comes", "", "What each reads as from power-up until the first comes, and when they stop coming."),
+                V("serialin.timeout", "Back to the defaults after", "ms", "No input for this long and every one reads as its default. 0: keep the last value.")),
+        ]);
+
     public static IReadOnlyList<CalPage> All() =>
         [RollingIdle(), AntiStall(), SmartAlternator(), WaterMeth(), RpmSwitch(), GearFuel(), WarningLamp(), Tach(),
-         .. BoardOptions(), Watermark(), CheckEngineCodes()];
+         .. BoardOptions(), Watermark(), CheckEngineCodes(), SerialInputs(), MapSensor(), DatalogExtra()];
 
     // ---------------------------------------------------------------- the pages for one ROM
 
@@ -211,6 +271,8 @@ public static class ModulePages
         {
             // a skeleton GIO module keys its output the same as the page, but switches on an rpm point and has more windows
             if (p.Key is ['g', 'p', 'o', >= '1' and <= '9'] && defs.Items.Any(i => i.HasSlot(p.Key + ".rpm.on"))) pages.Add(Gio(p.Key[3] - '0'));
+            // the skeleton's VTEC control module: its own outputs, and a switch between its points and the stock ones
+            else if (p.Key == "vtec" && defs.Items.Any(i => i.HasSlot("vtec.custom"))) pages.Add(VtecModule());
             else pages.Add(p);
         }
         // the password block is kept by the watermark row, not shown as a setting of its own

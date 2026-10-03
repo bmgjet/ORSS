@@ -57,7 +57,7 @@ antistall_advance:      DB  014h
 antistall_iacv:         DW  0091fh
 ;@ AntiStallAcOff type=u8 flag=1 on=1 off=0 category="Anti-stall" slot=antistall.ac desc="The A/C compressor off (with the stock A/C built in)."
 antistall_ac:           DB  001h
-;@ AntiStallAltOff type=u8 formula=raw category="Anti-stall" slot=antistall.alt desc="The alternator: 0 left alone, 7 control line P0.5 high, 8 P0.5 low (the level that turns charging down)."
+;@ AntiStallAltOff type=u8 formula=raw category="Anti-stall" slot=antistall.alt desc="The alternator: 0 left alone, 7 control line P0.2 high, 8 P0.2 low (the level that turns charging down)."
 antistall_alt:          DB  000h
 ;@ AntiStallHold type=u8 formula="x * 32.8" inverse="x / 32.8" unit=ms decimals=0 category="Anti-stall" slot=antistall.hold desc="Kept on this long after the rpm has recovered."
 antistall_hold:         DB  00fh

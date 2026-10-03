@@ -40,7 +40,7 @@ endif
 if XP == XP_CAL
 ;@ GIO1Enable type=u8 flag=1 on=1 off=0 category="GIO 1" slot=gpo1.enable desc="Programmable output 1 on."
 gio1_block:              DB  000h
-;@ GIO1Output type=u8 formula=raw category="GIO 1" slot=gpo1.output desc="The output it drives: 0 none, 1 P0.0 (A/C clutch), 2 P0.1 (EVAP purge), 3 P0.4 (A/T lock-up), 4 P1.2 (O2 heater), 5 P1.4 (check-engine lamp), 6 P1.5 (ECU LED), 7 P0.5 (alternator control) high, 8 P0.5 low, 9 P0.0 held off (A/C clutch disengaged)."
+;@ GIO1Output type=u8 formula=raw category="GIO 1" slot=gpo1.output desc="The output it drives: 0 none, 1 P0.0 (A/C clutch, A15), 2 P0.1 (EVAP purge), 3 P0.4 (A/T lock-up, automatic ECUs), 4 P1.2 (O2 heater), 5 P1.4 (check-engine lamp, A13), 6 P1.5 (ECU LED), 7 P0.2 (alternator control, A16) high, 8 P0.2 low, 9 P0.0 held off (A/C clutch disengaged), 10 P0.3 (radiator fan), 11 P4.3 (pin A17; boost control uses it too)."
                         DB  000h
 ;@ GIO1OutputInvert type=u8 flag=1 on=1 off=0 category="GIO 1" slot=gpo1.output.invert desc="Drive the output while the conditions are not met, instead of while they are."
                         DB  000h

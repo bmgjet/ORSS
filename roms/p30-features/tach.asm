@@ -28,7 +28,7 @@ endif
 if XP == XP_CAL
 ;@ TachEnable type=u8 flag=1 on=1 off=0 category="Tachometer output" slot=tach.enable desc="Tachometer output on."
 tach_enable:            DB  000h
-;@ TachOutput type=u8 formula=raw category="Tachometer output" slot=tach.output desc="The output: 0 none, 1 P0.0 (A/C clutch), 2 P0.1 (EVAP purge), 3 P0.4 (A/T), 4 P1.2 (O2 heater), 5 P1.4 (check-engine lamp), 6 P1.5 (ECU LED)."
+;@ TachOutput type=u8 formula=raw category="Tachometer output" slot=tach.output desc="The output: 0 none, 1 P0.0 (A/C clutch, A15), 2 P0.1 (EVAP purge), 3 P0.4 (A/T lock-up, automatic ECUs), 4 P1.2 (O2 heater), 5 P1.4 (check-engine lamp, A13), 6 P1.5 (ECU LED), 7 P0.2 (alternator control, A16) high, 8 P0.2 low, 9 P0.0 held off (A/C clutch disengaged), 10 P0.3 (radiator fan), 11 P4.3 (pin A17; boost control uses it too)."
 tach_output:            DB  006h
 endif
 

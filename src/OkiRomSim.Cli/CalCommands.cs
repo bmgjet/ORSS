@@ -166,7 +166,7 @@ public static class CalCommands
                             if (msg.EndsWith("not for this ROM")) errors++;
                         }
                     output ??= Path.ChangeExtension(args[0], ".patched.bin");
-                    File.WriteAllBytes(output, rom);
+                    OkiRomSim.Core.SafeFile.WriteAllBytes(output, rom);
                     Console.WriteLine($"wrote {output}");
                     return errors == 0 ? 0 : 1;
                 }
@@ -277,6 +277,7 @@ public static class CalCommands
                     {
                         var rc = cell.Split(',');
                         int r = int.Parse(rc[0]), c = rc.Length > 1 ? int.Parse(rc[1]) : 0;
+                        if (r < 0 || c < 0 || c >= Math.Max(item.Cols, 1)) { Console.Error.WriteLine($"cell {r},{c} is outside {item.Name} ({Math.Max(item.Rows, 1)} x {Math.Max(item.Cols, 1)})"); return 1; }
                         indices.Add((r * Math.Max(item.Cols, 1)) + c);
                     }
                     else indices.Add(indexOpt != null ? int.Parse(indexOpt) : 0);
@@ -288,7 +289,7 @@ public static class CalCommands
                         double target = value;
                         if (addOpt != null) target = before[idx].Value + double.Parse(addOpt, CultureInfo.InvariantCulture);
                         else if (scaleOpt != null) target = before[idx].Value * double.Parse(scaleOpt, CultureInfo.InvariantCulture);
-                        if (raw) RomData.WriteRaw(t.Rom, item.CellAddress(idx), item.Type, target, item.Bit);
+                        if (raw) RomData.WriteRawCell(t.Rom, item, idx, target, t.Defs);     // (clamped to the type and to the safe limits: a plain WriteRaw wraps 300 round to 44 in a byte)
                         else RomData.Write(t.Defs, t.Rom, item, idx, target);
                     }
                     var after = RomData.Read(t.Defs, t.Rom, item);
@@ -302,7 +303,7 @@ public static class CalCommands
                         Console.WriteLine($"  backup: {dest}.bak");
                     }
                     if (t.ChecksumAt is int at) RomChecksum.Balance(t.Rom, at);
-                    File.WriteAllBytes(dest, t.Rom);
+                    OkiRomSim.Core.SafeFile.WriteAllBytes(dest, t.Rom);
                     Console.WriteLine($"  wrote {dest}");
                     return 0;
                 }

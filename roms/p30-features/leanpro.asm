@@ -35,7 +35,7 @@ if XP == XP_CAL
 leanpro_block:          DB  000h
 ;@ LeanProCut type=u8 category="Lean protection" slot=leanpro.cut desc="0 = fuel cut, 1 = ignition cut, 2 = both."
 leanpro_cut:            DB  002h
-;@ LeanProInput type=u8 category="Lean protection" slot=leanpro.input desc="The wideband's analog output on: 0 O2 (D14), 1 ELD (D10), 2 EGR (D12), 3 B6."
+;@ LeanProInput type=u8 category="Lean protection" slot=leanpro.input desc="The wideband's analog output on: 0 O2 (D14), 1 ELD (D10), 2 EGR (D12), 3 B6, 4-11 serial input 1-8 (sent over the datalog cable: the serial inputs module)."
 leanpro_input:          DB  000h
 ;@ LeanProAFR0 type=u8 formula=x/10 unit=AFR decimals=1 category="Lean protection" slot=leanpro.afr0 desc="The AFR the wideband reports at 0 V."
 leanpro_afr0:           DB  064h                 ; 10.0

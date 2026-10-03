@@ -1,9 +1,4 @@
-// Copyright (c) bmgjet. All rights reserved.
-// Best-effort label -> address table, parsed directly from .asm source text -- NOT a real assembler symbol table (for that, see AsmAssembler.cs). This exists so the UI can offer breakpoints and trace annotations by name instead of raw hex, for source files annotated in the disassembly style this project's sample ROMs use:
-//
-//   fuelpump_relay_drive:     MB      P0.7, C          ; 3DDE 0 208 180 C5203F
-//
-// i.e. a label, then an instruction, then a comment whose first token is the instruction's 4-hex-digit address. Continuation comment lines ("; 2528 from 252A ...") don't start with "label:" and are correctly ignored.
+// Copyright (c) bmgjet. All rights reserved. Best-effort label -> address table, parsed directly from .asm source text -- NOT a real assembler symbol table (for that, see AsmAssembler.cs). This exists so the UI can offer breakpoints and trace annotations by name instead of raw hex, for source files annotated in the disassembly style this project's sample ROMs use (e.g. "fuelpump_relay_drive: MB P0.7, C ; 3DDE 0 208 180 C5203F"), i.e. a label, then an instruction, then a comment whose first token is the instruction's 4-hex-digit address. Continuation comment lines ("; 2528 from 252A ...") don't start with "label:" and are correctly ignored.
 
 using System.Globalization;
 using System.Text.RegularExpressions;

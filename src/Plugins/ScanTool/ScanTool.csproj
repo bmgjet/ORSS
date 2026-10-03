@@ -1,10 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- An OkiRomSim Studio plugin: a class library that references the app (not copied: the app's own copy is used when it loads). -->
+  <!-- An Rom Sim Studio plugin: a class library that references the app (not copied: the app's own copy is used when it loads). -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>OkiRomSim.ScanTool</AssemblyName>
+    <AssemblyName>RomSim.ScanTool</AssemblyName>
     <RootNamespace>ScanToolPlugin</RootNamespace>
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <!-- nothing the app already has goes beside the plugin: Avalonia, System.IO.Ports and the app itself come from the app -->

@@ -91,7 +91,7 @@ public sealed class CalTools
         _ws.Resolve(t.File, mustExist: true, forWrite: true);
         if (!t.Backed) { System.IO.File.Copy(t.File, t.File + ".bak", overwrite: true); t.Backed = true; }
         if (t.ChecksumAt is int at) RomChecksum.Balance(t.Rom, at);
-        System.IO.File.WriteAllBytes(t.File, t.Rom);
+        OkiRomSim.Core.SafeFile.WriteAllBytes(t.File, t.Rom);
         _files[t.File] = (System.IO.File.GetLastWriteTimeUtc(t.File), t);
         t.Dirty = false;
         return $"written to {_ws.Show(t.File)} (original kept as .bak)";
@@ -370,7 +370,7 @@ public sealed class CalTools
         {
             foreach (var (i, v) in target)
             {
-                if (raw) RomData.WriteRawCell(t.Rom, item, i, v);
+                if (raw) RomData.WriteRawCell(t.Rom, item, i, v, t.Defs);     // (with the definitions: a raw write is held to the safe limits too)
                 else RomData.Write(t.Defs, t.Rom, item, i, v);
             }
             where = CommitRom(t);
@@ -663,7 +663,7 @@ public sealed class CalTools
             {
                 if (File.Exists(outPath) && outPath.Equals(t.File, StringComparison.OrdinalIgnoreCase) && !t.Backed) File.Copy(outPath, outPath + ".bak", true);
                 if (t.ChecksumAt is int at) RomChecksum.Balance(t.Rom, at);
-                File.WriteAllBytes(outPath, t.Rom);
+                OkiRomSim.Core.SafeFile.WriteAllBytes(outPath, t.Rom);
                 done.Add($"image -> {_ws.Show(outPath)}");
             }
         }
@@ -676,7 +676,7 @@ public sealed class CalTools
         if (format is "xdf" or "all")
         {
             var outPath = _ws.Resolve(baseName + ".xdf", mustExist: false, forWrite: true);
-            File.WriteAllText(outPath, XdfExport.Write(t.Defs, t.Rom, Path.GetFileNameWithoutExtension(baseName)));
+            OkiRomSim.Core.SafeFile.WriteAllText(outPath, XdfExport.Write(t.Defs, t.Rom, Path.GetFileNameWithoutExtension(baseName)));
             done.Add($"TunerPro XDF -> {_ws.Show(outPath)} ({t.Defs.Items.Count} definitions)");
         }
         return done.Count == 0
@@ -706,14 +706,14 @@ public sealed class CalTools
         if (S(a, "output") is { Length: > 0 } o)
         {
             var path = _ws.Resolve(o, mustExist: false, forWrite: true);
-            File.WriteAllText(path, report);
+            OkiRomSim.Core.SafeFile.WriteAllText(path, report);
             report += $"\n(report written to {_ws.Show(path)})";
         }
         if (report.Length > 12000)
         {
             var path = _ws.Resolve(Path.Combine(".okirom", "compare.txt"), mustExist: false, forWrite: true);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, report);
+            OkiRomSim.Core.SafeFile.WriteAllText(path, report);
             return report[..11000] + $"\n... (full report in {_ws.Show(path)}; page it with file_read)";
         }
         return report;

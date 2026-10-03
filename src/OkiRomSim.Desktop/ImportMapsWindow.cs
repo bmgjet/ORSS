@@ -346,7 +346,7 @@ public sealed class ImportMapsWindow : Window
     {
         if (_selected?.View is DockPanel was) was.Background = null;
         _selected = row;
-        if (row.View is DockPanel now) now.Background = new SolidColorBrush(Color.FromArgb(50, 0x5a, 0x8c, 0xff));
+        if (row.View is DockPanel now) now.Background = AppTheme.Brush(Color.FromArgb(50, 0x5a, 0x8c, 0xff));
         ShowPreview();
     }
 
@@ -497,7 +497,7 @@ public sealed class ImportMapsWindow : Window
             Margin = new Thickness(0, 0, 0, 6);
             CornerRadius = new CornerRadius(4);
             BorderThickness = new Thickness(1);
-            BorderBrush = new SolidColorBrush(Color.FromArgb(60, 255, 255, 255));
+            BorderBrush = AppTheme.Brush(Color.FromArgb(60, 255, 255, 255));
             Background = Dark.Back;
             ClipToBounds = true;
             _graph.Keys = _grid; _surface.Keys = _grid;

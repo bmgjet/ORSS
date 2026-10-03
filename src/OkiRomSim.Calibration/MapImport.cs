@@ -192,9 +192,7 @@ public static partial class MapImport
         // write, and count what did not fit this ROM's range (held at its limit)
         int clamped = 0;
         var tf = toDefs.Formula(to.Formula);
-        // a Honda fuel map scales each column by its own multiplier (the row after the last): each column gets the
-        // smallest one that holds its values - the finest steps that fit. Resampled columns mix the other ROM's columns,
-        // so its multipliers would not do.
+        // a Honda fuel map scales each column by its own multiplier (the row after the last): each column gets the smallest one that holds its values - the finest steps that fit. Resampled columns mix the other ROM's columns, so its multipliers would not do.
         if (to.ColumnScaleAddress is int tm && to.IsTable)
         {
             double unit = Math.Abs(tf.ToValue(1) - tf.ToValue(0)), zero = tf.ToValue(0);
@@ -218,13 +216,11 @@ public static partial class MapImport
         }
         for (int i = 0; i < values.Length && i < to.Count; i++)
         {
-            // a cell Direct leaves alone stays as it is - unless its column's multiplier changed, when it is written again
-            // so its value holds
+            // a cell Direct leaves alone stays as it is - unless its column's multiplier changed, when it is written again so its value holds
             if (keep[i] && !(to.ColumnScaleAddress is int km && work[(km + (i % to.Cols)) & (work.Length - 1)] != before[(km + (i % to.Cols)) & (before.Length - 1)])) continue;
             RomData.Write(toDefs, work, to, i, values[i]);
             double got = RomData.Read(toDefs, work, to)[i].Value;
-            // one step of this cell: the formula's, times the column multiplier a Honda fuel map has (so rounding to a
-            // step is not taken for the value not fitting)
+            // one step of this cell: the formula's, times the column multiplier a Honda fuel map has (so rounding to a step is not taken for the value not fitting)
             double mult = to.ColumnScaleAddress is int cm && to.IsTable ? Math.Max(1, (int)work[(cm + (i % to.Cols)) & (work.Length - 1)]) : 1;
             double step = Math.Abs(tf.ToValue(1) - tf.ToValue(0)) * mult;
             if (Math.Abs(got - values[i]) > Math.Max(step * 0.75, Math.Abs(values[i]) * 0.01) + 1e-9) clamped++;

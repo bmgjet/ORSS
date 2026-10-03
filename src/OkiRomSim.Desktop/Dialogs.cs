@@ -43,7 +43,7 @@ public static class Dialogs
             Text = message,
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(16, 14, 16, 8),
-            Foreground = new SolidColorBrush(DarkChrome.Text),
+            Foreground = AppTheme.Brush(DarkChrome.Text),
         };
         var bar = new StackPanel
         {
@@ -87,7 +87,7 @@ public static class Dialogs
         var body = new StackPanel { Margin = new Thickness(16, 14, 16, 8), Spacing = 8 };
         body.Children.Add(new TextBlock
         {
-            Text = message, TextWrapping = TextWrapping.Wrap, Foreground = new SolidColorBrush(DarkChrome.Text),
+            Text = message, TextWrapping = TextWrapping.Wrap, Foreground = AppTheme.Brush(DarkChrome.Text),
         });
         editor.HorizontalAlignment = HorizontalAlignment.Left;
         body.Children.Add(editor);

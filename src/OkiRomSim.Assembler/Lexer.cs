@@ -43,6 +43,14 @@ public static class Lexer
     public static bool IsReservedWord(string s) =>
         Registers.ContainsKey(s) || Keywords.ContainsKey(s) || Grammar.Instance.IsMnemonic(s);
 
+    /// A number literal's value; one too big for 64 bits is an error on the line (with 0 as its value), not an exception out of the assembler.
+    static long Num(string digits, NumberStyles style, ref string? error)
+    {
+        if (long.TryParse(digits, style, CultureInfo.InvariantCulture, out var v)) return v;
+        error ??= $"the number {(digits.Length > 24 ? digits[..24] + "..." : digits)} is too large";
+        return 0;
+    }
+
     public static List<Token> Tokenize(string line, out string? error)
     {
         error = null;
@@ -61,19 +69,19 @@ public static class Lexer
                 while (j < n && char.IsAsciiHexDigit(line[j])) j++;
                 if (j < n && (line[j] == 'h' || line[j] == 'H'))
                 {
-                    list.Add(new Token(Tk.Number, line[i..(j + 1)], long.Parse(line[i..j], NumberStyles.HexNumber), start));
+                    list.Add(new Token(Tk.Number, line[i..(j + 1)], Num(line[i..j], NumberStyles.HexNumber, ref error), start));
                     i = j + 1; continue;
                 }
                 if (c == '0' && i + 1 < n && (line[i + 1] == 'x' || line[i + 1] == 'X') && i + 2 < n && char.IsAsciiHexDigit(line[i + 2]))
                 {
                     j = i + 2;
                     while (j < n && char.IsAsciiHexDigit(line[j])) j++;
-                    list.Add(new Token(Tk.Number, line[i..j], long.Parse(line[(i + 2)..j], NumberStyles.HexNumber), start));
+                    list.Add(new Token(Tk.Number, line[i..j], Num(line[(i + 2)..j], NumberStyles.HexNumber, ref error), start));
                     i = j; continue;
                 }
                 j = i;
                 while (j < n && char.IsAsciiDigit(line[j])) j++;
-                list.Add(new Token(Tk.Number, line[i..j], long.Parse(line[i..j]), start));
+                list.Add(new Token(Tk.Number, line[i..j], Num(line[i..j], NumberStyles.None, ref error), start));
                 i = j; continue;
             }
             if (char.IsAsciiLetter(c) || c == '_')

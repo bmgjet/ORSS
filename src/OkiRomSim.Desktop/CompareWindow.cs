@@ -38,7 +38,7 @@ public sealed class CompareWindow : Window
         save.Click += async (_, _) =>
         {
             var f = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions { Title = "Save the comparison", SuggestedFileName = "compare.txt", DefaultExtension = "txt" });
-            if (f?.TryGetLocalPath() is { } path) File.WriteAllText(path, _report.Text ?? "");
+            if (f?.TryGetLocalPath() is { } path) SafeFile.WriteAllText(path, _report.Text ?? "");
         };
         bar.Children.Add(pickA); bar.Children.Add(pickB);
         bar.Children.Add(_functions); bar.Children.Add(_tables);

@@ -52,6 +52,8 @@ public sealed class AppSettings
     public bool TableStretch { get; set; }
     /// Touch screen mode: big buttons to change the table's cells instead of the keys, bigger controls to hit with a finger, for a tablet or a touch screen laptop.
     public bool TouchMode { get; set; }
+    /// The colours: "dark" (the default), "light", or "contrast" for a laptop out in the sun (Theme; Settings > Colours).
+    public string Theme { get; set; } = "dark";
 
     /// Zoom of each panel (Ctrl + mouse wheel over it): "Source", "Pinout", "Inputs", "Right", "Calibration", "Datalog", "Trace", ... -> scale.
     public Dictionary<string, double> PanelZoom { get; set; } = [];
@@ -63,6 +65,13 @@ public sealed class AppSettings
     public bool FirstRunDone { get; set; }
     /// Low performance mode (Settings > General): null until set, when it follows the machine (on for 2 cores or 4 GB).
     public bool? LowPerformance { get; set; }
+
+    /// The language the app is shown in: a file's name in the lang folder ("en", "de", "zh"...). English is built in.
+    public string Language { get; set; } = "en";
+    /// The unit each kind of measurement is shown in (Settings > Units): any mix of metric and imperial.
+    public OkiRomSim.Calibration.UnitSettings Units { get; set; } = new();
+    /// The virtual dyno's own settings (Settings > Dyno): results, correction, AFR, hotkey.
+    public OkiRomSim.Calibration.DynoSettings Dyno { get; set; } = new();
 
     // simulation
     public bool FastBoot { get; set; } = true;
@@ -79,8 +88,10 @@ public sealed class AppSettings
     /// "auto" or a protocol name (see DatalogProtocol.All).
     public string DatalogProtocol { get; set; } = "auto";
     public int DatalogIntervalMs { get; set; } = 0;
-    /// The channels the channel stream (skeleton ROM datalog) asks for: DatalogChannels keys, set in Datalog > Channels….
+    /// The channels the channel stream (skeleton ROM datalog) asks for: DatalogChannels keys ("ect:slow" for one sent in turn), set in Datalog > Channels….
     public List<string> DatalogStreamChannels { get; set; } = [.. OkiRomSim.Calibration.DatalogChannels.Defaults];
+    /// What the channel stream sends to the ECU's serial inputs (SerialInputMap.Save: "input|channel|scale|offset|on"), set in Datalog > Channels….
+    public List<string> DatalogSerialInputs { get; set; } = [];
     /// The calibration list's favourites, by ROM file name: "item:Name" and "page:key".
     public Dictionary<string, List<string>> Favourites { get; set; } = [];
     public bool DatalogDrivesSimulator { get; set; } = true;
@@ -174,6 +185,7 @@ public sealed class AppSettings
         ["Expand lower tabs"] = "Ctrl+E",
         ["Settings"] = "Ctrl+OemComma",
         ["Tuner mode"] = "Ctrl+T",
+        ["Theme"] = "Ctrl+Shift+H",
         ["Compare"] = "Ctrl+Shift+M",
     };
 
@@ -234,8 +246,25 @@ public sealed class AppSettings
         {
             var dir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
             if (string.IsNullOrEmpty(dir)) dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config");
-            return Path.Combine(dir, "OkiRomSim", "settings.json");
+            // the settings folder was named after the old name: moved over the first time (restore points, gauges and all)
+            var now = Path.Combine(dir, "RomSimStudio");
+            var old = Path.Combine(dir, "OkiRomSim");
+            if (!_moved && !Directory.Exists(now) && Directory.Exists(old))
+            {
+                _moved = true;
+                try { Directory.Move(old, now); } catch { try { CopyDir(old, now); } catch { } }
+            }
+            return Path.Combine(now, "settings.json");
         }
+    }
+
+    static bool _moved;
+
+    static void CopyDir(string from, string to)
+    {
+        Directory.CreateDirectory(to);
+        foreach (var f in Directory.GetFiles(from)) File.Copy(f, Path.Combine(to, Path.GetFileName(f)), overwrite: false);
+        foreach (var d in Directory.GetDirectories(from)) CopyDir(d, Path.Combine(to, Path.GetFileName(d)));
     }
 
     static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
@@ -260,7 +289,11 @@ public sealed class AppSettings
                 return s;
             }
         }
-        catch { /* a damaged file just means defaults */ }
+        catch
+        {
+            // a damaged file means defaults - but the file is kept aside first, not written over the next time settings are saved
+            try { File.Copy(FilePath, FilePath + ".damaged", overwrite: true); } catch { }
+        }
         return new AppSettings();
     }
 
@@ -270,7 +303,10 @@ public sealed class AppSettings
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(this, Json));
+            // complete file first, then swapped in: a crash or a full disk in the middle cannot leave half a settings file
+            var temp = FilePath + ".new";
+            File.WriteAllText(temp, JsonSerializer.Serialize(this, Json));
+            File.Move(temp, FilePath, overwrite: true);
         }
         catch { }
     }

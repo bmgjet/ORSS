@@ -4,7 +4,7 @@
 ;> name: TPS tip-in retard
 ;> category: Ignition
 ;> pages: tpsretard
-;> ram: module RAM (4 bytes)
+;> ram: module RAM (5 bytes)
 ;> about: Pulls timing for a moment when the throttle opens quickly, then gives it back a step at a
 ;>        time: the knock-free way through the lean spike of a sudden tip-in. Only below a set rpm. Off
 ;>        until enabled.

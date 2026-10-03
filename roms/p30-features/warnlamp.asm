@@ -38,7 +38,7 @@ warnlamp_enable:        DB  000h
 warnlamp_ect:           DB  012h                 ; 107 C
 ;@ WarnLampBattery type=u8 formula=battery_v category="Warning lamp" slot=warnlamp.batt desc="Light it below this battery voltage (engine running)."
 warnlamp_batt:          DB  07bh                 ; about 11.8 V
-;@ WarnLampOutput type=u8 formula=raw category="Warning lamp" slot=warnlamp.output desc="The output: 0 none, 1 P0.0 (A/C clutch), 2 P0.1 (EVAP purge), 3 P0.4 (A/T lock-up), 4 P1.2 (O2 heater), 5 P1.4 (check-engine lamp), 6 P1.5 (ECU LED)."
+;@ WarnLampOutput type=u8 formula=raw category="Warning lamp" slot=warnlamp.output desc="The output: 0 none, 1 P0.0 (A/C clutch, A15), 2 P0.1 (EVAP purge), 3 P0.4 (A/T lock-up, automatic ECUs), 4 P1.2 (O2 heater), 5 P1.4 (check-engine lamp, A13), 6 P1.5 (ECU LED), 7 P0.2 (alternator control, A16) high, 8 P0.2 low, 9 P0.0 held off (A/C clutch disengaged), 10 P0.3 (radiator fan), 11 P4.3 (pin A17; boost control uses it too)."
 warnlamp_output:        DB  005h
 endif
 

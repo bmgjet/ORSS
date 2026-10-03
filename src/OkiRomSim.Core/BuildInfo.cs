@@ -8,17 +8,17 @@ public static class BuildInfo
 {
     public static string Version { get; } = Read();
 
-    /// "Oki ROM Studio 0.0.0.3"
+    /// "Rom Sim Studio 0.0.0.5"
     public static string Full => $"{Product} {Version}";
 
-    public const string Product = "Oki ROM Studio";
+    public const string Product = "Rom Sim Studio";
 
     static string Read()
     {
         var asm = Assembly.GetEntryAssembly() ?? typeof(BuildInfo).Assembly;
         var v = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
         if (string.IsNullOrWhiteSpace(v)) v = asm.GetName().Version?.ToString() ?? "0.0.0.0";
-        // strip a source-revision suffix if the build added one ("0.0.0.3+abc123")
+        // strip a source-revision suffix if the build added one ("0.0.0.5+abc123")
         int plus = v.IndexOf('+');
         return plus > 0 ? v[..plus] : v;
     }

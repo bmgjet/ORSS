@@ -46,11 +46,20 @@ public sealed class CalibrationView : UserControl
     // current table
     ItemDef? _item;
     TableModel? _model;
+    /// The units the table open is kept in (its values, its axes): shown in the ones picked in Settings > Units.
+    string _valueUnit = "", _rowUnit = "", _colUnit = "";
     readonly TableGrid _grid = new();
     readonly TableGraph _graph = new();
     readonly TableSurface _surface = new();
     readonly Canvas _overlay = new();
     readonly TabControl _views = new();
+    // fuel maps: how the numbers are shown (0 the ROM's own units, 1 pulse ms, 2 duty %, 3 fuel per cycle mm3); the injector size is for the last
+    readonly ComboBox _fuelView = new() { FontSize = 11, MinHeight = 0, Padding = new Thickness(6, 1), ItemsSource = new[] { "Honda units", "Pulse (ms)", "Duty (%)", "Fuel per cycle (mm³)" }, SelectedIndex = 0 };
+    readonly NumericUpDown _injCc = new() { Minimum = 50, Maximum = 5000, Value = 240, Increment = 10, FormatString = "0", Width = 110, FontSize = 11, MinHeight = 0, Padding = new Thickness(4, 1) };
+    readonly TextBlock _fuelViewLabel = new() { Text = "Show as", FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
+    readonly TextBlock _injLabel = new() { Text = "injector cc/min", FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+    /// One Honda fuel unit in milliseconds: the ROM counts the pulse in 4.00839 us ticks and the map's value is the tick count divided by 4.
+    const double FuelUnitMs = 4.00839 * 4 / 1000;
     readonly TextBox _adjust = new() { Width = 70, Text = "1", FontFamily = MainWindow.MonoFont };
     readonly Avalonia.Controls.Primitives.ToggleButton _stretchBtn = new() { Content = "⤢ Stretch", FontSize = 11, Padding = new Thickness(8, 1), MinHeight = 0 };
 
@@ -168,7 +177,7 @@ public sealed class CalibrationView : UserControl
             new Toolbar.Entry(Toolbar.Delete, "Delete", "Remove the selected definition from the list (the ROM bytes are not touched).", Delete),
             Toolbar.Entry.Line,
             new Toolbar.Entry(Toolbar.Import, "Import…", "Load definitions from a JSON file exported earlier.", Import),
-            new Toolbar.Entry(Toolbar.Export, "Export definitions (JSON)…", "Write every definition as OkiRomSim JSON.", Export),
+            new Toolbar.Entry(Toolbar.Export, "Export definitions (JSON)…", "Write every definition as Rom Sim Studio JSON.", Export),
             new Toolbar.Entry(Toolbar.Export, "Export TunerPro XDF…", "Write a TunerPro XDF to edit this ROM in TunerPro RT.", ExportXdf),
             Toolbar.Entry.Line,
             new Toolbar.Entry(Toolbar.Bin, "Save .bin…", "Write the ROM image, with every value edited here, to a .bin file you choose.", SaveBin),
@@ -178,19 +187,33 @@ public sealed class CalibrationView : UserControl
                 "Take maps and settings from another ROM (a .bin of any ROM the app knows, or a source): see what it has, pick what to bring " +
                 "across - its fuel and ignition into a new ROM built from the skeleton, say - and they are resampled onto this ROM's " +
                 "breakpoints where they differ. One undo step.", ImportMaps)));
-        bar.Children.Add(_emuMenu = Toolbar.Menu("Emulator", Toolbar.Bin,
+        bar.Children.Add(_emuMenu = Toolbar.Menu("Emulator", Toolbar.Bin, () => Takeover?.Invoke() is { } t ?
+        [
+            // a plugin drives the emulator: the same menu, its device
+            new Toolbar.Entry(Toolbar.Bin, (t.Connected ? "Disconnect " : "Connect ") + t.Name,
+                $"{t.Name} is in charge of the emulator and its datalog: connect or disconnect its device. {t.Status}", ToggleEmulator),
+            Toolbar.Entry.Line,
+            new Toolbar.Entry(Toolbar.Import, "Download", $"Read the ROM out of the {t.Name} device and open it.", EmulatorDownload),
+            new Toolbar.Entry(Toolbar.Export, "Upload", $"Send the ROM open here, with every edit, to the {t.Name} device.", EmulatorUpload),
+            new Toolbar.Entry(Toolbar.Detect, "Validate", $"Check the {t.Name} device's ROM against the one here.", EmulatorValidate),
+            Toolbar.Entry.Line,
+            new Toolbar.Entry("", "Real-time update", $"Send every table edit to the image running in the {t.Name} device as you make it.",
+                ToggleAutoUpload, Checked: () => t.RealtimeUpdate),
+        ] :
+        [
             new Toolbar.Entry(Toolbar.Bin, "Connect / disconnect",
                 "Connect to the emulator on the port set in Settings and upload the ROM, so the car runs it. Again to disconnect.", ToggleEmulator),
             Toolbar.Entry.Line,
             new Toolbar.Entry(Toolbar.Import, "Download",
-                "Read the ROM out of the emulator, save it as a .bin (in Documents/OkiRomSim ROMs) and open it - the emulator and the datalog stay connected, since it is the ROM the car is running.",
+                "Read the ROM out of the emulator, save it as a .bin (in Documents/Rom Sim Studio/ROMs) and open it - the emulator and the datalog stay connected, since it is the ROM the car is running.",
                 EmulatorDownload),
             new Toolbar.Entry(Toolbar.Export, "Upload", "Send the whole ROM, with every edit made here, to the emulator.", EmulatorUpload),
             new Toolbar.Entry(Toolbar.Detect, "Validate", "Read the emulator back and check it byte for byte against the ROM here.", EmulatorValidate),
             Toolbar.Entry.Line,
             new Toolbar.Entry("", "Upload on changes",
                 "Send every change to the emulator the moment it is made (only the 256-byte blocks that changed), so the car runs it straight away.",
-                ToggleAutoUpload, Checked: () => _host.AutoUpload)));
+                ToggleAutoUpload, Checked: () => _host.AutoUpload),
+        ]));
         bar.Children.Add(_logMenu = Toolbar.Menu("Datalogging", Toolbar.Log, () =>
         {
             var entries = DatalogMenu?.Invoke(() => _live.IsChecked == true, on => _live.IsChecked = on)
@@ -280,11 +303,17 @@ public sealed class CalibrationView : UserControl
             {
                 // the four cells round the engine, each moved by its share: the nearest the full step, the others less
                 var f = _host.Defs().Formula(_item!.Formula);
-                Write([.. w.Keys], i => bm.Values[i] + (d * Math.Abs(f.ToValue(bm.Raw[i] + 1) - f.ToValue(bm.Raw[i])) * w[i]), false,
+                double per = _valueUnit.Length > 0 ? Units.ScaleOf(_valueUnit) : 1;
+                Write([.. w.Keys], i => bm.Values[i] + (d * Math.Abs(f.ToValue(bm.Raw[i] + 1) - f.ToValue(bm.Raw[i])) * per * w[i]), false,
                       $"{(d > 0 ? "+" : "")}{d} step{(Math.Abs(d) == 1 ? "" : "s")}, blended");
                 return;
             }
             Write(cells, i => _model!.Raw[i] + d, true, d > 0 ? $"+{d} raw" : $"{d} raw");
+        };
+        _grid.SetEach += (list, what) =>
+        {
+            var dict = list.ToDictionary(x => x.Index, x => x.Value);
+            Write([.. dict.Keys], i => dict[i], false, what);
         };
         _grid.PasteCells += list =>
         {
@@ -319,8 +348,7 @@ public sealed class CalibrationView : UserControl
             }
             else Adjust(op);
         };
-        // the menu opens on the table itself: a cell, the chart, the surface - not the empty space round it, and not at the
-        // end of a right-drag that turned the 3D view
+        // the menu opens on the table itself: a cell, the chart, the surface - not the empty space round it, and not at the end of a right-drag that turned the 3D view
         foreach (var v in new Control[] { _grid, _graph, _surface })
             v.ContextRequested += (_, e) =>
             {
@@ -353,6 +381,13 @@ public sealed class CalibrationView : UserControl
         var gridPanel = new DockPanel();
         var gridBar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(0, 0, 0, 2) };
         gridBar.Children.Add(_stretchBtn);
+        gridBar.Children.Add(_fuelViewLabel); gridBar.Children.Add(_fuelView); gridBar.Children.Add(_injLabel); gridBar.Children.Add(_injCc);
+        ToolTip.SetTip(_fuelView, "How a fuel map's numbers are shown. Honda units are what the ROM stores (and what the tuning software shows). Pulse is the injector open time in ms. " +
+                                  "Duty is that pulse as a share of the time between injections at each row's rpm (the ROM injects once per two turns): 100 % means the injector never closes. " +
+                                  "Fuel per cycle is what the injector delivers in one pulse, from its size. The other views are for reading; edit in Honda units.");
+        ToolTip.SetTip(_injCc, "The size of the fitted injectors, in cc per minute: turns a pulse into the fuel it delivers. Duty and pulse do not depend on it.");
+        _fuelView.SelectionChanged += (_, _) => { if (_item != null) Refresh(_item.Name); };
+        _injCc.ValueChanged += (_, _) => { if (_fuelView.SelectedIndex == 3 && _item != null) Refresh(_item.Name); };
         DockPanel.SetDock(gridBar, Dock.Top);
         gridPanel.Children.Add(gridBar);
         gridPanel.Children.Add(gridScroll);
@@ -498,8 +533,7 @@ public sealed class CalibrationView : UserControl
         var shown = f.Length == 0 ? listed : [.. listed.Where(i =>
             i.Name.Contains(f, StringComparison.OrdinalIgnoreCase) || i.Category.Contains(f, StringComparison.OrdinalIgnoreCase) ||
             i.Address.ToString("X4").Contains(f, StringComparison.OrdinalIgnoreCase))];
-        // going to a table the filter hides (a header double-clicked, a button for another table): the filter is
-        // cleared so the table can be shown, instead of landing on the first one the filter lets through
+        // going to a table the filter hides (a header double-clicked, a button for another table): the filter is cleared so the table can be shown, instead of landing on the first one the filter lets through
         if (jump && f.Length > 0 && !shown.Any(i => i.Name == select) && listed.Any(i => i.Name == select))
         {
             _clearingFilter = true;
@@ -573,8 +607,7 @@ public sealed class CalibrationView : UserControl
                 var romPages = CalPage.ForRom(defs);
                 // the page on screen, as this ROM's list now has it (a binding may have added settings to it)
                 if (_pageOpen is { } was && romPages.FirstOrDefault(p => p.Key == was.Key) is { } now) _pageOpen = now;
-                // a ROM built from a skeleton: a page that belongs to modules it was built without is not valid, whatever a guess
-                // (or a binding kept from an earlier build) has put on it - unless the skeleton's own stock code fills a row of it
+                // a ROM built from a skeleton: a page that belongs to modules it was built without is not valid, whatever a guess (or a binding kept from an earlier build) has put on it - unless the skeleton's own stock code fills a row of it
                 if (!ReferenceEquals(_leftOutFor, _host.Assembly)) { _leftOutFor = _host.Assembly; _leftOut = _host.Assembly is { } asmNow ? Skeleton.PagesLeftOut(asmNow) : null; }
                 var leftOut = _leftOut;
                 var skeletonFile = _host.Assembly?.Files.FirstOrDefault(x => x.EndsWith("-skeleton.asm", StringComparison.OrdinalIgnoreCase)) is { } sf ? Path.GetFileName(sf) : null;
@@ -782,7 +815,17 @@ public sealed class CalibrationView : UserControl
     public bool FollowVtec { get; set; } = true;
     bool? _lastVtec;
 
-    /// Where the car is now (from a datalog frame): marks that cell of the table on screen.
+    /// Where the car is now (from a datalog frame): marks that cell of the table on screen. One reading shown on the maps whatever the live trace is set to (the dyno's double-click): the table for its cam, the engine's place on it lit and the view locked there.
+    public void ShowPoint(LogFrame f)
+    {
+        bool live = _live.IsChecked == true;
+        _live.IsChecked = true;
+        _pointOnly = true;
+        try { SetEngineState(f); } finally { _pointOnly = false; }
+        if (!live) _status.Text = "the reading picked on the dyno is lit on the map (Live trace was off: it stays on until you untick it)";
+    }
+    bool _pointOnly;
+
     public void SetEngineState(LogFrame? f)
     {
         if (f?.Vtec is bool vt && FollowCam(vt)) return;
@@ -793,13 +836,13 @@ public sealed class CalibrationView : UserControl
             var defs = _host.Defs();
             var (_, rget) = LogOverlay.AxisInput(defs, _item.RowAxis, true);
             var (_, cget) = LogOverlay.AxisInput(defs, _item.ColAxis, false);
+            // the axes are shown in the units picked: the reading goes the same way
             if (rget(f) is double rv && (_model.Cols == 1 || cget(f) is double))
-                pos = (_item.RowAxis == null ? 0 : LogOverlay.Position(_model.RowAxis, rv),
-                       _model.Cols == 1 || _item.ColAxis == null ? 0 : LogOverlay.Position(_model.ColAxis, cget(f)!.Value));
+                pos = (_item.RowAxis == null ? 0 : LogOverlay.Position(_model.RowAxis, Units.Show(rv, _rowUnit)),
+                       _model.Cols == 1 || _item.ColAxis == null ? 0 : LogOverlay.Position(_model.ColAxis, Units.Show(cget(f)!.Value, _colUnit)));
         }
         if (pos == _model.ExternalTrace) return;
-        // the trail: where the engine has been, over the trail time (a jump back in the log, or a long way forward - the
-        // slider moved, another log - starts it again)
+        // the trail: where the engine has been, over the trail time (a jump back in the log, or a long way forward - the slider moved, another log - starts it again)
         if (pos is { } p && _tuner)
         {
             double t = f?.T ?? double.NaN;
@@ -960,10 +1003,14 @@ public sealed class CalibrationView : UserControl
     void Write(IReadOnlyList<int> cells, Func<int, double> value, bool raw, string what)
     {
         if (_item == null || cells.Count == 0) return;
+        if (_fuelView.IsVisible && _fuelView.SelectedIndex > 0)
+        { _status.Text = "this view of the fuel map is for reading: switch \"Show as\" back to Honda units to edit"; return; }
         var item = _item;
         try
         {
-            var list = cells.Select(i => (i, value(i))).ToList();
+            // typed in the unit shown (°F...): back into the ROM's own
+            bool back = !raw && _valueUnit.Length > 0 && Units.Shown(_valueUnit) != _valueUnit;
+            var list = cells.Select(i => (i, back ? Units.Back(value(i), _valueUnit) : value(i))).ToList();
             if (item.ColumnScaleAddress != null)
             {
                 // a fuel map: let a cell that runs off the top of its range push the column's multiplier up instead of flat-topping (the rest of the column is restated so those values do not move)
@@ -1014,7 +1061,7 @@ public sealed class CalibrationView : UserControl
     {
         if (_item == null || _model == null) { ShowSelected(); return; }
         var cells = _host.ReadItem(_item);
-        _model.Values = [.. cells.Select(c => c.Value)];
+        _model.Values = _valueUnit.Length > 0 ? TableModel.Shown([.. cells.Select(c => c.Value)], _valueUnit) : [.. cells.Select(c => c.Value)];
         _model.Raw = [.. cells.Select(c => c.Raw)];
         Redraw();
     }
@@ -1037,8 +1084,21 @@ public sealed class CalibrationView : UserControl
         AppLog.Action("emulator", "disconnected: another ROM opened");
     }
 
+    /// A plugin driving the emulator (and its datalog) in place of the app's own link, or null.
+    public Func<IEmulatorTakeover?>? Takeover { get; set; }
+
+    /// A plugin took the emulator over: the app's own link closes and stops trying to reconnect.
+    public void LetGoOfEmulator()
+    {
+        _emuWatch.Wanted = false;
+        _host.AutoUpload = false;
+        if (!_host.Emulator.Connected) return;
+        Task.Run(() => { try { CloseEmulator(); } catch (Exception ex) { AppLog.Error("emulator", "could not let go of the emulator", ex); } });
+    }
+
     void ToggleEmulator()
     {
+        if (Takeover?.Invoke() is { } t) { t.ToggleConnect(); UpdateEmulator(); return; }
         if (_busyEmulator) return;
         if (_host.Emulator.Connected)
         {
@@ -1140,6 +1200,7 @@ public sealed class CalibrationView : UserControl
 
     void EmulatorUpload()
     {
+        if (Takeover?.Invoke() is { } t) { t.Upload(); return; }
         if (_host.LoadedPath == null) { _status.Text = "nothing is open to upload: open or build a ROM first (Download reads what the emulator has)"; return; }
         EmulatorTask("uploading the ROM to the emulator", _host.EmulatorUploadAll);
     }
@@ -1149,7 +1210,13 @@ public sealed class CalibrationView : UserControl
 
     /// The serial port the datalog has open, if it has one of its own (so the emulator does not guess it).
     public Func<string?>? DatalogPortInUse { get; set; }
-    void EmulatorValidate() => EmulatorTask("checking the emulator against this ROM", () =>
+    void EmulatorValidate()
+    {
+        if (Takeover?.Invoke() is { } t) { t.Validate(); return; }
+        EmulatorValidateOwn();
+    }
+
+    void EmulatorValidateOwn() => EmulatorTask("checking the emulator against this ROM", () =>
     {
         var message = _host.EmulatorValidate();
         int diff = _host.LastDifferences;
@@ -1231,7 +1298,13 @@ public sealed class CalibrationView : UserControl
         }
         finally { _offering = false; }
     }
-    void EmulatorDownload() => EmulatorTask("reading the ROM out of the emulator", () =>
+    void EmulatorDownload()
+    {
+        if (Takeover?.Invoke() is { } t) { t.Download(); return; }
+        EmulatorDownloadOwn();
+    }
+
+    void EmulatorDownloadOwn() => EmulatorTask("reading the ROM out of the emulator", () =>
     {
         var message = _host.EmulatorDownload(out var path);
         Dispatcher.UIThread.Post(() => OpenDownloaded?.Invoke(path));
@@ -1243,6 +1316,12 @@ public sealed class CalibrationView : UserControl
 
     void ToggleAutoUpload()
     {
+        if (Takeover?.Invoke() is { } t)
+        {
+            t.ToggleRealtime();
+            _status.Text = t.RealtimeUpdate ? $"real-time update on: edits go to the {t.Name} device as they are made" : "real-time update off";
+            return;
+        }
         _autoUpload.IsChecked = _autoUpload.IsChecked != true;
         _status.Text = _autoUpload.IsChecked == true
             ? "changes will go to the emulator as they are made"
@@ -1251,6 +1330,14 @@ public sealed class CalibrationView : UserControl
 
     public void UpdateEmulator()
     {
+        if (Takeover?.Invoke() is { } t)
+        {
+            _emuButton.Content = t.Connected ? "Disconnect " + t.Name : "Connect " + t.Name;
+            _emuStatus.Text = t.Status;
+            _emuDot.State = t.Connected ? LinkState.Connected : t.Connecting ? LinkState.Reconnecting : LinkState.Off;
+            ToolTip.SetTip(_emuMenu, $"Emulator: {t.Name} - {t.Status}");
+            return;
+        }
         bool on = _host.Emulator.Connected;
         _emuButton.Content = on ? "Disconnect emulator" : "Connect emulator";
         _emuStatus.Text = on ? _host.EmulatorStatus : "emulator not connected";
@@ -1509,6 +1596,9 @@ public sealed class CalibrationView : UserControl
 
     // ------------------------------------------------------------------ detail view
 
+    /// Settings > Units changed: the table or setting open is shown again in the new units.
+    public void UnitsChanged() => ShowSelected();
+
     void ShowSelected()
     {
         // another table: the trail was on the last one's axes
@@ -1580,14 +1670,35 @@ public sealed class CalibrationView : UserControl
             if (a.Unit.Length > 0) return a.Unit;
             try { return defs.Formula(a.Formula).Unit is { Length: > 0 } u ? u : fallback; } catch { return fallback; }
         }
+        bool fuelMap = item.ColumnScaleAddress != null && formula.Name == "honda_fuel";
+        int mode = fuelMap ? Math.Max(0, _fuelView.SelectedIndex) : 0;
+        _fuelViewLabel.IsVisible = _fuelView.IsVisible = fuelMap;
+        _injLabel.IsVisible = _injCc.IsVisible = fuelMap && mode == 3;
+        double[] shown = [.. cells.Select(c => c.Value)];
+        var rowAxis = item.RowAxis == null ? [.. Enumerable.Range(0, item.Rows).Select(i => (double)i)] : _host.AxisValues(item.RowAxis, item.Rows);
+        string unit = formula.Unit; int decimals = Math.Min(formula.Decimals, 2);
+        if (mode > 0)
+        {
+            for (int i = 0; i < shown.Length; i++)
+            {
+                double ms = shown[i] * FuelUnitMs;
+                double rpm = item.Cols > 0 && i / item.Cols < rowAxis.Length ? rowAxis[i / item.Cols] : 0;
+                shown[i] = mode switch { 1 => ms, 2 => ms * rpm / 1200.0, _ => ms * (double)(_injCc.Value ?? 240) / 60.0 };
+            }
+            (unit, decimals) = mode switch { 1 => ("ms", 2), 2 => ("% duty", 1), _ => ("mm³", 1) };
+        }
+        // in the units picked in Settings > Units (°F, psi, mph...): what is typed in is put back into the ROM's own unit (Write)
+        _valueUnit = mode == 0 ? unit : "";
+        _rowUnit = AxisUnit(item.RowAxis, "row"); _colUnit = AxisUnit(item.ColAxis, "col");
+        if (mode == 0) { shown = TableModel.Shown(shown, unit); unit = Units.Label(Units.Shown(unit)); }
         _model = new TableModel
         {
             Item = item, Rows = item.Rows, Cols = item.Cols,
-            Values = [.. cells.Select(c => c.Value)], Raw = [.. cells.Select(c => c.Raw)],
-            RowAxis = item.RowAxis == null ? [.. Enumerable.Range(0, item.Rows).Select(i => (double)i)] : _host.AxisValues(item.RowAxis, item.Rows),
-            ColAxis = item.ColAxis == null ? [.. Enumerable.Range(0, item.Cols).Select(i => (double)i)] : _host.AxisValues(item.ColAxis, item.Cols),
-            RowUnit = AxisUnit(item.RowAxis, "row"), ColUnit = AxisUnit(item.ColAxis, "col"),
-            Unit = formula.Unit, Decimals = Math.Min(formula.Decimals, 2),
+            Values = shown, Raw = [.. cells.Select(c => c.Raw)],
+            RowAxis = TableModel.Shown(rowAxis, _rowUnit),
+            ColAxis = TableModel.Shown(item.ColAxis == null ? [.. Enumerable.Range(0, item.Cols).Select(i => (double)i)] : _host.AxisValues(item.ColAxis, item.Cols), _colUnit),
+            RowUnit = Units.Label(Units.Shown(_rowUnit)), ColUnit = Units.Label(Units.Shown(_colUnit)),
+            Unit = unit, Decimals = decimals,
             Heat = _live.IsChecked == true && !_tuner ? _host.TableHeat(item) : [],
         };
         _grid.Model = _model; _graph.Model = _model; _surface.Model = _model;
@@ -1703,9 +1814,11 @@ public sealed class CalibrationView : UserControl
                 .FirstOrDefault(r => r.Kind == RowKind.Choice && r.Options is { Length: > 0 } && it.HasSlot(r.Slot));
             if (choice != null)
             {
-                var options = choice.Options!;
-                int RawOf(int i) => choice.Values is { } v && i < v.Length ? v[i] : i;
-                int at = choice.Values is { } vals ? Array.IndexOf(vals, (int)c.Raw) : (int)c.Raw;
+                var options = choice.Values == null && SaneLimits.ChoiceNames(it.Description) is { Length: >= 2 } own ? own : choice.Options!;
+                var (opts, values) = CalPage.WithSerialInputs(defs, options, choice.Values);
+                options = opts;
+                int RawOf(int i) => values is { } v && i < v.Length ? v[i] : i;
+                int at = values is { } vals ? Array.IndexOf(vals, (int)c.Raw) : (int)c.Raw;
                 var shownOpts = options.ToList();
                 if (at < 0 || at >= options.Length) { shownOpts.Add($"(raw {c.Raw:0} - not one of these)"); at = shownOpts.Count - 1; }
                 var box = new ComboBox { ItemsSource = shownOpts, SelectedIndex = at, MinWidth = 220, VerticalAlignment = VerticalAlignment.Center };
@@ -1729,29 +1842,34 @@ public sealed class CalibrationView : UserControl
             }
             else
             {
-                var (lo, hi) = RomData.RawRange(it.Type);
-                double vlo = Math.Min(f.ToValue(lo), f.ToValue(hi)), vhi = Math.Max(f.ToValue(lo), f.ToValue(hi));
+                var (lo, _) = RomData.RawRange(it.Type);
+                var (vlo, vhi) = RomData.EditRange(defs, it, c.Value);
                 double step = Math.Abs(f.ToValue(lo + 1) - f.ToValue(lo));
                 if (step <= 0 || double.IsNaN(step) || double.IsInfinity(step)) step = 1;
+                // in the unit picked in Settings > Units; what is typed goes back into the ROM's own
+                string fu = f.Unit;
+                double S(double v) => Units.Show(v, fu);
+                double slo = Math.Min(S(vlo), S(vhi)), shi = Math.Max(S(vlo), S(vhi));
                 var nud = new NumericUpDown
                 {
-                    Width = 150, Minimum = (decimal)Math.Max(-1e9, vlo), Maximum = (decimal)Math.Min(1e9, vhi),
-                    Increment = (decimal)Math.Round(step, 6), Value = (decimal)Math.Round(c.Value, 6),
+                    Width = 150, Minimum = (decimal)Math.Max(-1e9, slo), Maximum = (decimal)Math.Min(1e9, shi),
+                    Increment = (decimal)Math.Round(step * Units.ScaleOf(fu), 6), Value = (decimal)Math.Round(double.IsFinite(c.Value) ? S(c.Value) : 0, 6),
                     FormatString = "0." + new string('#', Math.Clamp(f.Decimals, 0, 6)), FontFamily = MainWindow.MonoFont,
                 };
-                ToolTip.SetTip(nud, $"{it.Name} in {(f.Unit.Length > 0 ? f.Unit : "raw units")}. Arrows step one raw count; typing a value rounds to the nearest the ROM can store. Changes the running ROM at once.");
+                string su = Units.Label(Units.Shown(fu));
+                ToolTip.SetTip(nud, $"{it.Name} in {(su.Length > 0 ? su : "raw units")}, {slo:0.##} to {shi:0.##}. Arrows step one raw count; typing a value rounds to the nearest the ROM can store, and one outside the range is held to it. Changes the running ROM at once.");
                 bool busy = false;
                 nud.ValueChanged += (_, e) =>
                 {
                     if (busy || e.NewValue is not decimal d) return;
                     busy = true;
-                    var w = WriteSetting(item, (double)d, false, Info);
-                    if (w != null) nud.Value = (decimal)Math.Round(w.Value, 6);
+                    var w = WriteSetting(item, Units.Back((double)d, fu), false, Info);
+                    if (w != null) nud.Value = (decimal)Math.Round(S(w.Value), 6);
                     busy = false;
                 };
                 editor = nud;
             }
-            var unit = new TextBlock { Text = f.Unit, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0), FontSize = 11 };
+            var unit = new TextBlock { Text = Units.Label(Units.Shown(f.Unit)), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0), FontSize = 11 };
             Grid.SetRow(name, row); Grid.SetColumn(name, 0); grid.Children.Add(name);
             Grid.SetRow(editor, row); Grid.SetColumn(editor, 1); grid.Children.Add(editor);
             Grid.SetRow(unit, row); Grid.SetColumn(unit, 2); grid.Children.Add(unit);
@@ -1897,7 +2015,7 @@ public sealed class CalibrationView : UserControl
         {
             var apply = Btn("✔  Apply", () => Apply(item), "Save the edited definition (name, address, type, size, axes, formula...).");
             apply.Padding = new Thickness(18, 5); apply.FontWeight = FontWeight.SemiBold;
-            apply.Background = new SolidColorBrush(Color.FromArgb(70, DarkChrome.Accent.R, DarkChrome.Accent.G, DarkChrome.Accent.B));
+            apply.Background = AppTheme.Brush(Color.FromArgb(70, DarkChrome.Accent.R, DarkChrome.Accent.G, DarkChrome.Accent.B));
             var revert = Btn("Revert", () => Refresh(item.Name), "Put the form back to the definition as it is saved.");
             revert.Padding = new Thickness(12, 5);
             form.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 2, 0, 4), Children = { apply, revert } });
@@ -2275,7 +2393,7 @@ public sealed class CalibrationView : UserControl
                        : answer == "Padding only" ? XdfExport.Stride.PaddingOnly
                        : XdfExport.Stride.PaddingAsColumns;
             }
-            File.WriteAllText(path, XdfExport.Write(defs, _host.RomBytes(0, Bus.RomSize), Path.GetFileNameWithoutExtension(path), stride, values, layout));
+            SafeFile.WriteAllText(path, XdfExport.Write(defs, _host.RomBytes(0, Bus.RomSize), Path.GetFileNameWithoutExtension(path), stride, values, layout));
             _status.Text = $"wrote {path}: {defs.Items.Count} definitions for TunerPro " +
                            $"({(layout == XdfExport.Layout.Reference ? "maps only" : "with notes and categories")}; open it with the matching .bin)";
             AppLog.Action("calibration", "exported XDF " + path);

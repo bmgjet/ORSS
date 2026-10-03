@@ -56,6 +56,10 @@ fts_tick:
                 PUSHS   A
                 L       A, X2
                 PUSHS   A
+                CLRB    A
+                LCB     A, fts_block           ; off: straight to letting go (the switch is not read)
+                CMPB    A, #000h
+                JEQ     fts_no
                 MOV     X1, #fts_input
                 CAL     mod_switch             ; shift input on?
                 JEQ     fts_no

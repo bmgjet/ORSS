@@ -33,6 +33,10 @@ public sealed class ProjectData
     /// The datalog loaded (datalog/log.csv), its name and the frame the slider was on.
     public string DatalogName { get; set; } = "";
     public int DatalogPosition { get; set; }
+    /// The virtual dyno: open or not, the profile picked and the runs ticked (their file names).
+    public bool DynoOpen { get; set; }
+    public string DynoProfile { get; set; } = "";
+    public List<string> DynoTicked { get; set; } = [];
 
     // not in project.json; carried in their own zip entries
     [System.Text.Json.Serialization.JsonIgnore] public SimHost.MachineState? Machine { get; set; }
@@ -46,6 +50,8 @@ public sealed class ProjectData
     [System.Text.Json.Serialization.JsonIgnore] public string? SettingsJson { get; set; }
     /// datalog/log.csv: the frames that were loaded or recorded, every channel and the raw frames.
     [System.Text.Json.Serialization.JsonIgnore] public byte[]? DatalogCsv { get; set; }
+    /// dyno/profiles/*.json and dyno/runs/*.json: the dyno's profiles and saved runs, put back in the dyno folder when the project opens.
+    [System.Text.Json.Serialization.JsonIgnore] public Dictionary<string, byte[]> DynoFiles { get; set; } = [];
 }
 
 public sealed class ProjectSource
@@ -60,9 +66,25 @@ public static class ProjectFile
 {
     static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 
+    /// Written to a file of its own beside the project and put in its place only when complete: a disk that fills, or a failure while the pieces are made, leaves the project that was there before exactly as it was (it used to be deleted first).
     public static void Save(string path, ProjectData p)
     {
-        if (File.Exists(path)) File.Delete(path);
+        var temp = path + ".saving";
+        try
+        {
+            if (File.Exists(temp)) File.Delete(temp);
+            WriteZip(temp, p);
+            File.Move(temp, path, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(temp); } catch { }
+            throw;
+        }
+    }
+
+    static void WriteZip(string path, ProjectData p)
+    {
         using var zip = ZipFile.Open(path, ZipArchiveMode.Create);
         void Text(string name, string text)
         {
@@ -89,6 +111,7 @@ public static class ProjectFile
         if (p.ProcessorJson != null) Text("processor.json", p.ProcessorJson);
         if (p.SettingsJson != null) Text("settings.json", p.SettingsJson);
         if (p.DatalogCsv is { Length: > 0 } log) Bytes("datalog/log.csv", log);
+        foreach (var (name, data) in p.DynoFiles) Bytes("dyno/" + name, data);
     }
 
     public static ProjectData Load(string path)
@@ -110,7 +133,7 @@ public static class ProjectFile
             s.CopyTo(ms);
             return ms.ToArray();
         }
-        var p = JsonSerializer.Deserialize<ProjectData>(Text("project.json") ?? throw new InvalidDataException("not an OkiRomSim project (no project.json)"), Json)
+        var p = JsonSerializer.Deserialize<ProjectData>(Text("project.json") ?? throw new InvalidDataException("not a Rom Sim Studio project (no project.json)"), Json)
                 ?? throw new InvalidDataException("project.json is empty");
         foreach (var src in p.Sources) src.Text = Text(src.Entry) ?? "";
         if (Text("machine/state.json") is { } st) p.Machine = JsonSerializer.Deserialize<SimHost.MachineState>(st, Json);
@@ -122,6 +145,8 @@ public static class ProjectFile
         p.ProcessorJson = Text("processor.json");
         p.SettingsJson = Text("settings.json");
         if (zip.GetEntry("datalog/log.csv") != null) p.DatalogCsv = Bytes("datalog/log.csv");
+        foreach (var e in zip.Entries.Where(e => e.FullName.StartsWith("dyno/") && e.Name.Length > 0))
+            p.DynoFiles[e.FullName["dyno/".Length..]] = Bytes(e.FullName);
         return p;
     }
 }

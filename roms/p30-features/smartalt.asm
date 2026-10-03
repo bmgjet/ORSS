@@ -5,9 +5,9 @@
 ;> category: Outputs
 ;> pages: smartalt
 ;> ram: module RAM (1 byte)
-;> about: Turns the alternator's charging down (the alternator control line, P0.5) under heavy load -
+;> about: Turns the alternator's charging down (the alternator control line, P0.2, pin A16) under heavy load -
 ;>        wide throttle or high boost above an rpm - for the power it takes, and back to normal once the
-;>        load has gone for the hold time or if the battery falls below a minimum. Which level of P0.5
+;>        load has gone for the hold time or if the battery falls below a minimum. Which level of P0.2
 ;>        turns charging down depends on the alternator and wiring: check it on the car. Off until
 ;>        enabled.
 ; ==================================================================================================
@@ -47,7 +47,7 @@ smartalt_rpm:           DW  00177h
 smartalt_batt:          DB  07dh
 ;@ SmartAltHold type=u8 formula="x * 32.8" inverse="x / 32.8" unit=ms decimals=0 category="Smart alternator" slot=smartalt.hold desc="Back to normal this long after the load has gone."
 smartalt_hold:          DB  00fh
-;@ SmartAltLevel type=u8 formula=raw category="Smart alternator" slot=smartalt.level desc="The alternator control level that turns charging down: 7 = P0.5 high, 8 = P0.5 low."
+;@ SmartAltLevel type=u8 formula=raw category="Smart alternator" slot=smartalt.level desc="The alternator control level that turns charging down: 7 = P0.2 high, 8 = P0.2 low."
 smartalt_out:           DB  007h
 endif
 

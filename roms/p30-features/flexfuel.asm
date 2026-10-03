@@ -45,7 +45,7 @@ endif
 if XP == XP_CAL
 ;@ FlexEnable type=u8 flag=1 on=1 off=0 category="Flex fuel" slot=flexfuel.enable desc="Flex fuel on."
 flex_enable:            DB  000h
-;@ FlexInput type=u8 category="Flex fuel" slot=flexfuel.input desc="The ethanol signal on: 0 O2 (D14), 1 ELD (D10), 2 EGR (D12), 3 B6."
+;@ FlexInput type=u8 category="Flex fuel" slot=flexfuel.input desc="The ethanol signal on: 0 O2 (D14), 1 ELD (D10), 2 EGR (D12), 3 B6, 4-11 serial input 1-8 (sent over the datalog cable: the serial inputs module)."
 flex_input:             DB  003h
 ;@ FlexV0 type=u8 formula=volts_5v_byte category="Flex fuel" slot=flexfuel.v0 desc="The voltage at 0 % ethanol."
 flex_v0:                DB  01ah                 ; 0.5 V

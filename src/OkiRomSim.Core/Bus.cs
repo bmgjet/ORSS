@@ -1,5 +1,4 @@
-// Copyright (c) bmgjet. All rights reserved.
-// OKI MSM66207 Memory Bus & Peripheral Simulation.
+// Copyright (c) bmgjet. All rights reserved. OKI MSM66207 Memory Bus & Peripheral Simulation.
 
 namespace OkiRomSim.Core;
 
@@ -30,9 +29,14 @@ public sealed class Bus
 
     /// Which set of on-chip peripherals to model. "66207" is the OBD1 P28 family; "66911" is the Honda P13 / P14 part, whose registers are somewhere else entirely and whose timers, one-shots and injector drivers work differently (see Peripherals66911). The active ProcessorProfile sets it, and a simulator picks it up when it is created or reset.
     public static string PeripheralSet { get; private set; } = "66207";
-    public static bool Is66911 => PeripheralSet == "66911";
+    /// (kept as a flag: it is asked several times for every instruction the simulator runs)
+    public static bool Is66911 { get; private set; }
 
-    public static void SetPeripheralSet(string set) => PeripheralSet = set == "66911" ? "66911" : "66207";
+    public static void SetPeripheralSet(string set)
+    {
+        Is66911 = set == "66911";
+        PeripheralSet = Is66911 ? "66911" : "66207";
+    }
 
     /// Where the external 82C55 sits. The P28 decodes it at 0F00/1F00/2F00/3F00 (A12-A13 pick the register); the P13 puts it at 8000/A000/C000/E000 (A13-A14). Set from the profile.
     public static int PpiPortA { get; private set; } = 0x0F00;
@@ -180,11 +184,7 @@ public sealed class Bus
     public bool VtecSolenoidActive => Is66911 ? (Ppi.Read(2) & 0xC0) != 0xC0 : IsOutput(1, 0) && Latch(1, 0);
     public bool InjectorOpen(int n) => Is66911 ? P66911.InjectorOpen(n) : IsOutput(2, n) && !Latch(2, n);
 
-    // Injector pulse width. P2.0-P2.3 only select the injector: the ROM pulls the line low to open it and every
-    // timer-0 compare match closes one, the one opened longest ago (int_timer_0 sets TMR0 for the next close in
-    // opening order). At light load a pulse ends before the next one starts; at high load it outlasts the gap
-    // between injections, and the ROM pulls the still-open injector's line again beside the new one and lets it
-    // go at once - a re-select of an open injector, not a new pulse.
+    // Injector pulse width. P2.0-P2.3 only select the injector: the ROM pulls the line low to open it and every timer-0 compare match closes one, the one opened longest ago (int_timer_0 sets TMR0 for the next close in opening order). At light load a pulse ends before the next one starts; at high load it outlasts the gap between injections, and the ROM pulls the still-open injector's line again beside the new one and lets it go at once - a re-select of an open injector, not a new pulse.
     readonly List<(int Inj, ulong At)> _injOpen = [];
     /// Last measured pulse width per injector, microseconds.
     public readonly uint[] InjectorPulseUs = new uint[4];
@@ -425,6 +425,12 @@ public sealed class Bus
     // Data space read (RAM & SFRs)
     public byte ReadDataU8(ushort addr)
     {
+        // plain RAM (the working registers, the ROM's variables): nothing hangs off these addresses, so no port, serial or PPI checks are needed - the read hook still hears it
+        if (addr >= 0x80 && addr < 0x480 && !Is66911)
+        {
+            OnDataRead?.Invoke(addr);
+            return Ram[addr];
+        }
         int idx = addr & (RamSize - 1);
         OnDataRead?.Invoke(addr);
 
@@ -535,6 +541,14 @@ public sealed class Bus
     // Data space write (RAM & SFRs)
     public void WriteDataU8(ushort addr, byte val)
     {
+        // plain RAM: just the store and the hook (the SFR, PPI and serial cases all sit below 0x80 or above 0x480)
+        if (addr >= 0x80 && addr < 0x480 && !Is66911)
+        {
+            byte prev = Ram[addr];
+            Ram[addr] = val;
+            OnDataWrite?.Invoke(addr, prev, val);
+            return;
+        }
         if (Is66911)
         {
             if (IsPpi(addr))
@@ -607,9 +621,7 @@ public sealed class Bus
             if (!IsOutput(2, n)) continue;
             if (Pins.JustFell(2, n) && !_injOpen.Exists(o => o.Inj == n))
             {
-                // a new injection: whatever is still open the ROM has just pulled low again beside it, so an open
-                // event whose line is not low closed without a match of its own (a cut, a reset) and must not
-                // take the next one
+                // a new injection: whatever is still open the ROM has just pulled low again beside it, so an open event whose line is not low closed without a match of its own (a cut, a reset) and must not take the next one
                 _injOpen.RemoveAll(o => !InjectorOpen(o.Inj));
                 _injOpen.Add((n, ElapsedCycles));
             }
@@ -720,32 +732,48 @@ public sealed class Bus
         return b;
     }
 
+    // (counter SFR, reload SFR, control SFR, IRQ bit) and (counter, reload) of the PWMs: tables made once (TickTimers runs after every instruction, and built them anew each time)
+    static readonly (ushort tm, ushort tmr, ushort tcon, int irq)[] TimerRegs =
+    [
+        (SfrTm0, SfrTmr0, SfrTcon0, IrqTm0),
+        (SfrTm1, SfrTmr1, SfrTcon1, IrqTm1),
+        (SfrTm2, SfrTmr2, SfrTcon2, IrqTm2),
+        (SfrTm3, SfrTmr3, SfrTcon3, IrqTm3),
+    ];
+    static readonly (ushort c, ushort r)[] PwmRegs = [(SfrPwmc0, SfrPwmr0), (SfrPwmc1, SfrPwmr1)];
+
+    // The timer and PWM counters are plain registers (no port, PPI or serial behaviour hangs off their addresses), so the timer step reads and writes them in RAM directly instead of through the full bus decode - which walks the port table for every byte and ran for each timer after every instruction. The write hook still hears each byte, as it did.
+    internal ushort RamWord(int a) => (ushort)(Ram[a] | (Ram[a + 1] << 8));
+
+    internal void WriteRamWord(ushort addr, ushort val)
+    {
+        byte lo = (byte)val, hi = (byte)(val >> 8);
+        byte oldLo = Ram[addr], oldHi = Ram[addr + 1];
+        Ram[addr] = lo;
+        OnDataWrite?.Invoke(addr, oldLo, lo);
+        Ram[addr + 1] = hi;
+        OnDataWrite?.Invoke((ushort)(addr + 1), oldHi, hi);
+    }
+
     // Hardware timer step
     public ushort TickTimers(uint cycles)
     {
         ElapsedCycles += cycles;
         if (Is66911) return P66911.Tick(cycles);
 
-        // (counter SFR, reload SFR, control SFR, IRQ bit)
-        var timers = new (ushort tm, ushort tmr, ushort tcon, int irq)[]
-        {
-            (SfrTm0, SfrTmr0, SfrTcon0, IrqTm0),
-            (SfrTm1, SfrTmr1, SfrTcon1, IrqTm1),
-            (SfrTm2, SfrTmr2, SfrTcon2, IrqTm2),
-            (SfrTm3, SfrTmr3, SfrTcon3, IrqTm3),
-        };
+        var timers = TimerRegs;
 
         ushort irqFlags = 0;
 
         // 16-bit PWM: the counter counts up, and on overflow reloads from the PWM register and flips the output pin.
-        var pwmRegs = new (ushort c, ushort r)[] { (SfrPwmc0, SfrPwmr0), (SfrPwmc1, SfrPwmr1) };
+        var pwmRegs = PwmRegs;
         bool pwmToggled = false;
         for (int i = 0; i < pwmRegs.Length; i++)
         {
             var (c, r) = pwmRegs[i];
             // Rust truncates `cycles` to u16 before the add (overflowing_add on a u16 counter); mirror that so multi-instruction batches wrap identically.
             ushort cyclesU16 = (ushort)cycles;
-            uint sum0 = (uint)ReadDataU16(c) + cyclesU16;
+            uint sum0 = (uint)RamWord(c) + cyclesU16;
             bool overflow = sum0 > 0xFFFF;
             ushort wrapped = (ushort)sum0;
             ushort v;
@@ -754,7 +782,7 @@ public sealed class Bus
                 PwmOut[i] = !PwmOut[i];
                 pwmToggled = true;
                 irqFlags |= (ushort)(1 << IrqPwm);
-                v = (ushort)(ReadDataU16(r) + wrapped);
+                v = (ushort)(RamWord(r) + wrapped);
             }
             else
             {
@@ -822,19 +850,19 @@ public sealed class Bus
             // TCON bit 4 is the run bit; a stopped timer neither counts nor toggles its pin.
             if ((tcon & (1 << 4)) == 0) continue;
 
-            // Prescaler (in machine cycles). Only encodings 00b (/8) and 01b (/2, timer 1's 4x-faster rate) are attested by the P28 ROMs.
-            uint div = ((tcon >> 5) & 0x03) switch
+            // Prescaler (in machine cycles). Only encodings 00b (/8) and 01b (/2, timer 1's 4x-faster rate) are attested by the P28 ROMs. (every division is a power of two: 8, 2, then 2 and 1 - a shift gives the same count as a 64-bit divide, at a fraction of the cost)
+            int shift = ((tcon >> 5) & 0x03) switch
             {
-                0b00 => 8u,
-                0b01 => 2u,
-                var other => (uint)(8 >> Math.Min(other, 3)),
+                0b00 => 3,
+                0b01 => 1,
+                var other => 3 - Math.Min(other, 3),
             };
             // One prescaler feeds every timer, so timers on the same division tick on the same machine cycles (the ROMs' boot self-test checks TM2 and TM3 agree).
-            uint steps = (uint)((ElapsedCycles / div) - ((ElapsedCycles - cycles) / div));
+            uint steps = (uint)((ElapsedCycles >> shift) - ((ElapsedCycles - cycles) >> shift));
             if (steps == 0) continue;
 
-            ushort tm = ReadDataU16(tmSfr);
-            ushort tmr = ReadDataU16(tmrSfr);
+            ushort tm = RamWord(tmSfr);
+            ushort tmr = RamWord(tmrSfr);
             // Rust truncates `steps` to u16 before the add; mirror that.
             ushort stepsU16 = (ushort)steps;
             uint sum = (uint)tm + stepsU16;
@@ -842,19 +870,19 @@ public sealed class Bus
             ushort newTm = (ushort)sum;
             // TMR is a compare register, not a reload value; TM keeps free running after a match.
             bool matched = overflow ? (tm < tmr || newTm >= tmr) : (tm < tmr && newTm >= tmr);
-            WriteDataU16(tmSfr, newTm);
+            WriteRamWord(tmSfr, newTm);
 
             // TMR2 holds the CKP capture (see CaptureTm2), so timer 2 has no compare event of its own; its interrupt comes from the capture.
             if (matched && i != 2) irqFlags |= (ushort)(1 << irqBit);
             if (matched && i == 0) EndInjectorPulses();
-            // Igniter feedback: each timer-3 compare drives the coil, and the igniter's confirmation pulse comes back on TRNS1. The ROMs test "RB TRNSIT.1" once per TDC and log code 15 (ignition output) when it has not latched.
+            // Igniter feedback: each timer-3 compare drives the coil, and the igniter's confirmation pulse comes back on TRNS1 when a spark fires. The ROMs test "RB TRNSIT.1" once per TDC and log code 15 (ignition output) when it has not latched.
             if (matched && i == 3)
             {
-                Ram[SfrTrns] |= 0x02;
                 byte t3 = Ram[SfrTcon3];
                 if (_coilOn && (ElapsedCycles - _coilOnAt) / CyclesPerUs > CoilTimeoutUs) _coilOn = false;
                 if ((t3 & 0x0C) != 0 && _coilOn)
                 {
+                    Ram[SfrTrns] |= 0x02;
                     _coilOn = false;
                     IgnitionEvents++; LastIgnitionAt = ElapsedCycles;
                     LastDwellUs = (uint)((ElapsedCycles - _coilOnAt) / CyclesPerUs);

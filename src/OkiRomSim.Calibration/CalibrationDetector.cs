@@ -52,7 +52,11 @@ public static class CalibrationDetector
                             (same.Rows != item.Rows || same.Cols != item.Cols || same.Stride != item.Stride);
             if (restated)
             {
+                bool reshaped = same.Rows != item.Rows || same.Stride != item.Stride;
                 same.Rows = item.Rows; same.Cols = item.Cols; same.Stride = item.Stride;
+                // the multiplier row follows the last row: when the rows moved (a 20-column map found where the reference has 10), so does it
+                if (item.ColumnScaleAddress != null) same.ColumnScaleAddress = item.ColumnScaleAddress;
+                else if (same.ColumnScaleAddress != null && reshaped) same.ColumnScaleAddress = same.Address + (same.Rows * (same.Stride > 0 ? same.Stride : same.Cols));
                 if (item.ColAxis != null) same.ColAxis = item.ColAxis;
                 if (item.RowAxis != null) same.RowAxis = item.RowAxis;
                 replaced++; names.Add(same.Name);
@@ -64,21 +68,18 @@ public static class CalibrationDetector
             }
         }
 
-        // 000. an HTS-family ROM: the scaling HTS-master gives each field, for the definitions that have none; and
-        //      headers for the per-gear and per-cylinder lists
+        // 000. an HTS-family ROM: the scaling HTS-master gives each field, for the definitions that have none; and headers for the per-gear and per-cylinder lists
         HtsLayout.ScaleFromLayout(defs, rom);
         DefinitionBuilder.IndexAxes(defs);
 
-        // 00. the watermark and the open password (the watermark module): found by the password block's marker, with the
-        //     watermark just before it when its check word matches - so a ROM with no labels still asks for its password
-        //     and shows its watermark
+        // 00. the watermark and the open password (the watermark module): found by the password block's marker, with the watermark just before it when its check word matches - so a ROM with no labels still asks for its password and shows its watermark
         if (RomPassword.Find(rom) is int pwAt and >= 0 && !defs.Items.Any(i => i.Text == "password"))
         {
             Put(new ItemDef
             {
                 Name = "RomPassword", Address = pwAt, Type = CellType.U8, Rows = 1, Cols = RomPassword.Bytes, Text = "password",
                 Category = "Watermark", Slot = "watermark.password", Origin = "detected: password block",
-                Description = "The open password: OkiRomSim asks for it before opening this ROM (a salted hash, not the password itself).",
+                Description = "The open password: Rom Sim Studio asks for it before opening this ROM (a salted hash, not the password itself).",
             });
             int wmAt = pwAt - WatermarkCodec.Bytes;
             if (wmAt >= 0 && WatermarkCodec.Decode(rom.AsSpan(wmAt, WatermarkCodec.Bytes)).Intact && !defs.Items.Any(i => i.Text == "watermark"))
@@ -90,12 +91,10 @@ public static class CalibrationDetector
                 });
         }
 
-        // 0. the tables of known ROMs of the same family, where this ROM's code uses them the same way: the reference
-        //    whose code lines up best goes first, so its names win where two would place something at one address
+        // 0. the tables of known ROMs of the same family, where this ROM's code uses them the same way: the reference whose code lines up best goes first, so its names win where two would place something at one address
         int fromRefs = 0;
         var lines = texts.ToDictionary(kv => kv.Key, kv => kv.Value.Select(l => l.TrimEnd((char)13)).ToArray(), StringComparer.OrdinalIgnoreCase);
-        // what this ROM's RAM input bytes are (for the input axes of its tables): from its own defined tables, else
-        // from the references, the best-matched first
+        // what this ROM's RAM input bytes are (for the input axes of its tables): from its own defined tables, else from the references, the best-matched first
         var inputs = TableShapes.LearnInputs(asm, lines, defs.Items, n => { try { return defs.Formula(n); } catch { return null; } });
         if (references != null)
         {
@@ -106,8 +105,7 @@ public static class CalibrationDetector
             }).ToList();
             foreach (var f in found.OrderByDescending(f => f.Lined))
                 foreach (var (ram, formula) in f.Inputs) inputs.TryAdd(ram, formula);
-            // one table per address: a real name before a made-up one, a defined (annotated) reference before a labelled one,
-            // then the reference whose code lines up best with this ROM's
+            // one table per address: a real name before a made-up one, a defined (annotated) reference before a labelled one, then the reference whose code lines up best with this ROM's
             bool hts = HtsLayout.Version(rom) != 0;
             var best = found.SelectMany(f => f.Items.Select(i => (f.Ref, f.Lined, Item: i)))
                 .GroupBy(x => x.Item.Address)
@@ -137,8 +135,7 @@ public static class CalibrationDetector
         var symbols = asm.Symbols.Values.Where(s => s.Kind == SymbolKind.Label).GroupBy(s => s.Name).ToDictionary(g => g.Key, g => (int)g.First().Value);
         var maps = TableDetector.Detect(src.Select(s => s.Text), symbols, rom, IsCode);
         foreach (var m in maps) Put(m.Item);
-        // the lookup code is the authority on where the maps are: a map a reference placed elsewhere under the same
-        // name as one found here (its code differs from this ROM's) is dropped
+        // the lookup code is the authority on where the maps are: a map a reference placed elsewhere under the same name as one found here (its code differs from this ROM's) is dropped
         foreach (var m in maps)
         {
             var here = defs.Items.FirstOrDefault(i => i.Address == m.Item.Address);
@@ -205,15 +202,13 @@ public static class CalibrationDetector
             Put(Guess(name, a, word, count, "detected: read by LC/LCB"));
         }
 
-        // 5. tables read through a table routine: a block known only as "N bytes" becomes the tables it holds, each
-        //    (input, value) list to its input 0, named after the block (Name, Name2...), the input scaled as its RAM byte is
+        // 5. tables read through a table routine: a block known only as "N bytes" becomes the tables it holds, each (input, value) list to its input 0, named after the block (Name, Name2...), the input scaled as its RAM byte is
         int shaped = 0;
         bool dbg = Environment.GetEnvironmentVariable("OKI_DEBUG_SHAPES") == "1";
         foreach (var sh in TableShapes.Find(asm, lines, rom, IsCode))
         {
             if (dbg) Console.WriteLine($"shape {sh.AxisAddress:X4} n={sh.Count} stride={sh.Reader.Stride} ram={sh.InputRam:X} covered={string.Join(",", defs.Items.Where(i => i.Contains(sh.AxisAddress) || i.Contains(sh.AxisAddress + 1)).Select(i => i.Name + "/" + i.Origin))}");
-            // something that already says what is there (annotated, made by hand, or from a reference) stays
-            // (two tables may share bytes: one's last entry the other's first)
+            // something that already says what is there (annotated, made by hand, or from a reference) stays (two tables may share bytes: one's last entry the other's first)
             if (defs.Items.Any(i => i.ColStride > 0 && i.ColAxis?.Address == sh.AxisAddress)) continue;
             if (defs.Items.Any(i => i.Origin?.StartsWith("detected") != true && i.Contains(sh.AxisAddress))) continue;
             var blob = defs.Items.FirstOrDefault(i => i.Origin?.StartsWith("detected") == true && i.ColStride == 0 && i.Rows <= 1 && i.Contains(sh.AxisAddress));
@@ -251,8 +246,7 @@ public static class CalibrationDetector
             }
         }
 
-        // 6. what is left as "N bytes" but read with LC / LCB: each read is a setting of the width it is read at
-        //    (a block read by index stays one array, of words if it is read as words)
+        // 6. what is left as "N bytes" but read with LC / LCB: each read is a setting of the width it is read at (a block read by index stays one array, of words if it is read as words)
         var reads = new Dictionary<int, (bool Word, bool Indexed)>();
         foreach (var e in asm.SourceMap)
         {

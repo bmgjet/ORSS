@@ -52,7 +52,7 @@ public static class RomPasswordUi
         var again = Masked("the same again");
         var panel = new StackPanel { Spacing = 6, Children = { first, again } };
         if (!await Dialogs.Prompt(owner, "Set the open password",
-                "OkiRomSim will ask for this before it opens the ROM (the .bin, its source, or a project holding it).\n" +
+                "Rom Sim Studio will ask for this before it opens the ROM (the .bin, its source, or a project holding it).\n" +
                 "Only a salted hash of it is kept in the ROM - it cannot be read back, so keep a note of it.", panel, "Set")) return null;
         if ((first.Text ?? "") != (again.Text ?? "")) { await Dialogs.Ask(owner, "Password", "The two did not match: nothing was changed.", "OK"); return null; }
         return first.Text ?? "";
@@ -112,7 +112,7 @@ public static class RomPasswordUi
                 host.WriteCells(pw, [.. block.Select((b, i) => (i, (double)b))], true, text.Length == 0 ? "password removed" : "password set");
                 if (text.Length > 0) Unlocked[Convert.ToHexString(block)] = text;
                 status(text.Length == 0 ? "watermark removed: the ROM opens without a password"
-                                        : "watermark set: OkiRomSim asks for it before opening this ROM (save the .bin, or build, to keep it)");
+                                        : "watermark set: Rom Sim Studio asks for it before opening this ROM (save the .bin, or build, to keep it)");
                 AppLog.Action("calibration", text.Length == 0 ? "watermark / password removed" : "watermark / password set");
             }
             catch (Exception ex) { status(ex.Message); }
@@ -122,7 +122,7 @@ public static class RomPasswordUi
         box.TextChanged += (_, _) => { if (!showing) { pause.Stop(); pause.Start(); } };
         box.LostFocus += (_, _) => Apply();
         box.KeyDown += (_, e) => { if (e.Key == Avalonia.Input.Key.Enter) Apply(); };
-        ToolTip.SetTip(box, "Up to 16 characters. This is the ROM's password: OkiRomSim asks for it before it opens the ROM. " +
+        ToolTip.SetTip(box, "Up to 16 characters. This is the ROM's password: Rom Sim Studio asks for it before it opens the ROM. " +
                             "Only a salted hash of it is kept, so keep a note of it. Empty: no password.");
         Show();
         return new StackPanel { Orientation = Orientation.Horizontal, Children = { box, state } };
@@ -170,7 +170,7 @@ public static class RomPasswordUi
             if (await Dialogs.Confirm(w, "Remove the password?", "The ROM will open without asking.", "Remove", "Keep it"))
                 Write(RomPassword.Cleared(), "removed");
         };
-        ToolTip.SetTip(set, "OkiRomSim asks for the password before it opens this ROM. Only a salted hash is kept in the ROM.");
+        ToolTip.SetTip(set, "Rom Sim Studio asks for the password before it opens this ROM. Only a salted hash is kept in the ROM.");
         Show();
         return new StackPanel { Orientation = Orientation.Horizontal, Children = { state, set, remove } };
     }

@@ -11,7 +11,7 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
-        // `OkiRomSimStudio --mcp [--root DIR]... [--read-only]` runs the MCP server over stdio for a local MCP client instead of opening the window (same tools as okirom-mcp).
+        // `RomSimStudio --mcp [--root DIR]... [--read-only]` runs the MCP server over stdio for a local MCP client instead of opening the window (same tools as romsim-mcp).
         if (args.Contains("--mcp")) return RunMcp(args);
         if (Array.IndexOf(args, "--selftest-live") is int st and >= 0 && st + 1 < args.Length) return SelfTest.Live(args[st + 1]);
         if (Array.IndexOf(args, "--selftest-smooth") >= 0) return SelfTest.Smooth();
@@ -20,7 +20,7 @@ public static class Program
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {
             OkiRomSim.Core.AppLog.Error("app", "unhandled exception" + (e.IsTerminating ? " (fatal)" : ""), e.ExceptionObject as Exception);
-            try { File.AppendAllText(Path.Combine(Path.GetTempPath(), "OkiRomSimStudio-errors.log"), $"{DateTime.Now:s} {e.ExceptionObject}\n\n"); } catch { }
+            try { File.AppendAllText(Path.Combine(Path.GetTempPath(), "RomSimStudio-errors.log"), $"{DateTime.Now:s} {e.ExceptionObject}\n\n"); } catch { }
         };
         TaskScheduler.UnobservedTaskException += (_, e) =>
         {
@@ -59,14 +59,16 @@ public sealed class App : Application
 {
     public override void Initialize()
     {
-        Styles.Add(new FluentTheme());
+        var fluent = new FluentTheme();
+        AppTheme.Install(fluent);
+        Styles.Add(fluent);
         // AvaloniaEdit ships its own control theme; without it the editor renders unstyled. The resource path moved between AvaloniaEdit versions, so try both and carry on if neither is there - the editor still works, it just looks plain.
         foreach (var path in new[] { "avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml",
                                      "avares://AvaloniaEdit/Themes/Fluent.xaml" })
         {
             try
             {
-                Styles.Add(new Avalonia.Markup.Xaml.Styling.StyleInclude(new Uri("avares://OkiRomSimStudio/"))
+                Styles.Add(new Avalonia.Markup.Xaml.Styling.StyleInclude(new Uri("avares://RomSimStudio/"))
                 {
                     Source = new Uri(path),
                 });
@@ -76,7 +78,7 @@ public sealed class App : Application
         }
         try
         {
-            Styles.Add(new Avalonia.Markup.Xaml.Styling.StyleInclude(new Uri("avares://OkiRomSimStudio/"))
+            Styles.Add(new Avalonia.Markup.Xaml.Styling.StyleInclude(new Uri("avares://RomSimStudio/"))
             {
                 Source = new Uri("avares://Avalonia.Controls.ColorPicker/Themes/Fluent/Fluent.xaml"),
             });
@@ -94,6 +96,10 @@ public sealed class App : Application
             var path = args.Where((a, i) => !a.StartsWith('-') && (i == 0 || args[i - 1] != "--ui-check")).FirstOrDefault();
             // the title bar is decided before the first window is built
             try { DarkChrome.PreferSystemTitleBar = AppSettings.Load().SystemTitleBar; } catch { }
+            // high contrast before the first window, so it opens in it
+            try { AppTheme.Set(UiCheck.Active ? AppTheme.Mode.Dark : AppTheme.Parse(AppSettings.Load().Theme)); } catch { }
+            // the language, before any text is put on screen
+            try { Lang.Use(UiCheck.Active ? Environment.GetEnvironmentVariable("OKIROM_UICHECK_LANG") ?? "en" : AppSettings.Load().Language); } catch (Exception ex) { OkiRomSim.Core.AppLog.Error("lang", "not loaded", ex); }
             var main = new MainWindow(path);
             desktop.MainWindow = main;
             if (check != null) main.Opened += async (_, _) => await UiCheck.Run(main, check);

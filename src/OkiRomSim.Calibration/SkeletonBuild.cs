@@ -15,6 +15,21 @@ public sealed record SkeletonBuildResult(bool Success, AssemblyResult? Assembly,
 {
     /// Too big by this many bytes (0 when it fits or failed for another reason).
     public int Over => FreeBytes < 0 ? -FreeBytes : 0;
+
+    /// The module RAM this build takes (null when the skeleton has none, or the build stopped before it was laid out).
+    public ModuleRam? Ram { get; init; }
+}
+
+/// A stretch of module RAM and who has it.
+public sealed record RamUse(string Owner, int Start, int Bytes);
+
+/// Module RAM: the block modules take their bytes from (MOD_RAM_BASE up to MOD_RAM_END), how far it is taken (MODRAM_NEXT), and by whom.
+public sealed record ModuleRam(int Base, int End, int Next, IReadOnlyList<RamUse> Uses)
+{
+    public int Size => End - Base;
+    public int Used => Math.Max(0, Next - Base);
+    public int Free => Size - Used;
+    public bool Full => Next > End;
 }
 
 /// A skeleton ROM: a stock ROM cut down to what runs the engine, with extension points that feature modules plug into. Built from source, so the assembler places every module's code and tables where there is room: any mix, in any order, never overlapping, until the 32 KB are full. Found by name: "xxx-skeleton.asm", with its modules in the folder its extension points include ("xxx-features/features.inc"). Each module file describes itself in a ";>" header: ;> feature: FEAT_LAUNCH          the define that builds it in ;> name: Launch control          ;> category: Limits          ;> about: what it does (continues on ;> lines) ;> conflicts: FEAT_A, FEAT_B      ;> requires: FEAT_C           ;> ram: the RAM it owns The stock functions are listed in the skeleton's own header as ";     FEAT_STOCK_NAME   what it is".
@@ -167,7 +182,12 @@ public sealed class Skeleton
     public SkeletonBuildResult Build(IEnumerable<string> defines)
     {
         var o = new AssemblerOptions { Cache = _cache };
-        foreach (var d in defines) o.Defines[d] = 1;
+        foreach (var d in defines)
+        {
+            // "NAME=number" sets a define to a value (a diagnostic knob such as TICKBURN_US); anything else is a switch
+            int eq = d.IndexOf('=');
+            if (eq > 0 && long.TryParse(d[(eq + 1)..], out var val)) o.Defines[d[..eq]] = val; else o.Defines[d] = 1;
+        }
         AssemblyResult r;
         try { r = new OkiAssembler(o).AssembleFile(Path); }
         catch (Exception ex) { return new(false, null, [ex.Message], 0, 0, 0); }
@@ -182,8 +202,44 @@ public sealed class Skeleton
         int free = free0 < 0 ? r.Image.Length - r.UsedBytes : (int)Math.Max(0, hooks - free0);
         // too big: the free space is how far over it is, as a negative number, so costs still add up
         if (Regex.Match(string.Join(" ", errors), @"(\d+) bytes too big") is { Success: true } over) free = -int.Parse(over.Groups[1].Value);
-        return new(r.Success, r, errors, r.UsedBytes, free, 0);
+        return new(r.Success, r, errors, r.UsedBytes, free, 0) { Ram = RamOf(r) };
     }
+
+    /// Who has which bytes of module RAM: every name a module file (or lib.asm) puts in the block, in address order, each run of one file's names up to the next file's first.
+    ModuleRam? RamOf(AssemblyResult r)
+    {
+        SymbolInfo? Get(string n) => r.Symbols.Values.FirstOrDefault(s => s.Name.Equals(n, StringComparison.OrdinalIgnoreCase));
+        if (Get("MOD_RAM_BASE") is not { } b || Get("MOD_RAM_END") is not { } e) return null;
+        int lo = (int)b.Value, hi = (int)e.Value;
+        int next = Get("MODRAM_NEXT") is { } n ? (int)n.Value : lo;
+        var names = r.Symbols.Values
+            .Where(s => s.Kind is SymbolKind.Equate && s.File != null && s.Value >= lo && s.Value < Math.Max(next, lo + 1)
+                        && !s.Name.StartsWith("MOD_RAM", StringComparison.OrdinalIgnoreCase))
+            .Select(s => (At: (int)s.Value, Owner: OwnerOf(s.File!)))
+            .OrderBy(x => x.At).ToList();
+        var uses = new List<RamUse>();
+        for (int i = 0; i < names.Count; i++)
+        {
+            int start = names[i].At;
+            while (i + 1 < names.Count && names[i + 1].Owner == names[i].Owner) i++;
+            int end = i + 1 < names.Count ? names[i + 1].At : next;
+            if (end <= start) continue;
+            if (uses.Count > 0 && uses[^1].Owner == names[i].Owner) uses[^1] = uses[^1] with { Bytes = end - uses[^1].Start };
+            else uses.Add(new RamUse(names[i].Owner, start, end - start));
+        }
+        return new ModuleRam(lo, hi, next, uses);
+    }
+
+    string OwnerOf(string file)
+    {
+        var name = System.IO.Path.GetFileName(file);
+        if (Features.FirstOrDefault(f => f.File != null && System.IO.Path.GetFileName(f.File).Equals(name, StringComparison.OrdinalIgnoreCase)) is { } f) return f.Name;
+        return name.Equals("lib.asm", StringComparison.OrdinalIgnoreCase) ? "Shared (the module library)" : name;
+    }
+
+    /// The skeleton keeps an engine rev limiter of its own whatever is built (its annotations say so).
+    public bool HasOwnRevLimiter => _hasRevLimiter ??= File.ReadLines(Path).Any(l => l.StartsWith(";@", StringComparison.Ordinal) && Regex.IsMatch(l, @"(?i)rev\s*limit"));
+    bool? _hasRevLimiter;
 
     /// The source of a build: the chosen features as defines, then the skeleton. `include` is the skeleton's path as the build file will see it.
     public string BuildSource(IEnumerable<string> defines, string include, string romName) => BuildSourceBase(defines, include, romName);
@@ -196,8 +252,8 @@ public sealed class Skeleton
     {
         var nl = text.Contains("\r\n") ? "\r\n" : "\n";
         var lines = text.Replace("\r\n", "\n").Split('\n').ToList();
-        // what the block holds now, kept where not given
-        int s = lines.FindIndex(l => l.StartsWith(KeptStart)), e = lines.FindIndex(l => l.StartsWith(KeptEnd));
+        // what the block holds now, kept where not given (a file kept by a build from before the name changed has the old markers: they are found too, and written anew)
+        int s = lines.FindIndex(l => l.StartsWith(KeptStart) || l.StartsWith("; ---- kept by OkiRomSim:")), e = lines.FindIndex(l => l.StartsWith(KeptEnd) || l.StartsWith("; ---- end of what OkiRomSim keeps"));
         var old = s >= 0 && e > s ? lines.GetRange(s + 1, e - s - 1) : [];
         if (s >= 0 && e > s) lines.RemoveRange(s, e - s + 1);
         while (lines.Count > 0 && lines[^1].Trim().Length == 0) lines.RemoveAt(lines.Count - 1);

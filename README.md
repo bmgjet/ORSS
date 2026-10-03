@@ -1,10 +1,13 @@
-# Oki ROM Studio
+# Rom Sim Studio
 
-Version 0.0.0.2
+Version 0.0.0.5
 
-A Windows desktop toolchain for OKI MSM66207 / 66201 Honda OBD1 ECU ROMs:
+A desktop toolchain for OKI MSM66207 / 66201 Honda OBD1 ECU ROMs:
 emulator, disassembler, assembler, calibration editor, datalogging and an
-MCP server for AI-assisted tuning.
+MCP server for other tuning tools. Windows, Linux and macOS.
+
+How to use it: the guide in `Website/docs` (start at `index.html`), also on the
+website. Questions and bug reports: https://discord.gg/xynkH3ymkH
 
 ## What is in here
 
@@ -27,6 +30,7 @@ dotnet build OkiRomSim.sln
 
 Run the desktop app with `dotnet run --project src/OkiRomSim.Desktop`
 or the CLI with `dotnet run --project src/OkiRomSim.Cli -- <args>`.
+
 
 ## Versioning
 

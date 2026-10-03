@@ -37,7 +37,7 @@ rpmsw_enable:         DB  000h
 rpmsw_engage:         DW  0017ah                 ; 4970 rpm
 ;@ RpmSwitchOff type=u16 formula=rpm_period_word category="Outputs" slot=rpmswitch.disengage desc="Switch off again below this rpm."
 rpmsw_disengage:      DW  00187h                 ; 4800 rpm
-;@ RpmSwitchOutput type=u8 category="Outputs" slot=rpmswitch.output desc="The output it drives: 0 none, 1 P0.0 (A/C clutch), 2 P0.1 (EVAP purge), 3 P0.4 (A/T lock-up), 4 P1.2 (O2 heater), 5 P1.4 (check-engine lamp), 6 P1.5 (ECU LED)."
+;@ RpmSwitchOutput type=u8 category="Outputs" slot=rpmswitch.output desc="The output it drives: 0 none, 1 P0.0 (A/C clutch, A15), 2 P0.1 (EVAP purge), 3 P0.4 (A/T lock-up, automatic ECUs), 4 P1.2 (O2 heater), 5 P1.4 (check-engine lamp, A13), 6 P1.5 (ECU LED), 7 P0.2 (alternator control, A16) high, 8 P0.2 low, 9 P0.0 held off (A/C clutch disengaged), 10 P0.3 (radiator fan), 11 P4.3 (pin A17; boost control uses it too)."
 rpmsw_output:         DB  006h
 ;@ RpmSwitchInvert type=u8 flag=1 on=1 off=0 category="Outputs" slot=rpmswitch.invert desc="Drive the output while it is off instead."
 rpmsw_invert:         DB  000h

@@ -127,6 +127,6 @@ public static class Toolbar
     // the glyphs used across the app, in one place so they stay consistent
     public const string Open = "📂", Save = "💾", SaveAs = "🖫", Project = "🗄", Restore = "⏱", Clear = "🧹",
                         Compare = "⇄", Build = "🔨", Run = "▶", Pause = "❚❚", Step = "⤼", Over = "⤻", Into = "⤶",
-                        Out = "⤴", Reset = "↻", Tuner = "🎚", Settings = "⚙", Detect = "🔍", Add = "＋", Delete = "🗑",
+                        Out = "⤴", Reset = "↻", Tuner = "🎚", Sun = "☀", Settings = "⚙", Detect = "🔍", Add = "＋", Delete = "🗑",
                         Import = "⭳", Export = "⭱", Bin = "🖭", Scale = "⇕", Log = "📈", Gauge = "🕹";
 }

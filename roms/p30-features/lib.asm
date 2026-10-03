@@ -80,46 +80,8 @@ MB_LEANPRO      EQU     00200h
 MB_TRACTION     EQU     00400h
 MB_GEARLIMIT    EQU     00800h
 MB_WATERMARK    EQU     01000h
-; the tick slot each module runs on (tick mod 16)
-SLOT_REVLIMIT   EQU     1
-SLOT_LAUNCH     EQU     2
-SLOT_FTS        EQU     3
-SLOT_BURNOUT    EQU     4
-SLOT_BOOSTCUT   EQU     5
-SLOT_ECTPRO     EQU     6
-SLOT_ANTISTART  EQU     7
-SLOT_SPEEDLIMIT EQU     8
-SLOT_CEILING    EQU     9
-SLOT_IAB        EQU     10
-SLOT_RPMSWITCH  EQU     11
-SLOT_WARNLAMP   EQU     12
-SLOT_EBC        EQU     13
-SLOT_LEANPRO    EQU     14
-SLOT_TRACTION   EQU     15
-SLOT_GEAR       EQU     0
-; slots that are lighter share one with another module
-SLOT_GIO        EQU     4
-SLOT_VTECCTL    EQU     7
-SLOT_FUELTRIM   EQU     8
-SLOT_GEARFUEL   EQU     9
-SLOT_GEARIGN    EQU     10
-SLOT_MAPSWITCH  EQU     11
-SLOT_FLEX       EQU     12
-SLOT_WBCL       EQU     6
-SLOT_TPSRETARD  EQU     15
-SLOT_GEARLIMIT  EQU     3
-SLOT_GIO1       EQU     4
-SLOT_GIO2       EQU     5
-SLOT_GIO3       EQU     13
-SLOT_GIO4       EQU     14
-SLOT_DUALMAPS   EQU     2
-SLOT_WATERMARK  EQU     0
-SLOT_ROLLIDLE   EQU     10
-SLOT_DECELPOP   EQU     12
-SLOT_SMARTALT   EQU     9
-SLOT_ACCUT      EQU     14
-SLOT_ANTISTALL  EQU     1
-SLOT_WMI        EQU     5
+; the tick slot each module runs on (tick mod 16): features.inc hands them out when the ROM is built, the heaviest
+; modules a slot of their own
 endif
 
 if XP == XP_TICK
@@ -175,10 +137,28 @@ mod_tick_exit:  POPS    A
 ; ------------------------------------------------------------------ switch inputs
 ; In: X1 = two calibration bytes: the one-hot input select, then invert (0 or 1).
 ;   Select: 01h power steering (B8), 02h service check connector (D4), 04h start (B9), 08h VTEC pressure
-;   (D6), 10h A/C request (B5), 20h brake (D2), 40h park/neutral (B7), 80h always on, 00h never.
+;   (D6), 10h A/C request (B5), 20h brake (D2), 40h park/neutral (B7), 80h always on, 00h never; with the
+;   serial inputs (FEAT_DLSERIALIN) C0h-C7h serial input 1-8, on when its value is not 0.
 ; Out: A = 1 (Z clear) when the input is on after the invert, 0 (Z set) when it is off. Uses DP, r7.
 mod_switch:     CLRB    A                      ; byte mode
                 LCB     A, 00000h[X1]
+if defined(FEAT_DLSERIALIN)
+                STB     A, r7
+                ANDB    A, #0f8h
+                CMPB    A, #0c0h
+                JNE     mod_switch_pins
+                LB      A, r7                  ; C0h-C7h: a serial input
+                ANDB    A, #007h
+                ADDB    A, #004h               ; (serin_read's 4-11)
+                CAL     serin_read
+                RC
+                CMPB    A, #000h
+                JEQ     mod_switch_got         ; 0: off
+                SC
+                SJ      mod_switch_got
+mod_switch_pins:
+                LB      A, r7
+endif
                 MOV     DP, #00211h            ; the switch copies at 210h/211h (DP: works in any context)
                 SLLB    A
                 JLT     mod_switch_got         ; 80h: always on
@@ -288,6 +268,10 @@ mod_limit_set:  L       A, off(MOD_FUELWANT)
                 ST      A, off(MOD_SPARKWANT)
                 SJ      mod_fold
 mod_limit_release:
+                L       A, off(MOD_FUELWANT)   ; not cutting: nothing to let go (the usual case, kept short)
+                OR      A, off(MOD_SPARKWANT)
+                AND     A, er0
+                JEQ     mod_limit_ret
                 L       A, er0
                 XOR     A, #0ffffh
                 ST      A, er0
@@ -468,9 +452,16 @@ mod_pwm_step:   STB     A, [DP]
                 RT
 
 ; ------------------------------------------------------------------ analog inputs
-; In: A (byte) = the input: 0 O2 (D14), 1 ELD (D10), 2 EGR (D12), 3 B6. Out: A (byte) = its level, 0-255
-; for 0-5 V. Uses DP.
-mod_analog:     CMPB    A, #002h
+; In: A (byte) = the input: 0 O2 (D14), 1 ELD (D10), 2 EGR (D12), 3 B6, 4-11 serial inputs 1-8 (FEAT_DLSERIALIN).
+; Out: A (byte) = its level, 0-255 for 0-5 V (a serial input: its value). Uses DP (a serial input: and r7).
+mod_analog:
+if defined(FEAT_DLSERIALIN)
+                CMPB    A, #004h
+                JLT     mod_analog_pin
+                J       serin_read             ; dlserialin.asm
+mod_analog_pin:
+endif
+                CMPB    A, #002h
                 JGE     mod_analog_direct
                 MOV     DP, #003beh            ; the scan the skeleton keeps: O2...
                 CMPB    A, #000h
@@ -838,9 +829,13 @@ endif
 
 if defined(NEED_OUTPORT)
 ; ------------------------------------------------------------------ outputs
-; In: A (byte) = the output: 0 none, 1 P0.0 (A/C clutch), 2 P0.1 (EVAP purge), 3 P0.4 (A/T lock-up),
-;     4 P1.2 (O2 heater), 5 P1.4 (check-engine lamp), 6 P1.5 (ECU LED), 7 P0.5 (alternator control) high,
-;     8 P0.5 low, 9 P0.0 held high (the A/C clutch kept off); C = drive it on.
+; In: A (byte) = the output: 0 none, 1 P0.0 (A/C clutch, A15), 2 P0.1 (EVAP purge), 3 P0.4 (A/T lock-up),
+;     4 P1.2 (O2 heater), 5 P1.4 (check-engine lamp, A13), 6 P1.5 (ECU LED), 7 P0.2 (alternator control, A16)
+;     high, 8 P0.2 low, 9 P0.0 held high (the A/C clutch kept off), 10 P0.3 (radiator fan: low = on, as the other
+;     relays, and the stock code holds it high while warm), 11 P4.3 (pin A17,
+;     the CPU's own pin: high = on); C = drive it on. (Flashed one at a time on a car: P0.0 A/C clutch, P0.2
+;     alternator control, P0.3 fan, P0.7 fuel pump, P1.0 VTEC, P1.2 O2 heater, P1.4 the lamp, P4.3 pin A17. The
+;     others did nothing on that board - parts not fitted - and keep the stock code's names.)
 ;     "On" is the output's active level: low for the P0 ones and the O2 heater (they switch a relay or a
 ;     solenoid to ground), high for the lamp and the LED. Off hands the pin back and puts its latch at the
 ;     idle level: the skeleton copies an overridden level into the latch, and for the pins it no longer
@@ -852,8 +847,15 @@ mod_output:     STB     A, r5                  ; (called in byte mode)
                 STB     A, r6
                 CLR     A                      ; the index as a word, high byte 0
                 LB      A, r5
-                CMPB    A, #00ah
+                CMPB    A, #00ch
                 JGE     mod_output_ret
+                CMPB    A, #00bh
+                JNE     mod_output_8255
+                LB      A, r6                  ; 11: P4.3, the pin itself
+                SRLB    A
+                MB      P4.3, C
+                RT
+mod_output_8255:
                 L       A, ACC
                 MOV     X2, A
                 CLRB    A                      ; byte mode
@@ -912,12 +914,12 @@ mod_output_latch:
                 ORB     A, r6
                 STB     A, [DP]
 mod_output_ret: RT
-;@ ModOutputMask type=u8 count=10 formula=raw category="Internal" desc="lib.asm: the pin of each free output (not a tuning value)."
-mod_out_mask:   DB      000h, 001h, 002h, 010h, 004h, 010h, 020h, 020h, 020h, 001h
-;@ ModOutputOn type=u8 count=10 formula=raw category="Internal" desc="lib.asm: the on level of each output (not a tuning value)."
-mod_out_on:     DB      000h, 000h, 000h, 000h, 000h, 010h, 020h, 020h, 000h, 001h    ; the active level
-;@ ModOutputIdle type=u8 count=10 formula=raw category="Internal" desc="lib.asm: the off level of each output (not a tuning value)."
-mod_out_idle:   DB      000h, 001h, 002h, 010h, 004h, 000h, 000h, 000h, 000h, 001h    ; the level when off
+;@ ModOutputMask type=u8 count=11 formula=raw category="Internal" desc="lib.asm: the pin of each free output (not a tuning value)."
+mod_out_mask:   DB      000h, 001h, 002h, 010h, 004h, 010h, 020h, 004h, 004h, 001h, 008h
+;@ ModOutputOn type=u8 count=11 formula=raw category="Internal" desc="lib.asm: the on level of each output (not a tuning value)."
+mod_out_on:     DB      000h, 000h, 000h, 000h, 000h, 010h, 020h, 004h, 000h, 001h, 000h    ; the active level
+;@ ModOutputIdle type=u8 count=11 formula=raw category="Internal" desc="lib.asm: the off level of each output (not a tuning value)."
+mod_out_idle:   DB      000h, 001h, 002h, 010h, 004h, 000h, 000h, 000h, 000h, 001h, 008h    ; the level when off
 endif
 endif
 

@@ -15,6 +15,9 @@ public static class AboutPage
 
     public const string Author = "bmgjet";
 
+    /// The community server: questions, tunes, modules and bug reports.
+    public const string Discord = "https://discord.gg/xynkH3ymkH";
+
     public static readonly string Licence = $$"""
         {{BuildInfo.Product}} licence
 
@@ -78,6 +81,9 @@ public static class AboutPage
         var site = Panels.Button(Website, () => Open(Website), "Open the website in your browser.", "🌐");
         site.HorizontalAlignment = HorizontalAlignment.Left;
         p.Children.Add(Labelled("Website", site));
+        var chat = Panels.Button(Discord, () => Open(Discord), "Open the Discord in your browser: questions, tunes, modules and bug reports.", "💬");
+        chat.HorizontalAlignment = HorizontalAlignment.Left;
+        p.Children.Add(Labelled("Discord", chat));
         p.Children.Add(Labelled("Credits", new SelectableTextBlock
         {
             Text = $"{Author} - author: the program, the simulator, the skeleton ROM and its modules.\n" +

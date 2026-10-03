@@ -9,9 +9,43 @@ using Avalonia.Media;
 
 namespace OkiRomSim.Desktop;
 
-/// MSM66207 pinout (64-pin shrink DIP or 64-pin QFP, from the datasheet), coloured live from the simulator. Hover a pin to see what it is doing; click an input to change it.
+/// MSM66207 pinout (64-pin shrink DIP or 64-pin QFP, from the datasheet) and, behind the tab on its right edge, the board's 8255 PPI (the GPIO expander that drives the outputs: port B mirrors P0, port C mirrors P1; port A reads the switches) with its traces, coloured live from the simulator. Hover a pin to see what it is doing; click an input to change it.
 public sealed class ChipView : UserControl
 {
+    /// A port A pin of the 8255 was clicked (its bit): the switches panel toggles it, so both show the same.
+    public event Action<int>? PortABitClicked;
+
+    /// The 8255's 40-pin DIP, pin 1 first.
+    static readonly string[] PpiPins =
+    [
+        "PA3", "PA2", "PA1", "PA0", "RD", "CS", "GND", "A1", "A0", "PC7", "PC6", "PC5", "PC4", "PC0", "PC1", "PC2", "PC3", "PB0", "PB1", "PB2",
+        "PB3", "PB4", "PB5", "PB6", "PB7", "VCC", "D7", "D6", "D5", "D4", "D3", "D2", "D1", "D0", "RESET", "WR", "PA7", "PA6", "PA5", "PA4",
+    ];
+
+    static readonly Dictionary<string, string> PpiOther = new()
+    {
+        ["RD"] = "read strobe (the processor's RD)", ["WR"] = "write strobe (the processor's WR)", ["CS"] = "chip select (decoded from the address: the ROM reaches it at 0F00h-3F00h)",
+        ["A0"] = "register select, low bit (port A / B / C / control)", ["A1"] = "register select, high bit", ["RESET"] = "reset (every port an input until the ROM sets it up)",
+        ["VCC"] = "+5 V supply", ["GND"] = "ground",
+        ["D0"] = "data bus (the processor's AD0-AD7)", ["D1"] = "data bus", ["D2"] = "data bus", ["D3"] = "data bus", ["D4"] = "data bus", ["D5"] = "data bus", ["D6"] = "data bus", ["D7"] = "data bus",
+    };
+
+    /// What each 8255 pin does on this board: the profile's, or the P28's for a saved profile from before they were added.
+    static Dictionary<string, string> PpiFunctions => Profile.PpiFunctions.Count > 0 ? Profile.PpiFunctions
+        : Profile.Name.Equals("MSM66207", StringComparison.OrdinalIgnoreCase) ? OkiRomSim.Core.ProcessorProfile.Msm66207().PpiFunctions : [];
+
+    readonly List<(string Name, int Number, Border Box, TextBlock[] Tips)> _ppi = [];
+    /// The traces from the processor's P0 / P1 pins to the 8255 port B / C pins they mirror, coloured with the level.
+    readonly List<(Avalonia.Controls.Shapes.Line Line, string Ppi)> _links = [];
+    /// The 8255 is tucked away until asked for (the tab on the processor's right edge); remembered while the app is open.
+    static bool _ppiShown;
+    /// Where the processor's body is drawn, for the 8255 tab.
+    Rect _body;
+    /// Where the traces go in the drawing order: over the processor's body, under its pins and labels.
+    int _traceIndex;
+
+    const string PpiAbout = "8255 programmable peripheral interface: the GPIO expander on the processor's external bus. Port B mirrors P0 and port C mirrors P1 " +
+                            "(the ROM writes both and reads them back); they drive the relays, solenoids and lamps. Port A reads the switches.";
     public enum Package { Sdip64, Qfp64 }
 
     /// One package pin. Port 0-4 = P0..P4 bit; port 5 = analog input AIn (P5.n); port -1 = power / control pin.
@@ -55,6 +89,9 @@ public sealed class ChipView : UserControl
         Build();
     }
 
+    /// Show or tuck away the 8255 (the UI check's pictures of both).
+    internal void ShowPpiForCheck(bool on) { _ppiShown = on; Build(); if (_last != null) Update(_last); }
+
     /// Redraw after the processor profile changed.
     public void Rebuild() { Build(); if (_last != null) Update(_last); }
 
@@ -77,6 +114,132 @@ public sealed class ChipView : UserControl
         if (names.Length != 64) names = [.. CurrentPackage == Package.Sdip64 ? OkiRomSim.Core.ProcessorProfile.Msm66207().SdipPins : OkiRomSim.Core.ProcessorProfile.Msm66207().QfpPins];
         var pins = names.Select((n, i) => MakePin(i + 1, n)).ToList();
         if (CurrentPackage == Package.Sdip64) BuildDip(pins); else BuildQfp(pins);
+        _ppi.Clear();
+        _links.Clear();
+        if (_ppiShown) { BuildPpi(); BuildLinks(); }
+        AddPpiTab();
+    }
+
+    /// The little tab on the processor's right edge: hover for what the 8255 is, click to show it (with its traces) or tuck it away.
+    void AddPpiTab()
+    {
+        var tab = new Border
+        {
+            Width = 16, Height = 46, CornerRadius = new CornerRadius(3, 0, 0, 3), Cursor = new Cursor(StandardCursorType.Hand),
+            Background = AppTheme.Brush(Color.FromRgb(58, 62, 72)), BorderBrush = AppTheme.Brush(Color.FromRgb(120, 126, 140)), BorderThickness = new Thickness(1, 1, 0, 1),
+            Child = new TextBlock { Text = _ppiShown ? "◂" : "▸", FontSize = 12, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center },
+        };
+        ToolTip.SetTip(tab, (_ppiShown ? "Hide the 8255.\n\n" : "Show the 8255 and its links to the processor.\n\n") + PpiAbout);
+        ToolTip.SetShowDelay(tab, 150);
+        tab.PointerPressed += (_, e) =>
+        {
+            e.Handled = true;
+            _ppiShown = !_ppiShown;
+            Build();
+            if (_last != null) Update(_last);
+        };
+        Canvas.SetLeft(tab, _body.Right - 16); Canvas.SetTop(tab, _body.Y + (_body.Height * 0.3) - 23);
+        _canvas.Children.Add(tab);
+    }
+
+    /// The traces from P0.n to PBn and P1.n to PCn, drawn under the chips so they read as the board's tracks.
+    void BuildLinks()
+    {
+        foreach (var (pin, box, _) in _pins)
+        {
+            if (pin.Port is not (0 or 1)) continue;
+            string ppiName = $"P{(pin.Port == 0 ? 'B' : 'C')}{pin.Bit}";
+            var target = _ppi.FirstOrDefault(q => q.Name == ppiName).Box;
+            if (target == null) continue;
+            var from = new Point(Canvas.GetLeft(box) + (box.Width / 2), Canvas.GetTop(box) + (box.Height / 2));
+            var to = new Point(Canvas.GetLeft(target) + (PinW / 2), Canvas.GetTop(target) + (PinH / 2));
+            var line = new Avalonia.Controls.Shapes.Line { StartPoint = from, EndPoint = to, StrokeThickness = 1.2, Stroke = TraceLow, Opacity = 0.7 };
+            string func = PpiFunctions.GetValueOrDefault(ppiName, "");
+            ToolTip.SetTip(line, $"{pin.Name.Split('/')[0]} -> 8255 {ppiName}" + (func.Length > 0 ? $"\n{func}" : ""));
+            _canvas.Children.Insert(_traceIndex, line);
+            _links.Add((line, ppiName));
+        }
+    }
+
+    /// The 8255 to the right of the processor, its pins labelled with what they drive on this board.
+    void BuildPpi()
+    {
+        double gap = 26, bodyW = 70, top = 20, bodyH = (20 * Pitch) + 10;
+        double left = _canvas.Width + gap, bodyX = left + LabelW + PinW;
+        _canvas.Width = bodyX + bodyW + PinW + LabelW;
+        _canvas.Height = Math.Max(_canvas.Height, bodyH + (top * 2));
+        var body = new Border
+        {
+            Width = bodyW, Height = bodyH, CornerRadius = new CornerRadius(4),
+            Background = AppTheme.Brush(Color.FromRgb(38, 40, 46)),
+            BorderBrush = AppTheme.Brush(Color.FromRgb(90, 94, 104)), BorderThickness = new Thickness(1.5),
+            Child = new TextBlock { Text = "8255\nPPI\nDIP-40", TextAlignment = TextAlignment.Center, FontSize = 13, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Opacity = 0.7 },
+        };
+        ToolTip.SetTip(body, PpiAbout + " Hover a pin for its live level.");
+        Canvas.SetLeft(body, bodyX); Canvas.SetTop(body, top);
+        _canvas.Children.Add(body);
+        var notch = new Avalonia.Controls.Shapes.Ellipse { Width = 14, Height = 14, Fill = AppTheme.Brush(Color.FromRgb(24, 25, 28)) };
+        Canvas.SetLeft(notch, bodyX + (bodyW / 2) - 7); Canvas.SetTop(notch, top - 7);
+        _canvas.Children.Add(notch);
+        for (int i = 0; i < 20; i++)
+        {
+            double y = top + 8 + (i * Pitch);
+            AddPpiPin(i + 1, PpiPins[i], bodyX - PinW, y, left: true);
+            AddPpiPin(40 - i, PpiPins[39 - i], bodyX + bodyW, y, left: false);
+        }
+    }
+
+    void AddPpiPin(int number, string name, double x, double y, bool left)
+    {
+        var box = new Border { Width = PinW, Height = PinH, Background = Power, Cursor = new Cursor(StandardCursorType.Hand) };
+        static TextBlock NewTip() => new() { FontFamily = MainWindow.MonoFont, FontSize = 12, MaxWidth = 460, TextWrapping = TextWrapping.Wrap };
+        var tip = NewTip(); var labelTip = NewTip();
+        ToolTip.SetTip(box, tip); ToolTip.SetShowDelay(box, 150);
+        string func = PpiFunctions.GetValueOrDefault(name, "");
+        var label = new TextBlock
+        {
+            Text = $"{number,2} {name}" + (func.Length > 0 ? "  " + Short(func.Split(" - ")[0]) : ""),
+            FontSize = 10.5, FontFamily = MainWindow.MonoFont, Width = LabelW - 4, TextTrimming = TextTrimming.CharacterEllipsis,
+            Opacity = name.Length == 3 && name[0] == 'P' ? 0.95 : 0.55, TextAlignment = left ? TextAlignment.Right : TextAlignment.Left,
+        };
+        ToolTip.SetTip(label, labelTip);
+        void Click(PointerPressedEventArgs e)
+        {
+            e.Handled = true;
+            if (name.StartsWith("PA") && int.TryParse(name[2..], out int bit)) { PortABitClicked?.Invoke(bit); Message?.Invoke($"8255 {name} toggled (the switches panel shows it too)"); }
+            else if (name.StartsWith("PB") || name.StartsWith("PC")) Message?.Invoke($"8255 {name} is an output the ROM drives (it mirrors {(name[1] == 'B' ? "P0" : "P1")}.{name[2]}); it cannot be set from outside.");
+        }
+        box.PointerPressed += (_, e) => Click(e);
+        label.PointerPressed += (_, e) => Click(e);
+        Canvas.SetLeft(box, x); Canvas.SetTop(box, y);
+        Canvas.SetLeft(label, left ? x - LabelW : x + PinW + 4); Canvas.SetTop(label, y - 3);
+        _canvas.Children.Add(box); _canvas.Children.Add(label);
+        _ppi.Add((name, number, box, new[] { tip, labelTip }));
+    }
+
+    void UpdatePpi()
+    {
+        if (_ppi.Count == 0) return;
+        var (a, b, c, control) = _host.PpiState();
+        // mode 0: control bit 4 = port A in, bit 1 = port B in, bit 0 = port C low half in, bit 3 = port C high half in
+        foreach (var (name, number, box, tips) in _ppi)
+        {
+            string func = PpiFunctions.GetValueOrDefault(name, PpiOther.GetValueOrDefault(name, ""));
+            if (name.Length != 3 || name[0] != 'P' || !char.IsDigit(name[2]))
+            {
+                box.Background = Power;
+                SetTip(tips, $"8255 pin {number}  {name}\n{func}");
+                continue;
+            }
+            int bit = name[2] - '0';
+            byte port = name[1] switch { 'A' => a, 'B' => b, _ => c };
+            bool input = name[1] switch { 'A' => (control & 0x10) != 0, 'B' => (control & 0x02) != 0, _ => (control & (bit < 4 ? 0x01 : 0x08)) != 0 };
+            int level = (port >> bit) & 1;
+            box.Background = input ? (level == 1 ? InHigh : InLow) : (level == 1 ? OutHigh : OutLow);
+            foreach (var (line, ln) in _links) if (ln == name) { line.Stroke = level == 1 ? OutHigh : TraceLow; line.Opacity = level == 1 ? 0.9 : 0.7; }
+            SetTip(tips, $"8255 pin {number}  {name}\n{(func.Length > 0 ? func : "no known board function")}\n\nlevel {level} ({(level == 1 ? "high" : "low")}), {(input ? "input" : "output")}" +
+                         (name[1] == 'A' ? "\n\nclick: toggle this switch input" : "\n\ndriven by the ROM"));
+        }
     }
 
     static Pin MakePin(int number, string name)
@@ -121,8 +284,8 @@ public sealed class ChipView : UserControl
         var body = new Border
         {
             Width = w, Height = h, CornerRadius = new CornerRadius(4),
-            Background = new SolidColorBrush(Color.FromRgb(38, 40, 46)),
-            BorderBrush = new SolidColorBrush(Color.FromRgb(90, 94, 104)), BorderThickness = new Thickness(1.5),
+            Background = AppTheme.Brush(Color.FromRgb(38, 40, 46)),
+            BorderBrush = AppTheme.Brush(Color.FromRgb(90, 94, 104)), BorderThickness = new Thickness(1.5),
             Child = new TextBlock
             {
                 Text = title + $"\n{OkiRomSim.Core.Bus.CrystalMHz:0.##} MHz", TextAlignment = TextAlignment.Center, FontSize = 13,
@@ -132,9 +295,11 @@ public sealed class ChipView : UserControl
         ToolTip.SetTip(body, $"{Profile.Name} on {Profile.Board}. {Profile.Description} Hover a pin for its live reading, click an input pin to change it.");
         Canvas.SetLeft(body, x); Canvas.SetTop(body, y);
         _canvas.Children.Add(body);
+        _body = new Rect(x, y, w, h);
+        _traceIndex = _canvas.Children.Count;
         if (notchTop)
         {
-            var notch = new Avalonia.Controls.Shapes.Ellipse { Width = 16, Height = 16, Fill = new SolidColorBrush(Color.FromRgb(24, 25, 28)) };
+            var notch = new Avalonia.Controls.Shapes.Ellipse { Width = 16, Height = 16, Fill = AppTheme.Brush(Color.FromRgb(24, 25, 28)) };
             Canvas.SetLeft(notch, x + (w / 2) - 8); Canvas.SetTop(notch, y - 8);
             _canvas.Children.Add(notch);
         }
@@ -191,13 +356,14 @@ public sealed class ChipView : UserControl
 
     // ------------------------------------------------------------------ live state
 
-    static readonly IBrush OutHigh = new SolidColorBrush(Color.FromRgb(76, 200, 90));
-    static readonly IBrush OutLow = new SolidColorBrush(Color.FromRgb(30, 90, 40));
-    static readonly IBrush InHigh = new SolidColorBrush(Color.FromRgb(70, 150, 240));
-    static readonly IBrush InLow = new SolidColorBrush(Color.FromRgb(20, 60, 130));
-    static readonly IBrush Secondary = new SolidColorBrush(Color.FromRgb(160, 100, 220));
-    static readonly IBrush Power = new SolidColorBrush(Color.FromRgb(110, 110, 110));
-    static readonly IBrush ForcedBorder = new SolidColorBrush(Color.FromRgb(255, 80, 80));
+    static readonly IBrush OutHigh = AppTheme.Brush(Color.FromRgb(76, 200, 90));
+    static readonly IBrush OutLow = AppTheme.Brush(Color.FromRgb(30, 90, 40));
+    static readonly IBrush InHigh = AppTheme.Brush(Color.FromRgb(70, 150, 240));
+    static readonly IBrush InLow = AppTheme.Brush(Color.FromRgb(20, 60, 130));
+    static readonly IBrush Secondary = AppTheme.Brush(Color.FromRgb(160, 100, 220));
+    static readonly IBrush TraceLow = AppTheme.Brush(Color.FromRgb(150, 120, 70));
+    static readonly IBrush Power = AppTheme.Brush(Color.FromRgb(110, 110, 110));
+    static readonly IBrush ForcedBorder = AppTheme.Brush(Color.FromRgb(255, 80, 80));
 
     /// Both tooltips of a pin say the same thing; they are separate controls so either can open.
     static void SetTip(TextBlock[] tips, string text)
@@ -209,6 +375,7 @@ public sealed class ChipView : UserControl
     {
         _last = s;
         _analog = _host.Analog();
+        UpdatePpi();
         foreach (var (pin, box, tips) in _pins)
         {
             if (pin.Port < 0)
@@ -222,7 +389,7 @@ public sealed class ChipView : UserControl
             {
                 double v = _analog.Direct[pin.Bit];
                 byte shade = (byte)Math.Clamp(60 + (v / 5.0 * 195), 0, 255);
-                box.Background = new SolidColorBrush(Color.FromRgb(shade, (byte)(shade * 0.6), 30));
+                box.Background = AppTheme.Brush(Color.FromRgb(shade, (byte)(shade * 0.6), 30));
                 bool forced = _host.AnalogOverride(pin.Bit) != null ||
                               (pin.Bit < 2 && Enumerable.Range(0, 8).Any(n => _host.AnalogOverride((pin.Bit == 0 ? 100 : 200) + n) != null));
                 box.BorderBrush = forced ? ForcedBorder : Brushes.Transparent;

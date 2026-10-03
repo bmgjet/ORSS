@@ -98,17 +98,33 @@ public sealed class SimLink : IByteLink
         _host.SerialEcho = on;
     }
 
+    /// The timeout is the ROM's time, not this PC's: a simulator running slower than real time (a busy or slow PC) still gives the ROM the whole of it to answer, so a protocol is never called wrong - or the wrong one picked - because the PC was slow. A paused simulator gets the timeout on the clock (nothing will come).
     public int Read(byte[] buffer, int offset, int count, int timeoutMs)
     {
         var sw = Stopwatch.StartNew();
+        ulong start = _host.SimCycles, span = (ulong)(Math.Max(1, timeoutMs) / 1000.0 * Bus.CpuHz);
+        long cap = Math.Max(timeoutMs * 25L, 3000);
         int got = 0;
-        while (got < count && sw.ElapsedMilliseconds < timeoutMs)
+        while (got < count)
         {
             int n = _host.SerialFromRom(buffer, offset + got, count - got);
             got += n;
-            if (got < count) Thread.Sleep(n > 0 ? 0 : 2);
+            if (got >= count) break;
+            bool running = _host.IsRunning;
+            if (!running && sw.ElapsedMilliseconds >= timeoutMs) break;
+            if (running && (_host.SimCycles - start >= span || sw.ElapsedMilliseconds >= cap)) break;
+            Thread.Sleep(n > 0 ? 0 : 1);
         }
         return got;
+    }
+
+    /// A pause on the line in the ROM's time.
+    public void Wait(int ms)
+    {
+        var sw = Stopwatch.StartNew();
+        ulong start = _host.SimCycles, span = (ulong)(ms / 1000.0 * Bus.CpuHz);
+        while (_host.IsRunning && _host.SimCycles - start < span && sw.ElapsedMilliseconds < Math.Max(ms * 25L, 500)) Thread.Sleep(1);
+        if (!_host.IsRunning) Thread.Sleep(ms);
     }
 }
 
@@ -275,9 +291,50 @@ public sealed class DatalogEngine : IDisposable
     public bool PausePackets { get; set; }
     /// A layout worked out from the ROM (DatalogLayout.Detect); used when the protocol is set to its name, and tried after the built-in ones during auto-detection.
     public DetectedProtocol? Detected { get; set; }
+    /// What the last protocol detection tried, protocol by protocol.
+    public string DetectReport { get; private set; } = "";
 
     /// Service commands waiting for the next gap between frames (Command).
     readonly System.Collections.Concurrent.ConcurrentQueue<(byte Cmd, TaskCompletionSource<(byte? Answer, string Note)> Done)> _commands = new();
+    /// Other work for the logging thread between frames (a new channel list, a memory read).
+    readonly System.Collections.Concurrent.ConcurrentQueue<Action<IByteLink>> _work = new();
+
+    /// What goes to the ECU's serial inputs (the skeleton ROM's serial inputs module) while the channel stream runs: each input's value from a channel of the frame (the wideband's AFR, an aux channel), times a scale plus an offset, held to 0-254.
+    public List<SerialInputMap> SerialInputs { get; set; } = [];
+    long _inputsAt;
+    /// Serial inputs are sent this often (ms) at most.
+    public const int SerialInputsMs = 50;
+
+    /// The channels picked for the stream changed: while logging, the ROM is sent the new list between frames and the stream carries on with it (no reconnect). Returns false when nothing is logging, or the protocol picks no channels.
+    public bool Reconfigure()
+    {
+        if (!(_thread?.IsAlive == true) || Protocol is not ChannelStream) return false;
+        _work.Enqueue(link =>
+        {
+            if (Protocol is not ChannelStream cs) return;
+            bool ok = cs.Handshake(link, out var note);
+            Status = ok ? $"logging {cs.Name} from {Source}: {note}" : $"{cs.Name}: the new channels were not taken ({note})";
+            AppLog.Write(LogKind.Serial, "datalog", "channels changed: " + note);
+        });
+        return true;
+    }
+
+    /// 32 bytes of the ECU's RAM (the skeleton ROM's memory read module), read between frames.
+    public async Task<(byte[]? Data, string Note)> ReadMemory(int address)
+    {
+        if (!(_thread?.IsAlive == true) || Protocol is not ChannelStream)
+            return (null, "reading the ECU's memory needs the channel stream connected (the skeleton ROM's datalog)");
+        var done = new TaskCompletionSource<(byte[]?, string)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _work.Enqueue(link =>
+        {
+            if (Protocol is not ChannelStream cs) { done.TrySetResult((null, "not the channel stream")); return; }
+            var d = cs.ReadMemory(link, address, out var note);
+            done.TrySetResult((d, note));
+        });
+        try { await done.Task.WaitAsync(TimeSpan.FromSeconds(4)); }
+        catch (TimeoutException) { done.TrySetResult((null, "no gap between frames to read it in (4 s)")); }
+        return await done.Task;
+    }
 
     /// Send one service command (TroubleCodes: clear the codes, injectors off...) between frames, and its answer: null when nothing came back (the note says why). The datalog must be logging.
     public async Task<(byte? Answer, string Note)> Command(byte cmd)
@@ -286,8 +343,8 @@ public sealed class DatalogEngine : IDisposable
             return (null, External != null ? $"the datalog comes from {External}: it takes no commands" : "the datalog is not connected: connect it first (Datalogging menu)");
         var done = new TaskCompletionSource<(byte?, string)>(TaskCreationOptions.RunContinuationsAsynchronously);
         _commands.Enqueue((cmd, done));
-        var first = await Task.WhenAny(done.Task, Task.Delay(4000));
-        if (first != done.Task) { done.TrySetResult((null, "no gap between frames to send it in (4 s)")); }
+        try { await done.Task.WaitAsync(TimeSpan.FromSeconds(4)); }
+        catch (TimeoutException) { done.TrySetResult((null, "no gap between frames to send it in (4 s)")); }
         var r = await done.Task;
         AppLog.Write(LogKind.Serial, "datalog", $"command {cmd:X2}: {r.Item2}");
         return r;
@@ -402,8 +459,9 @@ public sealed class DatalogEngine : IDisposable
             _relayAuto = chosen == null;
         }
         else _relayAuto = false;
-        // the datalog comes first in Tuner mode: its thread is not the one kept waiting when the machine is busy
-        _thread = new Thread(() => Run(chosen)) { IsBackground = true, Name = "datalog", Priority = ThreadPriority.AboveNormal };
+        // the datalog comes first in Tuner mode: its thread is not the one kept waiting when the machine is busy (and 1 ms sleeps while it runs: its 1-2 ms waits for the next byte would otherwise be 10-15 ms on Windows, which slows every frame - see HiResTimer)
+        _thread = new Thread(() => { HiResTimer.Begin(); try { Run(chosen); } finally { HiResTimer.End(); } })
+            { IsBackground = true, Name = "datalog", Priority = ThreadPriority.AboveNormal };
         _thread.Start();
     }
 
@@ -435,6 +493,7 @@ public sealed class DatalogEngine : IDisposable
                     det2.OnPacket = OnPacket;
                     if (det2.Handshake(link, out _) && det2.Poll(link, 0, out _) != null) p = det2;
                 }
+                DetectReport = report;
                 AppLog.Write(LogKind.Serial, "datalog", "protocol detection:\n" + report.TrimEnd());
                 if (p == null)
                 {
@@ -467,6 +526,11 @@ public sealed class DatalogEngine : IDisposable
                     try { a = Protocol.Command(link, c.Cmd, out cn); }
                     catch (Exception ex) { cn = ex.Message; }
                     c.Done.TrySetResult((a, cn));
+                }
+                while (_work.TryDequeue(out var w))
+                {
+                    try { w(link); }
+                    catch (Exception ex) { AppLog.Error("datalog", "work between frames failed", ex); }
                 }
                 double t = _clock.Elapsed.TotalSeconds;
                 var f = Protocol.Poll(link, t, out var note);
@@ -506,6 +570,7 @@ public sealed class DatalogEngine : IDisposable
                 }
                 Latest = f;
                 _lastFrameAt = Stopwatch.GetTimestamp();
+                SendSerialInputs(link, f);
                 inWindow++;
                 if (rate.Elapsed.TotalSeconds >= 1) { FramesPerSecond = inWindow / rate.Elapsed.TotalSeconds; inWindow = 0; rate.Restart(); }
                 try { Frame?.Invoke(f); } catch (Exception ex) { AppLog.Error("datalog", "frame handler failed", ex); }
@@ -517,6 +582,17 @@ public sealed class DatalogEngine : IDisposable
             Status = "datalog stopped: " + ex.Message;
             AppLog.Error("datalog", "stopped", ex);
         }
+    }
+
+    /// The serial inputs' values to the ECU from this frame, every SerialInputsMs at most: only on a channel stream whose ROM has the serial inputs built in. The stream runs on while they go.
+    void SendSerialInputs(IByteLink link, LogFrame f)
+    {
+        if (SerialInputs.Count == 0 || Protocol is not ChannelStream { HasSerialInputs: true } cs) return;
+        long now = Stopwatch.GetTimestamp();
+        if ((now - _inputsAt) * 1000.0 / Stopwatch.Frequency < SerialInputsMs) return;
+        _inputsAt = now;
+        try { cs.SendInputs(link, SerialInputs.Where(m => m.Enabled).Select(m => (m.Input, m.ValueFrom(f)))); }
+        catch (Exception ex) { AppLog.Warn("datalog", "serial inputs not sent: " + ex.Message); }
     }
 
     /// Wideband and aux channels onto a frame.
@@ -604,6 +680,7 @@ public sealed class DatalogEngine : IDisposable
         try { _thread?.Join(800); } catch { }
         _thread = null;
         while (_commands.TryDequeue(out var c)) c.Done.TrySetResult((null, "the datalog stopped"));
+        _work.Clear();
         // the simulated line goes back to a plain serial port for the next protocol
         try { _link?.SetEcho(false); } catch { }
         if (_link is IDisposable d) d.Dispose();

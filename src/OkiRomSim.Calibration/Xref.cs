@@ -43,6 +43,8 @@ public static class DefinitionBuilder
         }
         defs.Items.Sort((x, y) => x.Address.CompareTo(y.Address));
         IndexAxes(defs);
+        // the pressures in the scale of the MAP sensor the ROM says is fitted
+        MapSensorScale.ApplyFormulas(defs, asm.Image);
         return defs;
     }
 

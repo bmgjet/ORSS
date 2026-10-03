@@ -18,7 +18,8 @@ namespace OkiRomSim.Desktop;
 /// Updates from the website: the program itself and its templates. The site lists every file it has (index.php?updates: path, size, SHA-256, a version number of its own that goes up whenever the file changes, and the file version of a .dll / .exe); the ones that differ from the files beside the app are offered, with what changed, and nothing is downloaded until it is asked for. A replaced template keeps a .bak of the old one; the program's own files are moved aside (.old, cleared at the next start) because a running program cannot be written over, and a restart puts the new one in use.
 public static class Updater
 {
-    public const string DefaultSite = "https://bmgjet.com/orss/";
+    static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
+    public const string DefaultSite = "https://romsimstudio.com/";
 
     public sealed class ServerFile
     {
@@ -57,7 +58,7 @@ public static class Updater
     static HttpClient MakeClient()
     {
         var h = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-        h.DefaultRequestHeaders.UserAgent.ParseAdd($"OkiRomSimStudio/{BuildInfo.Version}");
+        h.DefaultRequestHeaders.UserAgent.ParseAdd($"RomSimStudio/{BuildInfo.Version}");
         return h;
     }
 
@@ -72,7 +73,7 @@ public static class Updater
         !path.Contains('/') && (path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase));
 
     /// A build run from its build folder (the libraries beside it, listed in a .deps.json) rather than the distributed one: its program files are the developer's to replace, by building.
-    static bool DeveloperBuild => File.Exists(Path.Combine(Home, "OkiRomSimStudio.deps.json"));
+    static bool DeveloperBuild => File.Exists(Path.Combine(Home, "RomSimStudio.deps.json"));
 
     // ---- what was installed from the site, so a file edited here since can be told apart from an old one
 
@@ -88,7 +89,7 @@ public static class Updater
     {
         var d = Installed();
         d[path] = sha;
-        try { Directory.CreateDirectory(AppSettings.Dir); File.WriteAllText(RecordPath, JsonSerializer.Serialize(d, new JsonSerializerOptions { WriteIndented = true })); }
+        try { Directory.CreateDirectory(AppSettings.Dir); SafeFile.WriteAllText(RecordPath, JsonSerializer.Serialize(d, Indented)); }
         catch (Exception ex) { AppLog.Warn("updates", "could not remember what was installed: " + ex.Message); }
     }
 
@@ -113,7 +114,7 @@ public static class Updater
             // a Windows program file is no use elsewhere
             if (!OperatingSystem.IsWindows() && f.Path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) continue;
             var local = Path.GetFullPath(Path.Combine(Home, f.Path));
-            if (!local.StartsWith(Path.GetFullPath(Home), StringComparison.OrdinalIgnoreCase)) continue;
+            if (!local.StartsWith(Path.TrimEndingDirectorySeparator(Path.GetFullPath(Home)) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) continue;   // (with the separator: C:\App2 is not inside C:\App)
             bool exists = File.Exists(local);
             // something new at the top (beside the program) that this install does not have is for another kind of install
             if (!exists && !f.Path.Contains('/')) continue;
@@ -182,13 +183,21 @@ public static class Updater
             try { File.Delete(temp); } catch { }
             throw new IOException($"{c.Server.Path} did not arrive intact (its SHA-256 does not match the site's list); nothing was changed");
         }
+        bool movedAside = false;
         if (c.Exists)
         {
             // the program is running from its files: moved aside (allowed while running), then the new one takes its place
-            if (c.NeedsRestart) File.Move(c.LocalPath, c.LocalPath + ".old", overwrite: true);
+            if (c.NeedsRestart) { File.Move(c.LocalPath, c.LocalPath + ".old", overwrite: true); movedAside = true; }
             else File.Copy(c.LocalPath, c.LocalPath + ".bak", overwrite: true);
         }
-        File.Move(temp, c.LocalPath, overwrite: true);
+        try { File.Move(temp, c.LocalPath, overwrite: true); }
+        catch
+        {
+            // the new file could not take its place (a lock, a full disk): put the old program file back, or the program would have none to start from
+            if (movedAside) try { File.Move(c.LocalPath + ".old", c.LocalPath, overwrite: true); } catch { }
+            try { File.Delete(temp); } catch { }
+            throw;
+        }
         Remember(c.Server.Path, sha);
         AppLog.Action("updates", $"installed {c.Server.Path} (site version {c.Server.Version}{(c.Server.FileVersion != null ? ", " + c.Server.FileVersion : "")})");
     }
@@ -212,7 +221,7 @@ public static class Updater
         var exe = Environment.ProcessPath;
         if (exe == null) return;
         var start = Path.GetFileNameWithoutExtension(exe).Equals("dotnet", StringComparison.OrdinalIgnoreCase)
-            ? new ProcessStartInfo(exe) { ArgumentList = { Path.Combine(Home, "OkiRomSimStudio.dll") } }
+            ? new ProcessStartInfo(exe) { ArgumentList = { Path.Combine(Home, "RomSimStudio.dll") } }
             : new ProcessStartInfo(exe);
         start.UseShellExecute = false;
         start.WorkingDirectory = Environment.CurrentDirectory;
@@ -339,8 +348,8 @@ public sealed class UpdatesWindow : Window
     readonly Dictionary<string, (List<LineDiff.Line> Hunks, int Removed, int Added)?> _diffs = [];
     CancellationTokenSource _cancel = new();
 
-    static readonly IBrush Gone = new SolidColorBrush(Color.FromRgb(0xff, 0x8a, 0x80)), Came = new SolidColorBrush(Color.FromRgb(0x8c, 0xe0, 0x8c)),
-                           HunkInk = new SolidColorBrush(Color.FromRgb(0x7f, 0xb8, 0xff)), SameInk = new SolidColorBrush(Color.FromRgb(0xa8, 0xad, 0xb6));
+    static readonly IBrush Gone = AppTheme.Brush(Color.FromRgb(0xff, 0x8a, 0x80)), Came = AppTheme.Brush(Color.FromRgb(0x8c, 0xe0, 0x8c)),
+                           HunkInk = AppTheme.Brush(Color.FromRgb(0x7f, 0xb8, 0xff)), SameInk = AppTheme.Brush(Color.FromRgb(0xa8, 0xad, 0xb6));
 
     public UpdatesWindow(string site)
     {
@@ -357,7 +366,7 @@ public sealed class UpdatesWindow : Window
         var detailScroll = new ScrollViewer
         {
             Content = _detail, HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
-            Background = new SolidColorBrush(Color.FromRgb(0x1a, 0x1b, 0x1f)),
+            Background = AppTheme.Brush(Color.FromRgb(0x1a, 0x1b, 0x1f)),
         };
         Grid.SetColumn(detailScroll, 2); split.Children.Add(detailScroll);
 

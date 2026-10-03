@@ -31,6 +31,20 @@ public sealed class CodeEditor : UserControl
             _ed.SyntaxHighlighting = HighlightingLoader.Load(reader, HighlightingManager.Instance);
         }
         catch { /* highlighting is a nicety; plain text is fine */ }
+        // the colours follow the theme: the syntax colours (made for a dark background), the selection and the caret's line
+        _ed.TextArea.SelectionBrush = AppTheme.Brush(Color.FromArgb(0x90, 0x26, 0x4f, 0x78));
+        _ed.TextArea.SelectionForeground = null;
+        _ed.TextArea.TextView.CurrentLineBackground = AppTheme.Brush(Color.FromArgb(0x30, 0x40, 0x48, 0x58));
+        _ed.TextArea.TextView.CurrentLineBorder = new Pen(AppTheme.Brush(Color.FromArgb(0x50, 0x50, 0x58, 0x68)), 1);
+        var syntax = _ed.SyntaxHighlighting?.NamedHighlightingColors.Where(c => c.Foreground != null)
+            .Select(c => (c, (c.Foreground!.GetColor(null!) ?? Colors.White))).ToList() ?? [];
+        void Recolour()
+        {
+            foreach (var (c, orig) in syntax) c.Foreground = new SimpleHighlightingBrush(AppTheme.Map(orig));
+            _ed.TextArea.TextView.Redraw();
+        }
+        if (AppTheme.Now != AppTheme.Mode.Dark) Recolour();
+        AppTheme.Changed += Recolour;
         _ed.TextArea.TextView.BackgroundRenderers.Add(_hits);
         _ed.TextArea.TextView.BackgroundRenderers.Add(_marks);
         _ed.TextChanged += (_, _) => TextChanged?.Invoke(this, EventArgs.Empty);
@@ -75,9 +89,9 @@ public sealed class CodeEditor : UserControl
                 double y = vl.VisualTop - textView.ScrollOffset.Y;
                 var baseColor = h.Code ? _hitCode : _hitData;
                 byte tint = (byte)(18 + (70 * Math.Clamp(h.Heat, 0, 1)));
-                dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(tint, baseColor.R, baseColor.G, baseColor.B)), null,
+                dc.DrawRectangle(AppTheme.Brush(Color.FromArgb(tint, baseColor.R, baseColor.G, baseColor.B)), null,
                     new Avalonia.Rect(0, y, Math.Max(textView.Bounds.Width, 2000), vl.Height));
-                dc.DrawRectangle(new SolidColorBrush(Color.FromArgb((byte)(120 + (135 * Math.Clamp(h.Heat, 0, 1))), baseColor.R, baseColor.G, baseColor.B)), null,
+                dc.DrawRectangle(AppTheme.Brush(Color.FromArgb((byte)(120 + (135 * Math.Clamp(h.Heat, 0, 1))), baseColor.R, baseColor.G, baseColor.B)), null,
                     new Avalonia.Rect(0, y, 4, vl.Height));
             }
         }
@@ -150,9 +164,9 @@ public sealed class CodeEditor : UserControl
     sealed class LineMarks : IBackgroundRenderer
     {
         public readonly Dictionary<int, bool> Lines = [];
-        static readonly IBrush Error = new SolidColorBrush(Color.FromArgb(90, 230, 40, 40));
-        static readonly IBrush Warning = new SolidColorBrush(Color.FromArgb(60, 230, 170, 30));
-        static readonly IPen ErrorPen = new Pen(new SolidColorBrush(Color.FromRgb(240, 70, 70)), 1.5);
+        static readonly IBrush Error = AppTheme.Brush(Color.FromArgb(90, 230, 40, 40));
+        static readonly IBrush Warning = AppTheme.Brush(Color.FromArgb(60, 230, 170, 30));
+        static readonly IPen ErrorPen = new Pen(AppTheme.Brush(Color.FromRgb(240, 70, 70)), 1.5);
         public KnownLayer Layer => KnownLayer.Background;
         public void Draw(TextView textView, DrawingContext dc)
         {

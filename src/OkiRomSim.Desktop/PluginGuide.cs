@@ -33,7 +33,7 @@ public static class PluginGuide
                 <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
               </PropertyGroup>
               <ItemGroup>
-                <!-- the app's project, or: <Reference Include="OkiRomSimStudio"><HintPath>path\to\OkiRomSimStudio.dll</HintPath><Private>false</Private></Reference> -->
+                <!-- the app's project, or: <Reference Include="RomSimStudio"><HintPath>path\to\RomSimStudio.dll</HintPath><Private>false</Private></Reference> -->
                 <ProjectReference Include="..\..\OkiRomSim.Desktop\OkiRomSim.Desktop.csproj" Private="false" ExcludeAssets="runtime" />
               </ItemGroup>
             </Project>

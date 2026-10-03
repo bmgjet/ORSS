@@ -52,9 +52,13 @@ public sealed class DatalogSmoother
         if (Skip.Contains(ch) || double.IsNaN(v) || double.IsInfinity(v)) return;
         if (!_history.TryGetValue(ch, out var h)) _history[ch] = h = [];
         h.Add(v);
-        if (h.Count > _frames) h.RemoveAt(0);
+        while (h.Count > _frames) h.RemoveAt(0);      // (a loop: with fewer frames asked for, the history shrinks to that now, not never)
         if (h.Count < 3) { _last[ch] = v; return; }        // too few to tell a spike yet: as it came
-        var sorted = h.OrderBy(x => x).ToArray();
+        // the middle reading: the few readings sorted in a buffer on the stack (this runs for every channel of every frame; a LINQ sort allocated twice each time)
+        Span<double> sorted = stackalloc double[15];
+        sorted = sorted[..h.Count];
+        for (int i = 0; i < h.Count; i++) sorted[i] = h[i];
+        sorted.Sort();
         double mid = sorted.Length % 2 == 1 ? sorted[sorted.Length / 2] : (sorted[(sorted.Length / 2) - 1] + sorted[sorted.Length / 2]) / 2;
         double limit = Math.Max(Floors.GetValueOrDefault(ch, 0.5), Math.Abs(mid) * SpikePercent / 100);
         bool newestGood = Math.Abs(v - mid) <= limit;

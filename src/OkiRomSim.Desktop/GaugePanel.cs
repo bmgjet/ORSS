@@ -17,7 +17,7 @@ public sealed class GaugePanel : UserControl
     /// Where dashboards are kept between runs.
     public static string Dir => Path.Combine(AppSettings.Dir, "gauges");
 
-    readonly Canvas _canvas = new() { Background = new SolidColorBrush(Color.FromRgb(0x16, 0x17, 0x1a)) };
+    readonly Canvas _canvas = new() { Background = AppTheme.Brush(Color.FromRgb(0x16, 0x17, 0x1a)) };
     readonly TextBlock _hint = new() { FontSize = 11, Opacity = 0.75, Margin = new Thickness(6, 2), TextWrapping = TextWrapping.Wrap };
     readonly List<GaugeControl> _gauges = [];
     readonly Func<IEnumerable<string>> _channels;
@@ -31,8 +31,7 @@ public sealed class GaugePanel : UserControl
     {
         _channels = channels; _top = top;
 
-        // one short line, so a narrow panel keeps its room for the gauges: the dashboard's files and the floating widgets in
-        // two drop-downs, the everyday edits as icons
+        // one short line, so a narrow panel keeps its room for the gauges: the dashboard's files and the floating widgets in two drop-downs, the everyday edits as icons
         var bar = new WrapPanel { Margin = new Thickness(4, 2) };
         bar.Children.Add(Toolbar.Menu("Dashboard", Toolbar.Gauge, () =>
         [
@@ -325,6 +324,92 @@ public sealed class GaugePanel : UserControl
         AppLog.Action("gauges", $"{(edit == null ? "added" : "edited")} {dlg.Result.Kind} gauge for {dlg.Result.Channel}");
     }
 
+    /// Gauges for logged values (the datalog's values list, right-click): one each, laid out under the gauges already on the dashboard - or floated together in a widget of their own. No kind given: a lamp for an on / off value, a dial for the rpm, a bar for the rest.
+    public void AddFor(IReadOnlyList<(string Channel, double Value)> values, GaugeKind? kind, bool widget)
+    {
+        if (values.Count == 0) return;
+        var specs = values.Select(v => SpecFor(v.Channel, v.Value, kind ?? AutoKind(v.Channel))).ToList();
+        // a flow of rows across the dashboard's width, under what is on it
+        double width = Math.Max(240, Bounds.Width > 0 ? Bounds.Width - 16 : 600);
+        double x = 0, y = widget || _gauges.Count == 0 ? 0 : _gauges.Max(g => g.Spec.Y + g.Spec.Height) + 8, rowH = 0;
+        foreach (var sp in specs)
+        {
+            if (x > 0 && x + sp.Width > width) { x = 0; y += rowH + 8; rowH = 0; }
+            sp.X = x; sp.Y = y;
+            x += sp.Width + 8; rowH = Math.Max(rowH, sp.Height);
+        }
+        if (widget)
+        {
+            Open(Widget(specs));
+            _hint.Text = $"{specs.Count} gauge(s) floating in a window of their own";
+        }
+        else
+        {
+            Remember();
+            foreach (var sp in specs) Place(sp);
+            _hint.Text = $"{specs.Count} gauge(s) added: drag to move, double-click to change one";
+        }
+        AppLog.Action("gauges", $"{(widget ? "floated" : "added")} {specs.Count} gauge(s) for {string.Join(", ", specs.Select(sp => sp.Channel))}");
+    }
+
+    /// How many gauges are on the dashboard.
+    public int Count => _gauges.Count;
+
+    /// On / off values (flags, cuts, limiters, switches): a lamp suits them.
+    public static bool IsOnOff(string ch) =>
+        ch is "vtec" or "fuel_pump" or "fuel_cut" or "overrun_cut" or "rev_limit" or "mil" or "ac" or "fan" || ch.StartsWith("limit_", StringComparison.Ordinal)
+        || ch.EndsWith("_on", StringComparison.Ordinal) || ch.EndsWith("_sw", StringComparison.Ordinal) || ch.EndsWith("_active", StringComparison.Ordinal);
+
+    static GaugeKind AutoKind(string ch) => IsOnOff(ch) ? GaugeKind.Light : ch == "rpm" ? GaugeKind.Dial : GaugeKind.Bar;
+
+    /// A gauge of this kind for a channel: the range of the ones known, else one round the value it shows now.
+    static GaugeSpec SpecFor(string ch, double value, GaugeKind kind)
+    {
+        var (min, max, warn, below, dec) = ch switch
+        {
+            "rpm" => (0.0, 9000.0, (double?)7500, false, 0),
+            "map_kpa" or "baro_kpa" => (0, 250, null, false, 0),
+            "tps_pct" => (0, 100, null, false, 0),
+            "ect_c" => (-20, 130, 105, false, 0),
+            "iat_c" => (-20, 90, 60, false, 0),
+            "speed_kmh" => (0, 260, null, false, 0),
+            "batt_v" => (8, 16, 11.5, true, 1),
+            "o2_v" => (0, 1.1, null, false, 2),
+            "afr" or "wideband_afr" => (10, 20, null, false, 1),
+            "ign_deg" or "ign_table_deg" => (-10, 50, null, false, 1),
+            "inj_ms" => (0, 25, null, false, 2),
+            _ when IsOnOff(ch) => (0, 1, 0.5, false, 0),
+            _ => Around(value),
+        };
+        var sp = new GaugeSpec
+        {
+            Kind = kind, Channel = ch, Unit = LogFrame.UnitOf(ch), Min = min, Max = max, Warn = warn, WarnBelow = below, Decimals = dec,
+        };
+        // a lamp lights past its warning level: half way, for a value that is not on / off
+        if (kind == GaugeKind.Light && sp.Warn == null) sp.Warn = (min + max) / 2;
+        (sp.Width, sp.Height) = kind switch
+        {
+            GaugeKind.Dial or GaugeKind.Arc => (180, 160),
+            GaugeKind.Bar => (240, 70),
+            GaugeKind.Number => (170, 80),
+            GaugeKind.Light => (120, 90),
+            GaugeKind.Graph or GaugeKind.BarGraph => (320, 140),
+            GaugeKind.ShiftLights => (260, 70),
+            _ => (180, 140),
+        };
+        return sp;
+    }
+
+    /// A range for a value nothing is known about: from 0 (or a round number below it) to a round number well above it.
+    static (double, double, double?, bool, int) Around(double v)
+    {
+        if (double.IsNaN(v) || v == 0) return (0, 255, null, false, 0);
+        double mag = Math.Pow(10, Math.Floor(Math.Log10(Math.Abs(v))));
+        double hi = Math.Ceiling(Math.Abs(v) * 2 / mag) * mag;
+        int dec = Math.Abs(v) < 10 ? 2 : Math.Abs(v) < 100 ? 1 : 0;
+        return v < 0 ? (-hi, hi, null, false, dec) : (0, hi, null, false, dec);
+    }
+
     void RemoveSelected()
     {
         if (_selected == null) return;
@@ -400,8 +485,7 @@ public sealed class GaugePanel : UserControl
         _ownerPos = owner.Position;
         owner.PositionChanged += (_, e) =>
         {
-            // Windows parks a minimized window at about -32000, -32000: the jump there and back is not a move, and
-            // carrying it over threw every parented widget off the screen when the window came back
+            // Windows parks a minimized window at about -32000, -32000: the jump there and back is not a move, and carrying it over threw every parented widget off the screen when the window came back
             static bool Parked(PixelPoint p) => p.X <= -10000 || p.Y <= -10000;
             var was = _ownerPos;
             _ownerPos = e.Point;
@@ -419,8 +503,7 @@ public sealed class GaugePanel : UserControl
             if (!min)
             {
                 _ownerPos = owner.Position;
-                // coming back from minimized (to normal or maximized): the window settles over the next moment, and
-                // its position changes then are its own, not a drag to follow
+                // coming back from minimized (to normal or maximized): the window settles over the next moment, and its position changes then are its own, not a drag to follow
                 if (before == WindowState.Minimized)
                 {
                     _restoring = true;
@@ -603,7 +686,7 @@ public sealed class GaugePanel : UserControl
             list.RemoveAll(p => p.Equals(path, StringComparison.OrdinalIgnoreCase));
             list.Insert(0, path);
             Directory.CreateDirectory(Dir);
-            File.WriteAllLines(RecentPath, list.Take(12));
+            SafeFile.WriteAllLines(RecentPath, list.Take(12));
         }
         catch (Exception ex) { AppLog.Error("gauges", "could not keep the recent list", ex); }
     }
@@ -736,7 +819,7 @@ public sealed class GaugeWindow : Window
         ShowInTaskbar = false;
         // no frame at all: a border-only window still shows a pale strip along the top on Windows, which looked like a scratch across the widget
         SystemDecorations = SystemDecorations.None;
-        Background = new SolidColorBrush(DarkChrome.Background);
+        Background = AppTheme.Brush(DarkChrome.Background);
         Icon = DarkChrome.LoadWindowIcon();
         if (!double.IsNaN(widget.X) && !double.IsNaN(widget.Y))
         {
@@ -749,7 +832,7 @@ public sealed class GaugeWindow : Window
             Text = specs.Count > 1 ? $"{specs.Count} gauges" : specs[0].Title,
             FontSize = 11, Margin = new Thickness(8, 0), VerticalAlignment = VerticalAlignment.Center,
         };
-        var bar = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Height = 24, Background = new SolidColorBrush(DarkChrome.Panel) };
+        var bar = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Height = 24, Background = AppTheme.Brush(DarkChrome.Panel) };
         var drag = new Border { Background = Brushes.Transparent, Child = title };
         drag.PointerPressed += (_, e) =>
         {

@@ -251,14 +251,27 @@ timer1_tmr1_reload:     ORB     off(TCON1), #008h
                 JNE     timer1_tick_done
                 INCB    0ffh
 timer1_tick_done:
+if defined(TICK_CHAIN_FIRST)
+; (diagnostic: the old order, the modules' tick code before the next PWM phase is set - see below)
 undef XP
 define XP XP_TICK
 include "p30-features/features.inc"
+endif
                 INCB    r6
                 L       A, #00a00h
                 SUB     A, er0
                 ST      A, er1
                 ADD     off(TMR1), off(000c8h)
+; (skeleton) the modules' tick code runs AFTER the idle valve's next PWM phase has been set. It used to run
+; before it: a tick longer than that phase (about 0.3 ms at power-up) found the compare register already passed,
+; and the timer had to run a whole turn (52 ms) before the next phase - at power-up as well as running, so
+; ROMs with enough modules (a tick of 315 us or more) would not start, every output strobing. Now the compare
+; is set first and comes due while the modules run: the interrupt is taken as soon as this one returns.
+if !defined(TICK_CHAIN_FIRST)
+undef XP
+define XP XP_TICK
+include "p30-features/features.inc"
+endif
                 RTI
 int_timer_2:    MOV     LRB, #0001ah
                 LB      A, r2
@@ -962,6 +975,10 @@ endif
                 JLT     crank_cycle_p4_gate
                 RB      TRNSIT.1
                 JNE     crank_cycle_p4_gate
+if defined(NEED_SPARKCUT)
+                CMPB    0fch, #000h            ; (skeleton) no igniter pulse while a spark cut is asked for is not a fault:
+                JNE     crank_cycle_p4_gate     ; a cut held for seconds would store code 15, and storing it resets the rpm (0ACh FFFFh)
+endif
 if defined(FEAT_STOCK_DTC)
 dtc15_ign_output_latch: SB      09ch.3
 else
@@ -2390,6 +2407,19 @@ vtec_rpm_vs_settings_check_cmp_acc:     CMPB    A, off(0012dh)
                 LB      A, off(0012dh)
                 VCAL    0
                 STB     A, off(00158h)
+if defined(NEED_VTECHOOK)
+                CAL     mod_vtec               ; (skeleton) module hook: C clear - the stock decision below; C set - A = 0 no
+                JGE     vtec_hook_stock        ;   VTEC at all, 1 off for now, 2 on
+                CMPB    A, #001h
+                JLT     vtec_hook_never
+                JEQ     vtec_hook_off
+                SB      P1.1
+                J       vtec_engage_conditions_start_load_ram192
+vtec_hook_off:  SB      P1.1
+                J       vtec_engage_conditions_start_clear_ram192
+vtec_hook_never: J      vtec_disengage_output
+vtec_hook_stock:
+endif
                 JBR     off(00116h).4, vtec_disengage_output
 if defined(FEAT_STOCK_DTC)
                 L       A, off(00112h)
@@ -7230,7 +7260,13 @@ periph_init_verify_pwm_adc:     LB      A, PWCON0
                 JNE     selftest_fail_050
                 CMPB    STTMR, #0dfh
                 JNE     selftest_fail_050
-periph_init_verify_pwm_adc_and_ie:     AND     IE, #002a0h
+; (skeleton) the clock check below lets interrupts in for one instruction and fails (BRK 4Bh, a reset) if the timers
+; moved too far meanwhile. It runs on every pass of the main loop, not only at power-up. Stock lets timers 0, 1 and 2 in
+; (2A0h). Timer 1 is the 2.048 ms tick, which carries the modules' tick code (XP_TICK) - long enough to fail the check,
+; a reset at random, at power-up as well as running. Timer 2's handler puts the whole mask back as it returns, which
+; lets the crank interrupt (half a millisecond) in as well. Only timer 0 is let in (20h): it leaves IE alone, and the
+; others are taken just after instead.
+periph_init_verify_pwm_adc_and_ie:     AND     IE, #00020h
                 RB      PSWH.0
                 MOV     er0, TM0
                 MOV     er1, TM1
@@ -13015,7 +13051,7 @@ BaroFuelCorrection2Tbl:       DB  0FFh,000h,000h,000h,000h,000h,000h,000h
 ;@ InjectorCorrectionRpm type=u8 count=6 colstride=2 formula=raw cols.axis=InjectorCorrectionRpmTbl cols.stride=2 cols.formula=rpm_axis_byte_log category="Fuel" desc="Injector correction against rpm (with the barometric one, RAM 156h)." at=InjectorCorrectionRpmTbl+1
 InjectorCorrectionRpmTbl:       DB  0FFh,000h,000h,000h,000h,000h,000h,000h
                 DB  000h,000h,000h,000h
-;@ InjectorDeadTime type=u16 count=7 colstride=3 formula=raw cols.axis=InjectorDeadTimeTbl cols.stride=3 cols.formula=battery_v category="Fuel" desc="Injector dead time against battery voltage (RAM 13Ch, added to every pulse)." at=InjectorDeadTimeTbl+1
+;@ InjectorDeadTime type=u16 count=7 colstride=3 formula="x * 3.2 / 1000" inverse="x * 1000 / 3.2" unit=ms decimals=2 cols.axis=InjectorDeadTimeTbl cols.stride=3 cols.formula=battery_v category="Fuel" slot=injector.lag desc="Injector dead time (lag) against battery voltage (RAM 13Ch, added to every pulse): how long the injector takes to open." at=InjectorDeadTimeTbl+1
 InjectorDeadTimeTbl:       DB  0FFh,064h,000h,0A7h,067h,000h,093h,094h
                 DB  000h,07Eh,0C3h,000h,069h,054h,001h,054h
                 DB  080h,002h,000h,080h,002h
@@ -13140,17 +13176,24 @@ if defined(FEAT_STOCK_EGR)
 ;@ BaroFilter2 type=u8 count=2 colstride=2 formula=raw cols.axis=BaroFilter2Tbl cols.stride=2 cols.formula="x * 3.6105 + 114.3" cols.inverse="(x - 114.3) / 3.6105" cols.unit=mbar cols.decimals=0 category="Sensors" desc="Barometric pressure filter against MAP." at=BaroFilter2Tbl+1
 BaroFilter2Tbl:       DB  0FFh,0FFh,000h,0FFh
 endif
+;@ MapSensorZero type=u16 formula="x - 32768" inverse="x + 32768" unit=mBar decimals=0 min=-2000 max=5000 category="Sensors" slot=mapsensor.zero desc="The MAP sensor fitted: what it reads at 0 V. Not read by the ECU - it is the scale the app shows pressures in (set by the MAP sensor window and the set-up wizard, which move every load breakpoint to suit)."
+MapSensorZero:     DW  07fc5h               ; -59 mBar (stock)
+;@ MapSensorFull type=u16 formula="x - 32768" inverse="x + 32768" unit=mBar decimals=0 min=100 max=12000 category="Sensors" slot=mapsensor.full desc="The MAP sensor fitted: what it reads at 5 V (the stock sensor: 1782 mBar)."
+MapSensorFull:     DW  086f6h               ; 1782 mBar (stock)
 ;@ SpeedBands type=u8 count=14 formula=raw category="Sensors" desc="Road speed band edges (flags 224h)."
 SpeedBands:       DB  090h,0A0h,00Ch,00Fh,02Dh,02Fh,02Dh,02Fh
                 DB  088h,080h,088h,080h,029h,026h
-;@ VTECRpmLoad type=u8 count=4 formula=raw category="VTEC" desc="VTEC engage / disengage rpm (manual): word pairs."
+;@ VTECStockLoadOff type=u8 formula=rpm_axis_byte_log category="VTEC" slot=vtec.stock.load.off desc="Stock VTEC (manual): once in on load, it drops out below this rpm." at=VTECRpmLoad
+;@ VTECStockLoadOn type=u8 formula=rpm_axis_byte_log category="VTEC" slot=vtec.stock.load.on desc="Stock VTEC (manual): above this rpm it engages when the load is over the stock load curve (VTECThrottle)." at=VTECRpmLoad+1
+;@ VTECStockAnyOff type=u8 formula=rpm_axis_byte_log category="VTEC" slot=vtec.stock.any.off desc="Stock VTEC (manual): once in whatever the load, it holds above this rpm." at=VTECRpmLoad+2
+;@ VTECStockAnyOn type=u8 formula=rpm_axis_byte_log category="VTEC" slot=vtec.stock.any.on desc="Stock VTEC (manual): above this rpm it engages whatever the load." at=VTECRpmLoad+3
 VTECRpmLoad:       DB  0CAh,0CDh,0D5h,0D8h
-;@ VTECRpmLoadAuto type=u8 count=4 formula=raw category="VTEC" desc="VTEC engage / disengage rpm (automatic): word pairs."
+;@ VTECRpmLoadAuto type=u8 count=4 formula=rpm_axis_byte_log category="VTEC" desc="Stock VTEC (automatic): the rpm points, in pairs (drop out, engage): on load, then whatever the load."
 VTECRpmLoadAuto:       DB  0D6h,0DAh,0DBh,0DEh
-;@ VTECThrottle type=u8 count=7 colstride=2 formula=tps_pct cols.axis=VTECThrottleTbl cols.stride=2 cols.formula="x * 1875000 / 53125" cols.inverse="x * 53125 / 1875000" cols.unit=rpm cols.decimals=0 category="VTEC" desc="VTEC: throttle needed against rpm (manual)." at=VTECThrottleTbl+1
+;@ VTECThrottle type=u8 count=7 colstride=2 formula=tps_pct cols.axis=VTECThrottleTbl cols.stride=2 cols.formula=rpm_axis_byte_log cols.unit=rpm cols.decimals=0 category="VTEC" slot=vtec.stock.curve desc="Stock VTEC (manual): the load needed against rpm, between the two engage points." at=VTECThrottleTbl+1
 VTECThrottleTbl:       DB  0FFh,03Fh,0F8h,03Fh,0F0h,03Fh,0E8h,03Fh
                 DB  0D5h,03Fh,0CAh,0AEh,000h,0AEh
-;@ VTECThrottleAuto type=u8 count=7 colstride=2 formula=tps_pct cols.axis=VTECThrottleAutoTbl cols.stride=2 cols.formula="x * 1875000 / 53125" cols.inverse="x * 53125 / 1875000" cols.unit=rpm cols.decimals=0 category="VTEC" desc="VTEC: throttle needed against rpm (automatic)." at=VTECThrottleAutoTbl+1
+;@ VTECThrottleAuto type=u8 count=7 colstride=2 formula=tps_pct cols.axis=VTECThrottleAutoTbl cols.stride=2 cols.formula=rpm_axis_byte_log cols.unit=rpm cols.decimals=0 category="VTEC" desc="Stock VTEC (automatic): the load needed against rpm." at=VTECThrottleAutoTbl+1
 VTECThrottleAutoTbl:       DB  0FFh,03Fh,0F8h,03Fh,0F0h,03Fh,0E8h,03Fh
                 DB  0DBh,03Fh,0D6h,0AEh,000h,0AEh
 ;@ BaroVTEC type=u8 count=2 colstride=2 formula=raw cols.axis=BaroVTECTbl cols.stride=2 cols.formula="x * 3.6105 + 114.3" cols.inverse="(x - 114.3) / 3.6105" cols.unit=mbar cols.decimals=0 category="VTEC" desc="VTEC: barometric-pressure offset (RAM 159h)." at=BaroVTECTbl+1
@@ -13627,7 +13670,7 @@ CheckEngineCodes:  DW  0FFFFh, 0FFFFh, 0FFFFh
 ;@ CheckEngineCode09 type=bit2 at=CheckEngineCodes+4 category="Check engine codes" slot=celcode.9 desc="Code 9 (cylinder position sensor): stored and shown on the check-engine lamp. Off: never stored or shown, though its fail-safe still works."
 ;@ CheckEngineCode09b type=bit2 at=CheckEngineCodes+5 category="Check engine codes" slot=celcode.9 desc="Code 9 (cylinder position sensor): stored and shown on the check-engine lamp. Off: never stored or shown, though its fail-safe still works. (a second check that sets the same code)"
 ;@ CheckEngineCode10 type=bit6 at=CheckEngineCodes+0 category="Check engine codes" slot=celcode.10 desc="Code 10 (intake air temperature sensor): stored and shown on the check-engine lamp. Off: never stored or shown, though its fail-safe still works."
-;@ CheckEngineCode11 type=bit7 at=CheckEngineCodes+0 category="Check engine codes" slot=celcode.11 desc="Code 11: stored and shown on the check-engine lamp. Off: never stored or shown, though its fail-safe still works."
+;@ CheckEngineCode11 type=bit7 at=CheckEngineCodes+0 category="Check engine codes" slot=celcode.11 desc="Code 11 (EGR valve lift sensor): stored and shown on the check-engine lamp. Off: never stored or shown, though its fail-safe still works."
 ;@ CheckEngineCode12 type=bit0 at=CheckEngineCodes+1 category="Check engine codes" slot=celcode.12 desc="Code 12 (EGR system): stored and shown on the check-engine lamp. Off: never stored or shown, though its fail-safe still works."
 ;@ CheckEngineCode12b type=bit1 at=CheckEngineCodes+1 category="Check engine codes" slot=celcode.12 desc="Code 12 (EGR system): stored and shown on the check-engine lamp. Off: never stored or shown, though its fail-safe still works. (a second check that sets the same code)"
 ;@ CheckEngineCode13 type=bit2 at=CheckEngineCodes+1 category="Check engine codes" slot=celcode.13 desc="Code 13 (barometric pressure sensor): stored and shown on the check-engine lamp. Off: never stored or shown, though its fail-safe still works."
@@ -13641,11 +13684,11 @@ CheckEngineCodes:  DW  0FFFFh, 0FFFFh, 0FFFFh
 ;@ CheckEngineCode21 type=bit0 at=CheckEngineCodes+2 category="Check engine codes" slot=celcode.21 desc="Code 21 (VTEC solenoid): stored and shown on the check-engine lamp. Off: never stored or shown, though its fail-safe still works."
 ;@ CheckEngineCode22 type=bit1 at=CheckEngineCodes+2 category="Check engine codes" slot=celcode.22 desc="Code 22 (VTEC pressure switch): stored and shown on the check-engine lamp. Off: never stored or shown, though its fail-safe still works."
 ;@ CheckEngineCode23 type=bit2 at=CheckEngineCodes+2 category="Check engine codes" slot=celcode.23 desc="Code 23 (knock sensor): stored and shown on the check-engine lamp. Off: never stored or shown, though its fail-safe still works."
-;@ CheckEngineCode24 type=bit3 at=CheckEngineCodes+2 category="Check engine codes" slot=celcode.24 desc="Code 24: stored and shown on the check-engine lamp. Off: never stored or shown, though its fail-safe still works."
-;@ CheckEngineCode25 type=bit0 at=CheckEngineCodes+3 category="Check engine codes" slot=celcode.25 desc="Code 25: stored and shown on the check-engine lamp. Off: never stored or shown, though its fail-safe still works."
-;@ CheckEngineCode26 type=bit1 at=CheckEngineCodes+3 category="Check engine codes" slot=celcode.26 desc="Code 26: stored and shown on the check-engine lamp. Off: never stored or shown, though its fail-safe still works."
-;@ CheckEngineCode27 type=bit2 at=CheckEngineCodes+3 category="Check engine codes" slot=celcode.27 desc="Code 27: stored and shown on the check-engine lamp. Off: never stored or shown, though its fail-safe still works."
-;@ CheckEngineCode29 type=bit7 at=CheckEngineCodes+5 category="Check engine codes" slot=celcode.29 desc="Code 29: stored and shown on the check-engine lamp. Off: never stored or shown, though its fail-safe still works."
+;@ CheckEngineCode24 type=bit3 at=CheckEngineCodes+2 category="Check engine codes" slot=celcode.24 desc="Code 24 (knock sensor circuit check): stored and shown on the check-engine lamp. Off: never stored or shown, though its fail-safe still works."
+;@ CheckEngineCode25 type=bit0 at=CheckEngineCodes+3 category="Check engine codes" slot=celcode.25 desc="Code 25 (P4.6 feedback check; the lamp flashes 35): stored and shown on the check-engine lamp. Off: never stored or shown, though its fail-safe still works."
+;@ CheckEngineCode26 type=bit1 at=CheckEngineCodes+3 category="Check engine codes" slot=celcode.26 desc="Code 26 (analog input 5 out of range; the lamp flashes 36): stored and shown on the check-engine lamp. Off: never stored or shown, though its fail-safe still works."
+;@ CheckEngineCode27 type=bit2 at=CheckEngineCodes+3 category="Check engine codes" slot=celcode.27 desc="Code 27 (O2 sensor heater; the lamp flashes 41): stored and shown on the check-engine lamp. Off: never stored or shown, though its fail-safe still works."
+;@ CheckEngineCode29 type=bit7 at=CheckEngineCodes+5 category="Check engine codes" slot=celcode.29 desc="Code 29 (fuel supply system; the lamp flashes 43): stored and shown on the check-engine lamp. Off: never stored or shown, though its fail-safe still works."
 ;@ TroubleCodeNumbers type=u8 count=49 formula=raw category="Internal" desc="Trouble codes: code numbers (not a tuning value)."
 TroubleCodeNumbers:       DB  00Bh,003h,006h,007h,005h,001h,008h,00Ah
                 DB  00Bh,00Ch,00Ch,00Dh,00Eh,011h,000h,013h

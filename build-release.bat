@@ -1,12 +1,12 @@
 @echo off
-rem Builds the release bundle of Oki RomSim Studio: the program with its libraries inside OkiRomSimStudio.dll, the
+rem Builds the release bundle of Rom Sim Studio: the program with its libraries inside RomSimStudio.dll, the
 rem per-platform runtimes folder beside it, the Templates, and the ScanTool plugin in Plugins. Then zips it.
-rem   Output:  dist\OkiRomSimStudio\   and   dist\orss.zip
+rem   Output:  dist\RomSimStudio\   and   dist\romsimstudio.zip
 setlocal
 cd /d "%~dp0"
 
-set OUT=%~dp0dist\OkiRomSimStudio
-set ZIP=%~dp0dist\orss.zip
+set OUT=%~dp0dist\RomSimStudio
+set ZIP=%~dp0dist\romsimstudio.zip
 
 echo === Cleaning %OUT%
 if exist "%OUT%" rmdir /s /q "%OUT%"
@@ -20,7 +20,7 @@ echo === Building the ScanTool plugin
 dotnet build "src\Plugins\ScanTool\ScanTool.csproj" -c Release
 if errorlevel 1 goto failed
 if not exist "%OUT%\Plugins" mkdir "%OUT%\Plugins"
-copy /y "src\Plugins\ScanTool\bin\Release\net10.0\OkiRomSim.ScanTool.dll" "%OUT%\Plugins\" >nul
+copy /y "src\Plugins\ScanTool\bin\Release\net10.0\RomSim.ScanTool.dll" "%OUT%\Plugins\" >nul
 if errorlevel 1 goto failed
 
 echo === Zipping to %ZIP%

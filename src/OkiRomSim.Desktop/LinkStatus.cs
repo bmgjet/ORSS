@@ -14,9 +14,9 @@ public enum LinkState { Off, Connected, Reconnecting }
 /// A coloured dot for a link's state, beside the menu that drives it (Emulator, Datalogging).
 public sealed class StatusDot : Control
 {
-    static readonly IBrush Red = new SolidColorBrush(Color.FromRgb(0xe0, 0x44, 0x3c));
-    static readonly IBrush Green = new SolidColorBrush(Color.FromRgb(0x3c, 0xd0, 0x5a));
-    static readonly IBrush Orange = new SolidColorBrush(Color.FromRgb(0xff, 0x9a, 0x1f));
+    static readonly IBrush Red = AppTheme.Brush(Color.FromRgb(0xe0, 0x44, 0x3c));
+    static readonly IBrush Green = AppTheme.Brush(Color.FromRgb(0x3c, 0xd0, 0x5a));
+    static readonly IBrush Orange = AppTheme.Brush(Color.FromRgb(0xff, 0x9a, 0x1f));
     readonly DispatcherTimer _blink = new() { Interval = TimeSpan.FromMilliseconds(450) };
     bool _lit = true;
 
@@ -45,7 +45,7 @@ public sealed class StatusDot : Control
         var brush = State switch { LinkState.Connected => Green, LinkState.Reconnecting => Orange, _ => Red };
         double r = Math.Min(Bounds.Width, Bounds.Height) / 2;
         var c = new Point(Bounds.Width / 2, Bounds.Height / 2);
-        if (State != LinkState.Reconnecting || _lit) ctx.DrawEllipse(brush, new Pen(Brushes.Black, 1), c, r, r);
+        if (State != LinkState.Reconnecting || _lit) ctx.DrawEllipse(brush, new Pen(AppTheme.Black, 1), c, r, r);
         else ctx.DrawEllipse(null, new Pen(Orange, 1.2), c, r - 0.5, r - 0.5);
     }
 }

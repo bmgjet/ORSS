@@ -59,6 +59,7 @@ public sealed class MainWindow : Window
 
     // left
     readonly ChipView _chip;
+    internal ChipView ChipForCheck => _chip;
     readonly ComboBox _package = new() { Width = 170 };
     readonly StackPanel _inputs = new();
 
@@ -111,7 +112,7 @@ public sealed class MainWindow : Window
 
     public MainWindow(string? openPath)
     {
-        Title = $"OkiRomSim Studio {BuildInfo.Version}";
+        Title = $"Rom Sim Studio {BuildInfo.Version}";
         AppLog.Info("app", $"{BuildInfo.Product} {BuildInfo.Version} starting on {Environment.OSVersion} ({Environment.ProcessorCount} cores, .NET {Environment.Version})");
         MinWidth = 900; MinHeight = 600;
         // the UI scale and panel layout picked for this screen, the first time the app starts on it
@@ -135,12 +136,22 @@ public sealed class MainWindow : Window
         catch (Exception ex) { AppLog.Error("processor", "profile failed; using the MSM66207", ex); ProcessorProfile.Msm66207().Apply(); }
         _chip = new ChipView(_host);
         _chip.Message += m => SetStatus(m);
+        _chip.PortABitClicked += bit => { if (_bitRows.TryGetValue("porta", out var r) && bit < r.Bits.Length) r.Bits[bit].IsChecked = r.Bits[bit].IsChecked != true; };
         _calibration = new CalibrationView(_host, () => _buffers.Select(kv => (kv.Key, kv.Value)), () => GetTopLevel(this));
         _calibration.GoToAddress += GoToAddress;
         // favourites belong to a ROM: kept by its file name (a built ROM and its .bin share it)
         string FavKey() => Path.GetFileNameWithoutExtension(_host.LoadedPath ?? "").ToLowerInvariant();
         _calibration.OpenSettingsPage += page => OpenSettings(page);
-        _host.ItemWritten += item => Dispatcher.UIThread.Post(() => KeepInBuildFile(item));
+        _host.ItemWritten += item => Dispatcher.UIThread.Post(() =>
+        {
+            KeepInBuildFile(item);
+            // an output picked, or a function switched on or off: the pins may clash now
+            if (item.Slot is { } s && (s.Contains(".output", StringComparison.OrdinalIgnoreCase) || s.Contains("enable", StringComparison.OrdinalIgnoreCase) || s.Contains(".alt", StringComparison.OrdinalIgnoreCase)))
+            {
+                RefreshSetupWarnings();
+                if (SetupWarnings() is { Count: > 0 } w) SetStatus("▲ " + w[0].Message, sticky: true);
+            }
+        });
         _calibration.GetFavourites = () => _settings.Favourites.TryGetValue(FavKey(), out var l) ? l : [];
         _calibration.SaveFavourites = list => { _settings.Favourites[FavKey()] = list; _settings.Save(); };
         _calibration.StretchChanged += on => { _settings.TableStretch = on; _settings.Save(); };
@@ -148,6 +159,9 @@ public sealed class MainWindow : Window
         _hitView.GoToAddress += GoToAddress;
         _datalog = new DatalogView(_host, () => GetTopLevel(this), () => _settings);
         _datalog.GoToAddress += GoToAddress;
+        _datalog.ShowOnMaps += f => { if (!_tuner) SelectTab("Calibration"); _calibration.ShowPoint(f); };
+        _datalog.OpenSettingsPage += page => OpenSettings(page);
+        _datalog.SettingsChanged += () => _settings.Save();
         _debug = new DebugView(() => GetTopLevel(this));
         _calibration.ExpandRequested += ToggleExpand;
         _calibration.CompareRequested += OpenCompare;
@@ -232,6 +246,22 @@ public sealed class MainWindow : Window
         _calibration.OpenDownloaded += OpenDownloaded;
         _calibration.EmulatorClosed += DemonClosed;
         _calibration.DatalogPortInUse = () => _datalog.Engine.Running && _datalog.Engine.Source is { } src && !src.StartsWith("emulator") && src != "simulator" ? src : null;
+        // a plugin that drives the emulator gets the Emulator and Datalogging controls; the app's own emulator link lets go
+        _calibration.Takeover = () => _plugins?.Emulator;
+        _datalog.Takeover = () => _plugins?.Emulator;
+        _plugins.EmulatorChanged += () =>
+        {
+            if (_plugins?.Emulator != null)
+            {
+                _calibration.LetGoOfEmulator();
+                // the app's own datalog link (a port of its own) gives way to the plugin's feed
+                var eng = _datalog.Engine;
+                if (eng.External == null && (eng.Running || eng.Watch.Wanted))
+                    Task.Run(() => { try { eng.Stop(); } catch (Exception ex) { AppLog.Error("datalog", "could not stop for the plugin", ex); } });
+            }
+            _calibration.UpdateEmulator();
+            _datalog.UpdateConnect();
+        };
         _plugins.AddBar(_pluginBarSim);
         _plugins.AddBar(_pluginBarTuner);
         foreach (var p in _settings.Plugins.Where(p => p.Enabled))
@@ -250,7 +280,7 @@ public sealed class MainWindow : Window
         {
             e.Handled = true;
             AppLog.Error("ui", "unhandled error in a handler", e.Exception);
-            try { File.AppendAllText(Path.Combine(Path.GetTempPath(), "OkiRomSimStudio-errors.log"), $"{DateTime.Now:s} {e.Exception}\n\n"); } catch { }
+            try { File.AppendAllText(Path.Combine(Path.GetTempPath(), "RomSimStudio-errors.log"), $"{DateTime.Now:s} {e.Exception}\n\n"); } catch { }
             SetStatus("internal error (see the Debug page): " + e.Exception.Message);
         };
         // the view it opens in: the welcome screen's answer (Settings > General), or whichever was used last
@@ -301,6 +331,13 @@ public sealed class MainWindow : Window
     Button FileMenu() => Toolbar.Menu("File", Toolbar.Open, () => [
         new Toolbar.Entry(Toolbar.Project, "New ROM…",
             "Start a new ROM: copy a template from the Templates folder (HTS120 and friends) to a file of your own and open it.", NewRom),
+        new Toolbar.Entry(Toolbar.Project, "Change functions…",
+            "A ROM built from the skeleton: add functions to it or take them out (VTEC control after a VTEC conversion, a datalog, launch control...) " +
+            "and rebuild it, its tune carried across - no need to start a new ROM.", ChangeFunctions),
+        new Toolbar.Entry(Toolbar.Settings, "Set-up wizard…",
+            "Set the ROM up stage by stage: the stock maps to start from, VTEC and the rev limit, the injectors, the MAP sensor and the gearbox, " +
+            "boost, and the options - with the presets for each (stock ECUs, injector lag curves, sensors, gearboxes). Nothing is written until the last page.",
+            () => _ = SetupWizard()),
         new Toolbar.Entry(Toolbar.Open, "Open…  (Ctrl+O)", "Open a .asm source, a .bin/.rom image (disassembled to source) or a saved project .zip.", OpenFileDialog),
         Toolbar.Entry.Submenu(Toolbar.Restore, "Recent", "The last ten files opened.", RecentEntries),
         new Toolbar.Entry(Toolbar.Save, "Save  (Ctrl+S)", "Write the source on screen to its file.", SaveCurrent),
@@ -325,6 +362,16 @@ public sealed class MainWindow : Window
         new Toolbar.Entry(Toolbar.Settings, "Settings…",
             "UI scale, panel zoom, colours, hot keys, simulation speed, datalogging, the emulator, the processor profile, plugins and the MCP server for other programs.", OpenSettings),
     ]);
+
+    /// The next theme round (Ctrl+Shift+H): Dark, Light, High contrast - every window at once, and kept for next time.
+    void NextTheme()
+    {
+        var next = AppTheme.Next(AppTheme.Now);
+        _settings.Theme = AppTheme.Name(next);
+        _settings.Save();
+        AppTheme.Set(next);
+        SetStatus($"{AppTheme.Label(next)} theme (Ctrl+Shift+H for the next; Settings > Colours)");
+    }
 
     void OpenBinTool()
     {
@@ -470,7 +517,7 @@ public sealed class MainWindow : Window
         var statusBar = new Border
         {
             Child = _status, Padding = new Thickness(4, 3),
-            BorderThickness = new Thickness(0, 1, 0, 0), BorderBrush = new SolidColorBrush(Color.FromArgb(60, 255, 255, 255)),
+            BorderThickness = new Thickness(0, 1, 0, 0), BorderBrush = AppTheme.Brush(Color.FromArgb(60, 255, 255, 255)),
         };
         var root = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto") };
         Grid.SetRow(toolbar, 0); root.Children.Add(toolbar);
@@ -479,6 +526,7 @@ public sealed class MainWindow : Window
         return root;
     }
 
+    static readonly System.Text.Json.JsonSerializerOptions Indented = new() { WriteIndented = true };
     Grid? _centre, _mainGrid;
     Control? _leftPane, _rightPane, _split1, _split2, _editorSplit;
     bool _expanded;
@@ -506,8 +554,7 @@ public sealed class MainWindow : Window
         var bar = new WrapPanel { Margin = new Thickness(6, 4) };
         bar.Children.Add(FileMenu());
         bar.Children.Add(new Separator { Width = 8 });
-        // the calibration editor's Tools, Emulator, Datalogging, Back, Undo and Redo come onto this line in Tuner mode;
-        // the status goes beside its Definition bar (and to the Debug page's log)
+        // the calibration editor's Tools, Emulator, Datalogging, Back, Undo and Redo come onto this line in Tuner mode; the status goes beside its Definition bar (and to the Debug page's log)
         bar.Children.Add(_tunerSlot);
         bar.Children.Add(_pluginsMenuTuner);
         bar.Children.Add(_pluginBarTuner);
@@ -530,6 +577,7 @@ public sealed class MainWindow : Window
     // plugin buttons, one row on each bar
     readonly StackPanel _pluginBarSim = new() { Orientation = Orientation.Horizontal }, _pluginBarTuner = new() { Orientation = Orientation.Horizontal };
     PluginManager? _plugins;
+    internal PluginManager? PluginsForCheck => _plugins;
     // the Plugins drop-down on each bar: shown only while a plugin is loaded (Settings > Plugins picks them)
     Button? _pluginsMenuSimField, _pluginsMenuTunerField;
     Button _pluginsMenuSim => _pluginsMenuSimField ??= PluginsMenu();
@@ -680,7 +728,13 @@ public sealed class MainWindow : Window
                 if (previewed) { UseSettings(original, originalProfile != _profile ? originalProfile : null, save: false); SetStatus("settings put back"); }
                 return;
             }
+            bool newLanguage = !string.Equals(w.Result.Language, original.Language, StringComparison.OrdinalIgnoreCase);
             UseSettings(w.Result, w.ResultProfile, save: true);
+            if (newLanguage)
+            {
+                Lang.Use(_settings.Language);
+                _ = Dialogs.Ask(this, "Language", "The new language is used in every window opened from now on; the main window changes over fully when the app starts again.", "OK");
+            }
             // plugins switched off or removed in the window: stopped and taken off the bars now; switched on: loaded now
             if (_plugins != null)
             {
@@ -781,18 +835,30 @@ public sealed class MainWindow : Window
             SettingsWindow.Parse(s.TableMax), SettingsWindow.Parse(s.TraceColour), SettingsWindow.Parse(s.TrailColour));
         CodeEditor.SetHitColours(SettingsWindow.Parse(s.HitCodeColour), SettingsWindow.Parse(s.HitDataColour));
         _host.FastBoot = s.FastBoot;
+        // the units every value is shown in: a change redraws what is on screen in them
+        var units = s.Units.Clone();
+        units.Stoich = s.StoichAfr;
+        bool unitsChanged = System.Text.Json.JsonSerializer.Serialize(units) != System.Text.Json.JsonSerializer.Serialize(OkiRomSim.Calibration.Units.Now);
+        OkiRomSim.Calibration.Units.Now = units;
+        if (unitsChanged && !first) _calibration.UnitsChanged();
         _calibration.SetOptions(s.LiveTrace, s.FollowReads, s.TrailSeconds);
         _calibration.TableStretch = s.TableStretch;
         TouchMode.Set(s.TouchMode);
+        if (!UiCheck.Active) AppTheme.Set(AppTheme.Parse(s.Theme));
         _calibration.TargetLow = TargetMap.Parse(s.AfrTargetLow);
         _calibration.TargetHigh = TargetMap.Parse(s.AfrTargetHigh);
         _calibration.WidebandCorrection = LookupCurve.Parse(s.WidebandCorrection);
-        // a Demon datalogs over the emulator's own port: the datalog goes through it (or logs the simulator), whatever port was set before
-        _datalog.Port = s.EmulatorType == "Demon" && s.DatalogPort != "simulator" ? "emulator" : s.DatalogPort;
-        _datalog.Baud = s.DatalogBaud; _datalog.Protocol = s.DatalogProtocol;
-        OkiRomSim.Calibration.ChannelStream.Selected = s.DatalogStreamChannels is { Count: > 0 } sc ? sc : [.. OkiRomSim.Calibration.DatalogChannels.Defaults];
+        // a Demon datalogs over the emulator's own port: the datalog goes through it (or logs the simulator), whatever port was set before the port, the protocol or the line speed changed while logging: the link starts again with them, and the page and the graph follow what it sends
+        _datalog.SetLink(s.EmulatorType == "Demon" && s.DatalogPort != "simulator" ? "emulator" : s.DatalogPort, s.DatalogProtocol, s.DatalogBaud);
+        var picks = s.DatalogStreamChannels is { Count: > 0 } sc ? sc : [.. OkiRomSim.Calibration.DatalogChannels.Defaults];
+        bool picksChanged = !picks.SequenceEqual(OkiRomSim.Calibration.ChannelStream.Selected);
+        OkiRomSim.Calibration.ChannelStream.Selected = picks;
+        if (picksChanged && !first) _datalog.Engine.Reconfigure();
+        _datalog.Engine.SerialInputs = [.. s.DatalogSerialInputs.Select(OkiRomSim.Calibration.SerialInputMap.Parse).OfType<OkiRomSim.Calibration.SerialInputMap>()];
         _datalog.GetStreamChannels = () => _settings.DatalogStreamChannels;
         _datalog.SetStreamChannels = list => { _settings.DatalogStreamChannels = list; _settings.Save(); };
+        _datalog.GetSerialInputs = () => _settings.DatalogSerialInputs;
+        _datalog.SetSerialInputs = list => { _settings.DatalogSerialInputs = list; _settings.Save(); };
         if (s.DetectedLayout is { Length: > 0 } dl)
             try { _datalog.Engine.Detected = System.Text.Json.JsonSerializer.Deserialize<OkiRomSim.Calibration.DetectedProtocol>(dl); }
             catch (Exception ex) { AppLog.Error("datalog", "saved layout could not be read", ex); }
@@ -809,6 +875,8 @@ public sealed class MainWindow : Window
             return ch;
         })];
         eng.Wideband.Stoich = s.StoichAfr;
+        // the dyno (and anything else on the datalog page that shows units) follows the new settings
+        _datalog.RaiseSettingsApplied();
         if (s.WidebandType != "none" && s.WidebandPort.Length > 0 && (eng.Wideband.Type != s.WidebandType || !eng.Wideband.Running))
         {
             var (type, port, baud) = (s.WidebandType, s.WidebandPort, s.WidebandBaud);
@@ -1034,8 +1102,29 @@ public sealed class MainWindow : Window
     }
     readonly TextBlock _problemSummary = new() { Text = "not built yet", FontSize = 12, Margin = new Thickness(10, 6), Opacity = 0.85 };
 
+    /// The build's own diagnostics as last shown, so the setup warnings below can be brought up to date without a build.
+    List<Diagnostic> _buildDiags = [];
+
+    /// Setup warnings for a ROM built from a skeleton: two functions switched on and set to one ECU pin, or a pin a built-in stock function drives too. They are settings, so the build cannot see them; they are said with its warnings.
+    List<Diagnostic> SetupWarnings()
+    {
+        try
+        {
+            if (_host.Assembly is not { } asm) return [];
+            var file = _target ?? _current ?? "";
+            return [.. SkeletonAdvice.OutputClashes(asm, _host.Defs(), it => _host.ReadItem(it)[0].Raw)
+                .Select(m => new Diagnostic(Severity.Warning, file, 0, 0, "outputs: " + m))];
+        }
+        catch (Exception ex) { AppLog.Error("problems", "output check failed", ex); return []; }
+    }
+
+    void RefreshSetupWarnings() => ShowProblems(_buildDiags);
+
     void ShowProblems(List<Diagnostic> ordered)
     {
+        _buildDiags = ordered;
+        ordered = [.. ordered, .. SetupWarnings()];
+        ordered = [.. ordered.OrderByDescending(d => d.Severity)];
         _problemLoc = [.. ordered.Select(d => (d.File, d.Line))];
         int errors = ordered.Count(d => d.Severity == Severity.Error), warnings = ordered.Count(d => d.Severity == Severity.Warning);
         _problemSummary.Text = ordered.Count == 0 ? "✔  the source builds clean: no errors, no warnings"
@@ -1248,7 +1337,7 @@ public sealed class MainWindow : Window
     {
         if (_milWindow != null) { _milWindow.Activate(); return; }
         // the service check jumper is port A bit 7: set it through the panel's own box so both agree
-        _milWindow = new MilWindow(_host, on => { if (_bitRows.TryGetValue("porta", out var r)) r.Bits[7].IsChecked = on; });
+        _milWindow = new MilWindow(_host, on => { if (_bitRows.TryGetValue("porta", out var r)) r.Bits[7].IsChecked = on; }, ReplaceSourceLines);
         _milWindow.Closed += (_, _) => _milWindow = null;
         _milWindow.Show(this);
     }
@@ -1289,8 +1378,156 @@ public sealed class MainWindow : Window
     {
         var w = new NewRomWindow();
         await w.ShowDialog(this);
-        if (w.Created is { } path && await ConfirmReplaceCurrent(path)) OpenFile(path);
+        if (w.Created is not { } path || !await ConfirmReplaceCurrent(path)) return;
+        OpenFileNow(path);
+        // a new ROM: offered the set-up, stage by stage, before anything else
+        if (_host.Assembly == null || _host.LoadedPath is not { } loaded || !SamePath(loaded, path)) return;
+        var pick = await Dialogs.Ask(this, "Set it up now?",
+            $"{Label(path)} is made. Set it up now, stage by stage? The engine and the stock maps to start from, VTEC and the rev limit, " +
+            "the injectors, the MAP sensor and the gearbox, boost, and the options - each with its presets.\n\n" +
+            "Nothing is written until the last page, and it can be run again at any time from File > Set-up wizard.",
+            "Set it up", "Later");
+        if (pick == "Set it up") await SetupWizard();
     }
+
+    /// File > Set-up wizard.
+    async Task SetupWizard()
+    {
+        if (_host.Assembly == null) { SetStatus("open a ROM first"); return; }
+        var w = new SetupWizardWindow(_host);
+        await w.ShowDialog(this);
+        if (w.Result is { } done) { SetStatus(done, sticky: true); _calibration.Refresh(); }
+    }
+
+    /// The .bin (or .rom) open now, when the ROM was opened from an image rather than a source.
+    string? _openedImage;
+
+    /// File > Change functions: a ROM built from the skeleton rebuilt with functions added or taken out, its tune carried across. Its build file is changed where it is; a .bin opened on its own (which says what it was built with in its build-info table) gets a build file written beside it. Every setting and map the two builds share goes across by name, as one undo step.
+    async void ChangeFunctions()
+    {
+        try
+        {
+            if (_host.Assembly == null) { SetStatus("open a ROM built from the skeleton first (its build file, or a .bin saved from it)"); return; }
+            if (_current != null) _buffers[_current] = EditorText;
+            var oldImage = _host.RomCopy();
+            Skeleton? sk = null;
+            List<string>? functions = null;
+            DefinitionSet? oldDefs = null;
+            string label, savePath;
+            bool buildFile = false;
+            var target = _target;
+            var text = target == null ? null : ReadBuffer(Path.GetFullPath(target)) ?? (File.Exists(target) ? File.ReadAllText(target) : null);
+            if (_openedImage == null && target != null && text != null && SkeletonRebuild.FromBuildFile(target, text) is { } bf && File.Exists(bf.Skeleton))
+            {
+                // its build file: the functions are its define lines, the old layout is the build that is loaded
+                await OfferSkeletonUpdate(target);
+                sk = Skeleton.Load(bf.Skeleton);
+                functions = bf.Defines;
+                oldDefs = DefinitionBuilder.FromAssembly(_host.Assembly);
+                label = Label(target); savePath = target; buildFile = true;
+            }
+            else
+            {
+                // an image on its own: its build-info table says what it was built with, and that build, made again, says where everything is - when it is the same skeleton (the code matches); otherwise the names in its definitions file
+                foreach (var cand in Skeleton.Find(NewRomWindow.Templates()))
+                    if (SkeletonRebuild.FunctionsIn(oldImage, cand) is { } f) { sk = cand; functions = f; break; }
+                if (sk == null || functions == null)
+                {
+                    await Dialogs.Ask(this, "Change functions",
+                        "This ROM does not say which functions it was built with, so it cannot be rebuilt with others.\n\n" +
+                        "Change functions works on a ROM built from the skeleton (File > New ROM > Create): open its build file (the .asm New ROM wrote), " +
+                        "or a .bin saved from a build made with this version or later.\n\nA ROM made from a template such as HTS120 or HTS115 has all its " +
+                        "functions in already: switch them on in their pages.", "OK");
+                    return;
+                }
+                var again = sk.Build(functions);
+                HashSet<string> want = [];
+                if (again.Assembly != null)
+                {
+                    var defs = DefinitionBuilder.FromAssembly(again.Assembly);
+                    want = defs.Items.Select(i => i.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    if (SkeletonRebuild.CodeDifferences(again.Assembly, defs, oldImage) <= 8) oldDefs = defs;
+                }
+                if (oldDefs == null)
+                {
+                    var named = _host.Defs();
+                    if (want.Count > 0 && named.Items.Count(i => want.Contains(i.Name)) >= Math.Max(20, want.Count / 2)) oldDefs = named;
+                }
+                if (oldDefs == null)
+                {
+                    await Dialogs.Ask(this, "Change functions",
+                        "This ROM was built from an older version of the skeleton, so where its settings are cannot be worked out from the build " +
+                        "the app makes today, and there is no definitions file beside it to say.\n\nOpen its build file (the .asm New ROM wrote) " +
+                        "instead, or save the .bin again with its definitions file (Save as > .bin, then Save definitions too) from the version that made it.", "OK");
+                    return;
+                }
+                var from = _openedImage ?? target ?? "rom";
+                label = Label(from);
+                var stem = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(from))!, Path.GetFileNameWithoutExtension(from) + "-build");
+                savePath = stem + ".asm";
+                for (int n = 2; File.Exists(savePath); n++) savePath = $"{stem}-{n}.asm";
+            }
+
+            var w = new NewRomWindow(new NewRomWindow.ChangeRequest(sk, functions, savePath, buildFile, label));
+            await w.ShowDialog(this);
+            if (w.Created is not { } path || w.ChosenFunctions is not { } chosen) return;
+            var image = _openedImage;
+
+            if (buildFile)
+            {
+                var key = _buffers.Keys.FirstOrDefault(k => SamePath(k, path)) ?? path;
+                var src = ReadBuffer(Path.GetFullPath(path)) ?? File.ReadAllText(path);
+                var updated = SkeletonRebuild.WithFunctions(src, sk, chosen);
+                _buffers[key] = updated;
+                SafeFile.WriteAllText(path, updated);
+                _dirty.Remove(key);
+                if (_current != null && SamePath(_current, path)) { _suppressEdit = true; _editor.Text = updated; _suppressEdit = false; }
+                UpdateDocHeader();
+                Build();
+            }
+            else OpenFileNow(path);
+            if (_host.Assembly == null || _host.LoadedPath is not { } loaded || !SamePath(loaded, path))
+            {
+                SetStatus("the rebuild did not build: nothing was carried across (see Problems)", sticky: true);
+                return;
+            }
+            var newDefs = DefinitionBuilder.FromAssembly(_host.Assembly);
+            var carry = SkeletonRebuild.Carry(oldDefs, oldImage, newDefs, _host.RomCopy());
+            _host.ApplyPatches(carry.Patches, "carry the tune across");
+            _calibration.Refresh();
+            var added = chosen.Except(functions, StringComparer.OrdinalIgnoreCase).Select(d => sk.Feature(d)?.Name ?? d).ToList();
+            var removed = functions.Except(chosen, StringComparer.OrdinalIgnoreCase).Select(d => sk.Feature(d)?.Name ?? d).ToList();
+            AppLog.Action("app", $"change functions: {label} rebuilt as {Label(path)}; +[{string.Join(", ", added)}] -[{string.Join(", ", removed)}]; " +
+                                 $"{carry.Carried} settings carried ({carry.Tuned} tuned), {carry.Skipped.Count} not ({string.Join(", ", carry.Skipped)})");
+            var msg = $"{Label(path)} is rebuilt" + (added.Count > 0 ? $" with {string.Join(", ", added)}" : "") +
+                      (removed.Count > 0 ? $"{(added.Count > 0 ? "," : "")} without {string.Join(", ", removed)}" : "") + ".\n\n" +
+                      $"{carry.Carried} settings and maps came across from the ROM that was open ({carry.Tuned} of them tuned away from the factory value, " +
+                      $"{carry.Patches.Count} bytes written). " +
+                      (carry.Skipped.Count > 0 ? $"Not carried, because their size is different in this build: {string.Join(", ", carry.Skipped.Take(8))}" +
+                                                 (carry.Skipped.Count > 8 ? $" and {carry.Skipped.Count - 8} more" : "") + ". " : "") +
+                      "What was added starts at its factory setting: switch it on in its page.\n\nUndo (Ctrl+Z) takes the carried tune off again.";
+            SetStatus($"rebuilt: {carry.Carried} settings carried across ({carry.Tuned} tuned) - save the ROM to keep it", sticky: true);
+            if (image != null)
+            {
+                var pick = await Dialogs.Ask(this, "Functions changed", msg + $"\n\nSave it over {Path.GetFileName(image)} now (the old one is kept as .bak, with a definitions file beside it)?",
+                    "Save over it", "Not now");
+                if (pick == "Save over it")
+                {
+                    _host.SaveRom(image);
+                    var defs = _host.Defs();
+                    defs.Labels = _host.Assembly.Symbols.Values.Where(x => x.Kind == SymbolKind.Label && x.Value >= 0 && x.Value < _host.Assembly.Image.Length)
+                                     .GroupBy(x => x.Name).ToDictionary(g => g.Key, g => (int)g.First().Value);
+                    var sidecar = DefinitionsFileFor(image);
+                    if (File.Exists(sidecar)) File.Copy(sidecar, sidecar + ".bak", overwrite: true);
+                    defs.Save(sidecar);
+                    SetStatus($"rebuilt and saved over {Path.GetFileName(image)} ({carry.Carried} settings carried across); its build file is {Label(path)}", sticky: true);
+                }
+            }
+            else await Dialogs.Ask(this, "Functions changed", msg + "\n\nSave the ROM (Save as > .bin) to keep the tune with the new functions.", "OK");
+        }
+        catch (Exception ex) { SetStatus("change functions failed: " + ex.Message, sticky: true); AppLog.Error("app", "change functions failed", ex); }
+    }
+
 
     async void OpenFileDialog()
     {
@@ -1303,7 +1540,7 @@ public sealed class MainWindow : Window
                 new FilePickerFileType("ROM source, image or project") { Patterns = new[] { "*.asm", "*.bin", "*.rom", "*.zip" } },
                 new FilePickerFileType("Assembler source") { Patterns = new[] { "*.asm", "*.inc" } },
                 new FilePickerFileType("ROM image") { Patterns = new[] { "*.bin", "*.rom" } },
-                new FilePickerFileType("OkiRomSim project") { Patterns = new[] { "*.zip" } },
+                new FilePickerFileType("Rom Sim Studio project") { Patterns = new[] { "*.zip" } },
                 new FilePickerFileType("All files") { Patterns = new[] { "*" } },
             },
         });
@@ -1344,7 +1581,7 @@ public sealed class MainWindow : Window
         foreach (var f in dirtyFiles)
         {
             if (_current != null && SamePath(f, _current)) continue;
-            try { File.WriteAllText(f, _buffers[f]); _dirty.Remove(f); }
+            try { SafeFile.WriteAllText(f, _buffers[f]); _dirty.Remove(f); }
             catch (Exception ex) { SetStatus($"could not save {Label(f)}: {ex.Message}"); AppLog.Error("app", "save before open failed", ex); return false; }
         }
         if (cal)
@@ -1474,7 +1711,7 @@ public sealed class MainWindow : Window
             bool clean = !_dirty.Any(d => SamePath(d, _target));
             _buffers[key] = updated;
             if (_current != null && SamePath(_current, _target) && !_editorParked) { _suppressEdit = true; _editor.Text = updated; _suppressEdit = false; }
-            if (clean) File.WriteAllText(_target, updated);
+            if (clean) SafeFile.WriteAllText(_target, updated);
             else _dirty.Add(key);
             // the image already holds these bytes: the build is still the source's
             _builtTexts[Path.GetFullPath(_target)] = updated;
@@ -1496,7 +1733,7 @@ public sealed class MainWindow : Window
     {
         try
         {
-            if (!_settings.AskDetectOnOpen || _host.Assembly == null || _host.LoadedPath is not { } loaded || !SamePath(loaded, path)) return;
+            if (UiCheck.Active || !_settings.AskDetectOnOpen || _host.Assembly == null || _host.LoadedPath is not { } loaded || !SamePath(loaded, path)) return;
             var defs = _host.Defs();
             int items = defs.Items.Count, onPages = CalPage.All().SelectMany(p => p.Slots()).Count(s => CalPage.Bound(defs, s) != null);
             string what = items == 0
@@ -1520,7 +1757,7 @@ public sealed class MainWindow : Window
         try
         {
             var text = _buffers.TryGetValue(path, out var t) ? t : File.ReadAllText(path);
-            if (!text.Contains("by File > New ROM > Create")) return;
+            if (UiCheck.Active || !text.Contains("by File > New ROM > Create")) return;
             var m = System.Text.RegularExpressions.Regex.Match(text, @"^\s*include\s+""([^""]+)""", System.Text.RegularExpressions.RegexOptions.Multiline);
             if (!m.Success) return;
             var local = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(path)!, m.Groups[1].Value));
@@ -1567,10 +1804,10 @@ public sealed class MainWindow : Window
     {
         try
         {
-            var dir = Path.Combine(Path.GetTempPath(), "OkiRomSim");
+            var dir = Path.Combine(Path.GetTempPath(), "Rom Sim Studio");
             Directory.CreateDirectory(dir);
             var path = Path.Combine(dir, Path.GetFileNameWithoutExtension(name) + ".bin");
-            File.WriteAllBytes(path, rom);
+            SafeFile.WriteAllBytes(path, rom);
             OpenFile(path);
             SetStatus($"opened the ROM carried in the log ({rom.Length} bytes) as {path}", sticky: true);
         }
@@ -1591,11 +1828,12 @@ public sealed class MainWindow : Window
             bool upper = pick == "Upper half";
             bytes = upper ? bytes[Bus.RomSize..] : bytes[..Bus.RomSize];
             var half = Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileNameWithoutExtension(path) + (upper ? "_high" : "_low") + ".bin");
-            File.WriteAllBytes(half, bytes);
+            SafeFile.WriteAllBytes(half, bytes);
             SetStatus($"{Label(path)}: the {(upper ? "upper" : "lower")} half, saved as {Path.GetFileName(half)} and opened" + (lowBlank ? " (the lower half is blank)" : ""));
             path = half;
         }
         ResetForNewRom(path);
+        _openedImage = path;
         if (bytes.Length == Bus.RomSize + 1 && bytes[^1] == 0) bytes = bytes[..Bus.RomSize];
         if (bytes.Length > Bus.RomSize)
         { SetStatus($"{Label(path)} is {bytes.Length} bytes; a 66207 ROM image is at most {Bus.RomSize}"); return; }
@@ -1630,6 +1868,7 @@ public sealed class MainWindow : Window
         if (saved != null)
         {
             _host.ReplaceDefinitions(saved);
+            _host.RefreshMapSensor();
             _calibration.Refresh();
             SetStatus($"{Label(path)}: names, tables and page bindings put back from {Path.GetFileName(sidecar)} ({saved.Items.Count} definitions)", sticky: true);
             return;
@@ -1641,8 +1880,7 @@ public sealed class MainWindow : Window
                       (dis.RoundTrips ? "; rebuilds byte-identical" : " -- " + dis.Note) + note +
                       $". Unsaved: Ctrl+S writes {Label(asmPath)}";
         SetStatus(opened, sticky: true);
-        // no definitions file beside it: its maps are found now, the way Detect finds them - a .bin read out of the
-        // emulator or off a chip opens with its tables, not with an empty list that looks as if nothing came back
+        // no definitions file beside it: its maps are found now, the way Detect finds them - a .bin read out of the emulator or off a chip opens with its tables, not with an empty list that looks as if nothing came back
         if (_host.Assembly != null && _host.Defs().Items.Count == 0) _ = DetectOnOpen(opened);
     }
 
@@ -1666,6 +1904,7 @@ public sealed class MainWindow : Window
     /// Opening another ROM: forget the one before it (definitions, undo, hits, traces, its source buffers), so Detect and the Calibration page cannot mix the two.
     void ResetForNewRom(string path)
     {
+        _openedImage = null;
         var keep = Path.GetFullPath(path);
         foreach (var k in _buffers.Keys.ToList())
             if (!SamePath(k, keep) && !_dirty.Contains(k)) _buffers.Remove(k);
@@ -1677,8 +1916,7 @@ public sealed class MainWindow : Window
         _lookupRows = []; _lookupLines = [];
         SetItems(_lookupList, []); _lookupData.SetRows([]);
         _lastSourceShown = ""; _lastPcShown = -1;
-        // the emulator and the datalog belong to the ROM that was open: a different project starts with both disconnected -
-        // except the ROM just read out of the emulator, which is the one the car is running
+        // the emulator and the datalog belong to the ROM that was open: a different project starts with both disconnected - except the ROM just read out of the emulator, which is the one the car is running
         _datalog.StopPlayback();
         if (_keepLinksFor != null && SamePath(_keepLinksFor, path)) _keepLinksFor = null;
         else
@@ -1782,7 +2020,7 @@ public sealed class MainWindow : Window
         if (_current == null)
         {
             _docHeader.Text = "No file open. Open a .asm source, a .bin ROM image or a project .zip (Ctrl+O).";
-            Title = $"OkiRomSim Studio {BuildInfo.Version}";
+            Title = $"Rom Sim Studio {BuildInfo.Version}";
             return;
         }
         bool dirty = _dirty.Contains(_current);
@@ -1790,14 +2028,14 @@ public sealed class MainWindow : Window
         _docHeader.Text = $"{_current}{(dirty ? "   ● unsaved" : "")}{(onDisk ? "" : "   (not on disk yet)")}" +
                           (_target != null && !SamePath(_target, _current) ? $"   ·   builds {Label(_target)}" : "");
         ToolTip.SetTip(_docHeader, dirty ? "The text on screen differs from the file on disk (Ctrl+S saves it)." : "Matches the file on disk.");
-        Title = $"OkiRomSim Studio {BuildInfo.Version} — {Label(_current)}{(dirty ? " ●" : "")}";
+        Title = $"Rom Sim Studio {BuildInfo.Version} — {Label(_current)}{(dirty ? " ●" : "")}";
     }
 
     void SaveCurrent()
     {
         if (_current == null) return;
         _buffers[_current] = EditorText;
-        File.WriteAllText(_current, _buffers[_current]);
+        SafeFile.WriteAllText(_current, _buffers[_current]);
         _dirty.Remove(_current);
         UpdateDocHeader();
         SetStatus($"saved {_current}");
@@ -1826,7 +2064,7 @@ public sealed class MainWindow : Window
         if (SamePath(_target, _current)) _target = path;
         _current = path;
         _buffers[path] = text;
-        File.WriteAllText(path, text);
+        SafeFile.WriteAllText(path, text);
         UpdateDocHeader();
         SetStatus($"saved {path} (build to point breakpoints and line tracking at the new file)");
         CheckBuildNeeded();
@@ -1857,7 +2095,7 @@ public sealed class MainWindow : Window
                 return;
             }
             if (File.Exists(path)) File.Copy(path, path + ".bak", overwrite: true);
-            File.WriteAllBytes(path, r.Image);
+            SafeFile.WriteAllBytes(path, r.Image);
             SetStatus($"saved {path}: {Label(target)} assembled ({r.UsedBytes:N0} bytes used)");
             await OfferDefinitionsFile(path, DefinitionBuilder.FromAssembly(r, Path.GetFileName(path)), r);
         }
@@ -1894,6 +2132,28 @@ public sealed class MainWindow : Window
 
     // ------------------------------------------------------------------ build
 
+    /// Put new text on lines of a source file (1-based line -> text), in its buffer: the file is marked edited (saved with the others), and the build counts as this text when the running image already holds the bytes the new lines make (a hard-disabled trouble code).
+    bool ReplaceSourceLines(string file, Dictionary<int, string> lines)
+    {
+        var full = Path.GetFullPath(file);
+        var text = ReadBuffer(full) ?? (File.Exists(full) ? File.ReadAllText(full) : null);
+        if (text == null) return false;
+        string nl = text.Contains("\r\n") ? "\r\n" : "\n";
+        var all = text.Split('\n').Select(l => l.TrimEnd('\r')).ToList();
+        foreach (var (line, newText) in lines)
+            if (line >= 1 && line <= all.Count) all[line - 1] = newText;
+        var updated = string.Join(nl, all);
+        var key = _buffers.Keys.FirstOrDefault(k => SamePath(k, full)) ?? full;
+        bool sameAsBuilt = _builtTexts.TryGetValue(full, out var built) && built == text;
+        _buffers[key] = updated;
+        if (_current != null && SamePath(_current, full) && !_editorParked) { _suppressEdit = true; _editor.Text = updated; _suppressEdit = false; }
+        _dirty.Add(key);
+        if (sameAsBuilt) _builtTexts[full] = updated;
+        UpdateDocHeader();
+        AppLog.Action("app", $"{Label(full)}: {lines.Count} line(s) changed");
+        return true;
+    }
+
     string? ReadBuffer(string fullPath) => _buffers.FirstOrDefault(kv => SamePath(kv.Key, fullPath)).Value;
 
     void Build()
@@ -1915,6 +2175,7 @@ public sealed class MainWindow : Window
             var files = res.Assembly.SourceMap.Select(e => e.File).Append(Path.GetFullPath(target)).Distinct(StringComparer.OrdinalIgnoreCase);
             _builtTexts = files.ToDictionary(f => f, f => ReadBuffer(f) ?? (File.Exists(f) ? File.ReadAllText(f) : ""), StringComparer.OrdinalIgnoreCase);
             _builtImage = [.. res.Assembly.Image];
+            _host.RefreshMapSensor();
             UpdateBuildButton(false, "Up to date: the loaded image was built from the source on screen.");
             SetStatus($"build ok: {res.Assembly.UsedBytes} / {res.Assembly.Image.Length} bytes " +
                       $"({100.0 * res.Assembly.UsedBytes / res.Assembly.Image.Length:F1}%), " +
@@ -2033,7 +2294,7 @@ public sealed class MainWindow : Window
             Title = "Save project",
             SuggestedFileName = Path.GetFileNameWithoutExtension(_target ?? _current ?? "okirom") + ".project.zip",
             DefaultExtension = "zip",
-            FileTypeChoices = new[] { new FilePickerFileType("OkiRomSim project") { Patterns = new[] { "*.zip" } } },
+            FileTypeChoices = new[] { new FilePickerFileType("Rom Sim Studio project") { Patterns = new[] { "*.zip" } } },
         });
         var path = file?.TryGetLocalPath();
         if (path == null) return;
@@ -2046,7 +2307,7 @@ public sealed class MainWindow : Window
     }
 
     /// Everything a project (or a restore point) holds: the sources on screen, the machine state, the calibration, the processor and the settings this ROM was opened with.
-    ProjectData BuildProject()
+    ProjectData BuildProject(bool forRestorePoint = false)
     {
         {
             if (_current != null) _buffers[_current] = EditorText;
@@ -2063,7 +2324,7 @@ public sealed class MainWindow : Window
                 Package = _chip.CurrentPackage.ToString(), CrystalMHz = Bus.CrystalMHz,
                 Machine = machine, Ram = ram, Rom = rom, Definitions = _host.Defs(),
                 ProcessorJson = _profile.ToJson(),
-                SettingsJson = System.Text.Json.JsonSerializer.Serialize(_settings.RomScoped(), new System.Text.Json.JsonSerializerOptions { WriteIndented = true }),
+                SettingsJson = System.Text.Json.JsonSerializer.Serialize(_settings.RomScoped(), Indented),
                 TunerMode = _tuner, CalibrationItem = _calibration.ViewState.Item, CalibrationView = _calibration.ViewState.View,
                 HitTrace = _hitView.HitMode,
             };
@@ -2081,6 +2342,23 @@ public sealed class MainWindow : Window
                 catch (Exception ex) { AppLog.Error("project", "the datalog could not be saved with the project", ex); }
                 finally { try { File.Delete(tmp); } catch { } }
             }
+            // the virtual dyno: its profiles and runs (a restore point takes the runs only while they are small), and what it was showing
+            try
+            {
+                long room = forRestorePoint ? 16L << 20 : long.MaxValue;
+                foreach (var (dir, sub) in new[] { (DynoWindow.ProfilesDir, "profiles"), (DynoWindow.RunsDir, "runs") })
+                {
+                    if (!Directory.Exists(dir)) continue;
+                    foreach (var f in Directory.GetFiles(dir, "*.json").OrderByDescending(File.GetLastWriteTimeUtc))
+                    {
+                        var bytes = File.ReadAllBytes(f);
+                        if (sub == "runs" && (room -= bytes.Length) < 0) break;
+                        p.DynoFiles[$"{sub}/{Path.GetFileName(f)}"] = bytes;
+                    }
+                }
+                if (_datalog.DynoState() is { } dyno) { p.DynoOpen = true; p.DynoProfile = dyno.Profile; p.DynoTicked = dyno.Ticked; }
+            }
+            catch (Exception ex) { AppLog.Error("project", "the dyno could not be saved with the project", ex); }
             p.Views["trace.txt"] = string.Join("\n", s.Trace.Select(t => $"{Hex(t.Pc)}  {t.Label,-22} {t.Text}"));
             p.Views["memory.txt"] = _memory.Text ?? "";
             p.Views["lookup.txt"] = string.Join("\n", _lookupLines);
@@ -2119,7 +2397,7 @@ public sealed class MainWindow : Window
             Directory.CreateDirectory(RestoreDir);
             _autoSavePath ??= Path.Combine(RestoreDir, $"session-{DateTime.Now:yyyyMMdd-HHmmss}.project.zip");
             var tmp = _autoSavePath + ".part";
-            ProjectFile.Save(tmp, BuildProject());
+            ProjectFile.Save(tmp, BuildProject(forRestorePoint: true));
             File.Move(tmp, _autoSavePath, overwrite: true);   // a crash mid-write cannot spoil the last good one
             _autoSaveFailures = 0;
             AppLog.Info("app", $"restore point written to {_autoSavePath}");
@@ -2216,7 +2494,7 @@ public sealed class MainWindow : Window
             var tmp = Path.Combine(Path.GetTempPath(), $"okirom-project-{Environment.ProcessId}.csv");
             try
             {
-                File.WriteAllBytes(tmp, csv);
+                SafeFile.WriteAllBytes(tmp, csv);
                 _datalog.RestoreLog(LogFile.Load(tmp), p.DatalogName.Length > 0 ? p.DatalogName : "project log", p.DatalogPosition);
             }
             catch (Exception ex) { AppLog.Error("project", "the project's datalog could not be read", ex); }
@@ -2224,6 +2502,20 @@ public sealed class MainWindow : Window
         }
         if (p.TunerMode != _tuner) SetTunerMode(p.TunerMode);
         _calibration.RestoreView(p.CalibrationItem, p.CalibrationView);
+        // the dyno's profiles and runs back in its folder (a file of the same name is replaced), and the dyno as it was
+        if (p.DynoFiles.Count > 0)
+            try
+            {
+                foreach (var (name, data) in p.DynoFiles)
+                {
+                    var sub = name.StartsWith("profiles/") ? DynoWindow.ProfilesDir : name.StartsWith("runs/") ? DynoWindow.RunsDir : null;
+                    if (sub == null || Path.GetFileName(name) is not { Length: > 0 } file || file.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) continue;
+                    Directory.CreateDirectory(sub);
+                    SafeFile.WriteAllBytes(Path.Combine(sub, file), data);
+                }
+            }
+            catch (Exception ex) { AppLog.Error("project", "the project's dyno files could not be put back", ex); }
+        _datalog.RestoreDyno(p.DynoOpen, p.DynoProfile, p.DynoTicked);
         SetStatus($"project restored from {Label(path)}: {p.Sources.Count} source file(s), machine state, calibration{(p.DatalogCsv != null ? ", datalog" : "")} and views", sticky: true);
     }
     (int First, int Caret)? _restoreView;
@@ -2255,6 +2547,7 @@ public sealed class MainWindow : Window
     internal SimHost Host => _host;
     internal DatalogView DatalogPanel => _datalog;
     internal void LookupForCheck(string q) { _lookupQ.Text = q; DoXref(); }
+    internal void OpenFileForCheck(string path) => OpenFileNow(path);
     /// A Demon datalogs over the emulator's own port: when the emulator connects, the datalog is connected too (once per connection, so stopping the datalog by hand is left alone), and disconnecting the emulator stops it.
     int _demonLinked;
 
@@ -2286,8 +2579,14 @@ public sealed class MainWindow : Window
             var offered = changes.Where(c => c.Recommended).ToList();
             if (offered.Count == 0) return;
             bool program = offered.Any(c => c.NeedsRestart);
-            SetStatus($"updates are available: {(program ? "a new version of the program" + (offered.Count > 1 ? " and " : "") : "")}" +
-                      $"{(offered.Count(c => !c.NeedsRestart) is int t and > 0 ? $"{t} template file(s)" : "")} - Settings > Updates > Check now", sticky: true);
+            int templates = offered.Count(c => !c.NeedsRestart);
+            string what = (program ? "a new version of the program" + (templates > 0 ? " and " : "") : "") + (templates > 0 ? $"{templates} template file(s)" : "");
+            SetStatus($"updates are available: {what} - Settings > Updates > Check now", sticky: true);
+            // a message box, once per start: nothing is downloaded until it is asked for in the Updates window
+            var pick = await Dialogs.Ask(this, "Update available",
+                $"There is an update on the website: {what}.\n\nOpen the update window to see what changed and download it? Nothing is downloaded until you ask.",
+                "Later", "Open updates");
+            if (pick == "Open updates") await Dialogs.ShowModal(new UpdatesWindow(_settings.UpdateSite), this);
         }
         catch (Exception ex) { AppLog.Info("updates", "start-up check did not reach the website: " + ex.Message); }
     }
@@ -2325,8 +2624,7 @@ public sealed class MainWindow : Window
     {
         if (_tuner)
         {
-            // Tuner mode: no simulator to look at. Where the engine is on the map goes straight from each frame
-            // (DatalogView posts it as it arrives); this is the slower rest - values, gauges, the emulator, the overlay
+            // Tuner mode: no simulator to look at. Where the engine is on the map goes straight from each frame (DatalogView posts it as it arrives); this is the slower rest - values, gauges, the emulator, the overlay
             _datalog.Tick(null);
             _calibration.Tick();
             if ((DateTime.UtcNow - _lastSlowTuner).TotalMilliseconds >= Perf.SidePanelsMs)
@@ -2344,8 +2642,7 @@ public sealed class MainWindow : Window
         _cpu.Update(s, s.Label.Length > 0 ? s.Label : _host.NearestLabel(s.Pc), s.HotWindow > 0
             ? $"hot {Hex(s.HotAddress)} {_host.NearestLabel(s.HotAddress)} {100.0 * s.HotCount / s.HotWindow:F0}% of the recent window · coverage {s.Coverage} addresses"
             : "");
-        // the call stack, outputs and ports change less than the registers: a few times a second is plenty (and while
-        // stopped, once per step)
+        // the call stack, outputs and ports change less than the registers: a few times a second is plenty (and while stopped, once per step)
         if (!s.Running || (DateTime.UtcNow - _lastSidePanels).TotalMilliseconds >= Perf.SidePanelsMs)
         {
             _lastSidePanels = DateTime.UtcNow;
@@ -2657,6 +2954,7 @@ public sealed class MainWindow : Window
             case "Expand lower tabs": ToggleExpand(); break;
             case "Settings": OpenSettings(); break;
             case "Tuner mode": SetTunerMode(!_tuner); break;
+            case "Theme": NextTheme(); break;
             case "Compare": OpenCompare(); break;
             case "Toggle breakpoint":
                 if (_current != null)

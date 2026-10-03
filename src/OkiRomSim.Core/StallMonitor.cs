@@ -1,5 +1,4 @@
-// Copyright (c) bmgjet. All rights reserved.
-// Detects the CPU spinning on a handful of addresses, works out what it waits for, and makes it happen if allowed. Two kinds of spin, distinguished by watching reads while the loop runs (not from a fixed table): * A DELAY loop spins on a register the CPU decrements, so it always terminates; fast-forward it. * A POLL loop spins on a value the CPU never writes; nudge whatever it reads and report it, since a nudged address is a hardware signal this model does not yet understand.
+// Copyright (c) bmgjet. All rights reserved. Detects the CPU spinning on a handful of addresses, works out what it waits for, and makes it happen if allowed. Two kinds of spin, distinguished by watching reads while the loop runs (not from a fixed table): * A DELAY loop spins on a register the CPU decrements, so it always terminates; fast-forward it. * A POLL loop spins on a value the CPU never writes; nudge whatever it reads and report it, since a nudged address is a hardware signal this model does not yet understand.
 
 namespace OkiRomSim.Core;
 

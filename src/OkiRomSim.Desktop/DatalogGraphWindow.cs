@@ -45,6 +45,7 @@ public sealed class DatalogGraphWindow : Window
 /// The graph itself, with its channel list and toolbar: in its own window, or in the datalog panel beside the map (Datalogging > Graph). While a log plays back a bar marks the frame on screen; while logging live the graph grows as frames arrive and follows the newest.
 public sealed class DatalogGraphPanel : UserControl
 {
+    static readonly System.Text.Json.JsonSerializerOptions Indented = new() { WriteIndented = true };
     readonly Func<IReadOnlyList<LogFrame>> _frames;
     readonly Action<int>? _seek;
     readonly GraphCanvas _canvas = new();
@@ -169,8 +170,9 @@ public sealed class DatalogGraphPanel : UserControl
                     Name = name, Shown = false, Colour = Palette[_channels.Count % Palette.Length],
                 });
         _channels.RemoveAll(c => !available.Contains(c.Name, StringComparer.OrdinalIgnoreCase));
+        bool inUseChanged = FollowInUse(log[^1]);
 
-        bool listChanged = _listed != _channels.Count;
+        bool listChanged = _listed != _channels.Count || inUseChanged;
         foreach (var c in _channels) Sample(c, log);
         if (!quiet || listChanged) { BuildChannelList(); _listed = _channels.Count; }
         double span = log[^1].T - log[0].T;
@@ -179,14 +181,46 @@ public sealed class DatalogGraphPanel : UserControl
         Redraw();
     }
 
+    /// What the newest frame carries (the decoded channels, not raw bytes or the link's own counters), as it was last time.
+    string? _inUse;
+    static readonly HashSet<string> Housekeeping = new(StringComparer.OrdinalIgnoreCase) { "ecu_tick_ms", "frames_lost" };
+
+    /// The graph follows what is being logged: when the newest frame's channels change (other channels picked, another protocol, the wideband or an aux channel added) the new ones are drawn and the ones no longer logged are taken off; the rest stay as they were set. The first time, the ones a tuner wants first, or everything logged when none of those is. True when the list changed.
+    bool FollowInUse(LogFrame newest)
+    {
+        var now = newest.Channels().Where(c => !Housekeeping.Contains(c) && newest.RawChannels?.Names.Contains(c, StringComparer.OrdinalIgnoreCase) != true)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        string key = string.Join(",", now.Order(StringComparer.OrdinalIgnoreCase));
+        if (key == _inUse) return false;
+        if (_inUse == null)
+        {
+            if (!_channels.Any(c => c.Shown && now.Contains(c.Name)))
+                foreach (var c in _channels) c.Shown = now.Contains(c.Name);
+        }
+        else
+        {
+            var was = _inUse.Split(',', StringSplitOptions.RemoveEmptyEntries).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var c in _channels)
+            {
+                if (now.Contains(c.Name) && !was.Contains(c.Name)) c.Shown = true;
+                else if (!now.Contains(c.Name)) c.Shown = false;
+            }
+        }
+        _inUse = key;
+        return true;
+    }
+
     /// One value per frame for a channel, and the range it covers. A frame with nothing for it leaves a gap rather than a zero, so a channel that starts part-way through the log does not get a false line back to the origin.
     static void Sample(DatalogGraphWindow.Channel c, IReadOnlyList<LogFrame> log)
     {
         c.Values = new double[log.Count];
         double lo = double.MaxValue, hi = double.MinValue;
+        // in the units picked in Settings > Units (°F, mph, psi...)
+        string unit = LogFrame.UnitOf(c.Name);
+        bool convert = Units.Shown(unit) != unit;
         for (int i = 0; i < log.Count; i++)
         {
-            double v = log[i].Get(c.Name) ?? double.NaN;
+            double v = log[i].Get(c.Name) is double raw ? (convert ? Units.Show(raw, unit) : raw) : double.NaN;
             c.Values[i] = v;
             if (double.IsNaN(v)) continue;
             if (v < lo) lo = v;
@@ -215,7 +249,7 @@ public sealed class DatalogGraphPanel : UserControl
             var label = new TextBlock
             {
                 Text = c.Name, FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center,
-                Foreground = new SolidColorBrush(c.Colour), TextTrimming = TextTrimming.CharacterEllipsis,
+                Foreground = AppTheme.Brush(c.Colour), TextTrimming = TextTrimming.CharacterEllipsis,
             };
             ToolTip.SetTip(label, $"{c.Name}: {Fmt(c.Lo)} to {Fmt(c.Hi)}" +
                                   (c.Min != null || c.Max != null ? " (scale fixed)" : " (fitted to the log)") +
@@ -225,7 +259,7 @@ public sealed class DatalogGraphPanel : UserControl
             var swatch = new Button
             {
                 Width = 16, Height = 16, Padding = new Thickness(0), Margin = new Thickness(2, 0),
-                Background = new SolidColorBrush(c.Colour), BorderThickness = new Thickness(0),
+                Background = AppTheme.Brush(c.Colour), BorderThickness = new Thickness(0),
             };
             swatch.Click += (_, _) =>
             {
@@ -339,7 +373,7 @@ public sealed class DatalogGraphPanel : UserControl
                 })],
             };
             var path = Path.Combine(Dir, Sanitise(t.Name) + ".graph.json");
-            File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(t, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            SafeFile.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(t, Indented));
             _status.Text = "saved " + path;
             AppLog.Action("datalog", "saved the graph template " + t.Name);
         }
@@ -408,7 +442,7 @@ public sealed class DatalogGraphPanel : UserControl
                         ? c.Values[i].ToString("0.###", CultureInfo.InvariantCulture) : "");
                 sb.Append('\n');
             }
-            File.WriteAllText(path, sb.ToString());
+            SafeFile.WriteAllText(path, sb.ToString());
             _status.Text = $"wrote {path}: {to - from + 1:N0} rows, {shown.Count} channels";
         }
         catch (Exception ex) { _status.Text = "export failed: " + ex.Message; AppLog.Error("datalog", "graph export failed", ex); }
@@ -428,10 +462,10 @@ public sealed class GraphCanvas : Control
     bool _dragging, _panning;
     Point _panFrom;
 
-    static readonly IBrush Face = new SolidColorBrush(Color.FromRgb(0x12, 0x13, 0x16));
-    static readonly IPen Grid = new Pen(new SolidColorBrush(Color.FromRgb(0x2a, 0x2d, 0x33)), 1);
-    static readonly IBrush Ink = new SolidColorBrush(Color.FromRgb(0xb0, 0xb6, 0xc0));
-    static readonly IPen CursorPen = new Pen(new SolidColorBrush(Color.FromRgb(0xff, 0xff, 0xff)), 1, DashStyle.Dash);
+    static readonly IBrush Face = AppTheme.Brush(Color.FromRgb(0x12, 0x13, 0x16));
+    static readonly IPen Grid = new Pen(AppTheme.Brush(Color.FromRgb(0x2a, 0x2d, 0x33)), 1);
+    static readonly IBrush Ink = AppTheme.Brush(Color.FromRgb(0xb0, 0xb6, 0xc0));
+    static readonly IPen CursorPen = new Pen(AppTheme.Brush(Color.FromRgb(0xff, 0xff, 0xff)), 1, DashStyle.Dash);
 
     public GraphCanvas()
     {
@@ -457,12 +491,12 @@ public sealed class GraphCanvas : Control
         InvalidateVisual();
     }
 
-    static readonly IBrush PlayBrush = new SolidColorBrush(Color.FromRgb(0xff, 0xd0, 0x30));
+    static readonly IBrush PlayBrush = AppTheme.Brush(Color.FromRgb(0xff, 0xd0, 0x30));
     static readonly IPen PlayPen = new Pen(PlayBrush, 2.5);
-    static readonly IBrush PlayBand = new SolidColorBrush(Color.FromArgb(0x38, 0xff, 0xd0, 0x30));
-    static readonly IBrush TipBack = new SolidColorBrush(Color.FromArgb(0xe8, 0x20, 0x22, 0x27));
-    static readonly IPen TipEdge = new Pen(new SolidColorBrush(Color.FromRgb(0x5a, 0x5e, 0x68)), 1);
-    static readonly IBrush TipInk = new SolidColorBrush(Color.FromRgb(0xe8, 0xea, 0xee));
+    static readonly IBrush PlayBand = AppTheme.Brush(Color.FromArgb(0x38, 0xff, 0xd0, 0x30));
+    static readonly IBrush TipBack = AppTheme.Brush(Color.FromArgb(0xe8, 0x20, 0x22, 0x27));
+    static readonly IPen TipEdge = new Pen(AppTheme.Brush(Color.FromRgb(0x5a, 0x5e, 0x68)), 1);
+    static readonly IBrush TipInk = AppTheme.Brush(Color.FromRgb(0xe8, 0xea, 0xee));
     static readonly IPen TipRing = new Pen(TipInk, 1);
 
     /// The line under the pointer (when not dragging): which channel, and at which frame.
@@ -517,7 +551,7 @@ public sealed class GraphCanvas : Control
         {
             if (!ch.Shown || ch.Values.Length == 0) continue;
             double span = Math.Max(1e-9, ch.Hi - ch.Lo);
-            var pen = new Pen(new SolidColorBrush(ch.Colour), 1.4, lineJoin: PenLineJoin.Round);
+            var pen = new Pen(AppTheme.Brush(ch.Colour), 1.4, lineJoin: PenLineJoin.Round);
             var geo = new StreamGeometry();
             using (var g = geo.Open())
             {
@@ -568,7 +602,7 @@ public sealed class GraphCanvas : Control
                 double v = ch.Values[_cursor];
                 if (double.IsNaN(v)) continue;
                 double y = plot.Bottom - (plot.Height * Math.Clamp((v - ch.Lo) / Math.Max(1e-9, ch.Hi - ch.Lo), 0, 1));
-                c.DrawEllipse(new SolidColorBrush(ch.Colour), null, new Point(x, y), 2.5, 2.5);
+                c.DrawEllipse(AppTheme.Brush(ch.Colour), null, new Point(x, y), 2.5, 2.5);
             }
         }
 
@@ -578,7 +612,7 @@ public sealed class GraphCanvas : Control
             double v = h.Ch.Values[h.Frame];
             double x = plot.X + (plot.Width * (h.Frame - from) / (double)count);
             double y = plot.Bottom - (plot.Height * Math.Clamp((v - h.Ch.Lo) / Math.Max(1e-9, h.Ch.Hi - h.Ch.Lo), 0, 1));
-            var brush = new SolidColorBrush(h.Ch.Colour);
+            var brush = AppTheme.Brush(h.Ch.Colour);
             c.DrawEllipse(brush, TipRing, new Point(x, y), 4, 4);
             var ft = Formatted($"{h.Ch.Name}: {Value(v)}   at {Frames[h.Frame].T.ToString("0.00", CultureInfo.InvariantCulture)}s", 11.5, TipInk);
             double bw = ft.Width + 22, bh = ft.Height + 8;

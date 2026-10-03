@@ -23,8 +23,25 @@ public sealed class DataList : UserControl
     public event Action<Row>? Activated;
     /// A row clicked, or moved to with the arrow keys.
     public event Action<Row>? Picked;
+    /// The rows picked changed (MultiSelect).
+    public event Action? SelectionChanged;
     /// What a right-click on a row offers: (text, what it does); null or empty for no menu.
     public Func<Row, IEnumerable<(string Text, Action Run)>>? Menu { get; set; }
+
+    /// More than one row can be picked: Ctrl+click adds or takes one, Shift+click a run of them, a box dragged over the list the rows it touches (Ctrl held: added to those already picked), Ctrl+A all of them. The pick is kept by the rows' keys (KeyOf), so it stays through a list that is filled again many times a second.
+    public bool MultiSelect { get; set; }
+    /// What a row is known by for the pick: its first cell's text unless set.
+    public Func<Row, string> KeyOf { get; set; } = r => r.Cells.Length > 0 ? r.Cells[0].Text : "";
+    /// The right-click menu for every row picked (MultiSelect); Menu is used when this is not set.
+    public Func<IReadOnlyList<Row>, IEnumerable<(string Text, Action Run)>>? SelectionMenu { get; set; }
+
+    /// The rows picked, in list order (MultiSelect), or the one selected.
+    public IReadOnlyList<Row> SelectedRows => MultiSelect
+        ? [.. _body.Rows.Where(r => !r.Heading && _body.Picked.Contains(KeyOf(r)))]
+        : Selected is { } r1 ? [r1] : [];
+
+    /// Pick these rows' keys (MultiSelect), the UI check's way in.
+    internal void PickKeys(IEnumerable<string> keys) { _body.Picked.Clear(); _body.Picked.UnionWith(keys); _body.InvalidateVisual(); }
 
     public DataList(params Column[] columns)
     {
@@ -82,25 +99,25 @@ public sealed class DataList : UserControl
         }, Avalonia.Threading.DispatcherPriority.Background);
     }
 
-    static readonly IBrush HeadBg = new SolidColorBrush(Color.FromRgb(0x2b, 0x2e, 0x35));
-    static readonly IBrush HeadLine = new SolidColorBrush(Color.FromRgb(0x3c, 0x40, 0x48));
-    static readonly IBrush Alt = new SolidColorBrush(Color.FromArgb(16, 255, 255, 255));
-    static readonly IBrush Sel = new SolidColorBrush(Color.FromArgb(70, 0x3a, 0x8d, 0xff));
-    static readonly IBrush Hov = new SolidColorBrush(Color.FromArgb(28, 255, 255, 255));
-    static readonly IBrush CurrentBg = new SolidColorBrush(Color.FromArgb(46, 0x00, 0xd0, 0xd0));
-    static readonly IBrush HeadingBg = new SolidColorBrush(Color.FromArgb(30, 0x46, 0x8c, 0xff));
+    static readonly IBrush HeadBg = AppTheme.Brush(Color.FromRgb(0x2b, 0x2e, 0x35));
+    static readonly IBrush HeadLine = AppTheme.Brush(Color.FromRgb(0x3c, 0x40, 0x48));
+    static readonly IBrush Alt = AppTheme.Brush(Color.FromArgb(16, 255, 255, 255));
+    static readonly IBrush Sel = AppTheme.Brush(Color.FromArgb(70, 0x3a, 0x8d, 0xff));
+    static readonly IBrush Hov = AppTheme.Brush(Color.FromArgb(28, 255, 255, 255));
+    static readonly IBrush CurrentBg = AppTheme.Brush(Color.FromArgb(46, 0x00, 0xd0, 0xd0));
+    static readonly IBrush HeadingBg = AppTheme.Brush(Color.FromArgb(30, 0x46, 0x8c, 0xff));
 
     // colours the pages share, so a kind of row always looks the same
-    public static readonly IBrush Code = new SolidColorBrush(Color.FromRgb(0x3c, 0xc8, 0x5a));
-    public static readonly IBrush Data = new SolidColorBrush(Color.FromRgb(0x46, 0x8c, 0xff));
-    public static readonly IBrush Address = new SolidColorBrush(Color.FromRgb(0x9a, 0xa4, 0xb4));
-    public static readonly IBrush Label = new SolidColorBrush(Color.FromRgb(0xe6, 0xc0, 0x7a));
-    public static readonly IBrush Jump = new SolidColorBrush(Color.FromRgb(0xff, 0x9d, 0x5c));
-    public static readonly IBrush Call = new SolidColorBrush(Color.FromRgb(0x7f, 0xc4, 0xff));
-    public static readonly IBrush Error = new SolidColorBrush(Color.FromRgb(0xff, 0x5c, 0x5c));
-    public static readonly IBrush Warning = new SolidColorBrush(Color.FromRgb(0xff, 0xc1, 0x4d));
-    public static readonly IBrush Good = new SolidColorBrush(Color.FromRgb(0x5c, 0xd6, 0x7a));
-    public static readonly IBrush Purple = new SolidColorBrush(Color.FromRgb(0xc0, 0x8c, 0xff));
+    public static readonly IBrush Code = AppTheme.Brush(Color.FromRgb(0x3c, 0xc8, 0x5a));
+    public static readonly IBrush Data = AppTheme.Brush(Color.FromRgb(0x46, 0x8c, 0xff));
+    public static readonly IBrush Address = AppTheme.Brush(Color.FromRgb(0x9a, 0xa4, 0xb4));
+    public static readonly IBrush Label = AppTheme.Brush(Color.FromRgb(0xe6, 0xc0, 0x7a));
+    public static readonly IBrush Jump = AppTheme.Brush(Color.FromRgb(0xff, 0x9d, 0x5c));
+    public static readonly IBrush Call = AppTheme.Brush(Color.FromRgb(0x7f, 0xc4, 0xff));
+    public static readonly IBrush Error = AppTheme.Brush(Color.FromRgb(0xff, 0x5c, 0x5c));
+    public static readonly IBrush Warning = AppTheme.Brush(Color.FromRgb(0xff, 0xc1, 0x4d));
+    public static readonly IBrush Good = AppTheme.Brush(Color.FromRgb(0x5c, 0xd6, 0x7a));
+    public static readonly IBrush Purple = AppTheme.Brush(Color.FromRgb(0xc0, 0x8c, 0xff));
     public static readonly IBrush Text = Dark.Text;
     public static readonly IBrush Dim = Dark.Dim;
 
@@ -121,7 +138,14 @@ public sealed class DataList : UserControl
         public ScrollViewer? Scroll;
         public string Empty = "";
         public int Selected = -1;
-        int _hover = -1;
+        public readonly HashSet<string> Picked = [];
+        int _hover = -1, _anchor = -1;
+        // the box being dragged out (content coordinates), and what was picked before it began
+        Point? _bandFrom;
+        Rect? _band;
+        HashSet<string> _beforeBand = [];
+        static readonly IBrush BandFill = AppTheme.Brush(Color.FromArgb(0x30, 0x4e, 0xa1, 0xff));
+        static readonly IBrush BandEdge = AppTheme.Brush(Color.FromRgb(0x4e, 0xa1, 0xff));
         static readonly Typeface Mono = new(MainWindow.MonoFont);
         static readonly Typeface MonoBold = new(MainWindow.MonoFont, FontStyle.Normal, FontWeight.Bold);
         static readonly Typeface Ui = new(FontFamily.Default);
@@ -181,7 +205,7 @@ public sealed class DataList : UserControl
                     }
                     continue;
                 }
-                if (i == Selected) ctx.FillRectangle(Sel, rc);
+                if (owner.MultiSelect ? Picked.Contains(owner.KeyOf(r)) : i == Selected) ctx.FillRectangle(Sel, rc);
                 else if (r.Current) ctx.FillRectangle(CurrentBg, rc);
                 else if (i == _hover) ctx.FillRectangle(Hov, rc);
                 else if (i % 2 == 1) ctx.FillRectangle(Alt, rc);
@@ -198,6 +222,11 @@ public sealed class DataList : UserControl
                     }
                     x += w;
                 }
+            }
+            if (_band is { } band)
+            {
+                ctx.FillRectangle(BandFill, band);
+                ctx.DrawRectangle(new Pen(BandEdge, 1), band);
             }
             if (Top <= 0) return;
             // the headings stay at the top of the view
@@ -222,6 +251,13 @@ public sealed class DataList : UserControl
         protected override void OnPointerMoved(PointerEventArgs e)
         {
             base.OnPointerMoved(e);
+            if (_bandFrom is { } from && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+            {
+                var at = e.GetPosition(this);
+                if (_band == null && Math.Abs(at.Y - from.Y) < 4 && Math.Abs(at.X - from.X) < 4) return;
+                Band(from, at);
+                return;
+            }
             int i = RowAt(e.GetPosition(this));
             if (i == _hover) return;
             _hover = i;
@@ -231,10 +267,99 @@ public sealed class DataList : UserControl
 
         protected override void OnPointerExited(PointerEventArgs e) { base.OnPointerExited(e); _hover = -1; InvalidateVisual(); }
 
+        /// The box from where the drag began to the pointer: the rows it touches are picked (with those before it when Ctrl was held).
+        void Band(Point from, Point at)
+        {
+            // past the top or bottom of the view: the list scrolls under the box
+            if (Scroll != null)
+            {
+                double top = Scroll.Offset.Y + Top, bottom = Scroll.Offset.Y + Scroll.Viewport.Height;
+                if (at.Y < top) Scroll.Offset = Scroll.Offset.WithY(Math.Max(0, Scroll.Offset.Y - RowH));
+                else if (at.Y > bottom) Scroll.Offset = Scroll.Offset.WithY(Scroll.Offset.Y + RowH);
+            }
+            var r = new Rect(from, at).Normalize();
+            _band = r;
+            Picked.Clear();
+            Picked.UnionWith(_beforeBand);
+            int a = Math.Max(0, (int)Math.Floor((r.Top - Top) / RowH)), b = Math.Min(Rows.Count - 1, (int)Math.Floor((r.Bottom - Top) / RowH));
+            for (int k = a; k <= b; k++) if (!Rows[k].Heading) Picked.Add(owner.KeyOf(Rows[k]));
+            InvalidateVisual();
+        }
+
+        protected override void OnPointerReleased(PointerReleasedEventArgs e)
+        {
+            base.OnPointerReleased(e);
+            if (_bandFrom == null) return;
+            bool banded = _band != null;
+            _bandFrom = null; _band = null;
+            e.Pointer.Capture(null);
+            InvalidateVisual();
+            if (banded) owner.SelectionChanged?.Invoke();
+        }
+
         protected override void OnPointerPressed(PointerPressedEventArgs e)
         {
             base.OnPointerPressed(e);
             int i = RowAt(e.GetPosition(this));
+            var pt = e.GetCurrentPoint(this);
+            if (owner.MultiSelect)
+            {
+                owner.Focus();
+                var mods = e.KeyModifiers;
+                bool ctrl = mods.HasFlag(KeyModifiers.Control) || mods.HasFlag(KeyModifiers.Meta), shift = mods.HasFlag(KeyModifiers.Shift);
+                if (pt.Properties.IsRightButtonPressed)
+                {
+                    if (i < 0) return;
+                    // a right-click on a row not picked picks just that one; on a picked row the menu is for all of them
+                    if (!Picked.Contains(owner.KeyOf(Rows[i]))) { Picked.Clear(); Picked.Add(owner.KeyOf(Rows[i])); _anchor = i; }
+                    Selected = i;
+                    InvalidateVisual();
+                    var picked = owner.SelectedRows;
+                    var items = (owner.SelectionMenu != null ? owner.SelectionMenu(picked) : owner.Menu?.Invoke(Rows[i]))?.ToList();
+                    if (items is { Count: > 0 })
+                    {
+                        var menu = new ContextMenu();
+                        foreach (var (text, run) in items)
+                        {
+                            if (text == "-") { menu.Items.Add(new Separator()); continue; }
+                            var mi = new MenuItem { Header = text };
+                            mi.Click += (_, _) => run();
+                            menu.Items.Add(mi);
+                        }
+                        menu.Open(this);
+                        e.Handled = true;
+                    }
+                    return;
+                }
+                if (!pt.Properties.IsLeftButtonPressed) return;
+                if (i >= 0 && shift && _anchor >= 0 && _anchor < Rows.Count)
+                {
+                    if (!ctrl) Picked.Clear();
+                    for (int k = Math.Min(_anchor, i); k <= Math.Max(_anchor, i); k++) if (!Rows[k].Heading) Picked.Add(owner.KeyOf(Rows[k]));
+                }
+                else if (i >= 0 && ctrl)
+                {
+                    var key = owner.KeyOf(Rows[i]);
+                    if (!Picked.Remove(key)) Picked.Add(key);
+                    _anchor = i;
+                }
+                else
+                {
+                    Picked.Clear();
+                    if (i >= 0) Picked.Add(owner.KeyOf(Rows[i]));
+                    _anchor = i;
+                }
+                // a drag from here draws a box over the rows to pick
+                _bandFrom = e.GetPosition(this);
+                _beforeBand = ctrl ? [.. Picked] : [];
+                e.Pointer.Capture(this);
+                if (i >= 0) Selected = i;
+                InvalidateVisual();
+                if (i >= 0) owner.Picked?.Invoke(Rows[i]);
+                owner.SelectionChanged?.Invoke();
+                if (i >= 0 && e.ClickCount == 2 && !ctrl && !shift) owner.Activated?.Invoke(Rows[i]);
+                return;
+            }
             if (i < 0) return;
             Selected = i;
             InvalidateVisual();
@@ -266,6 +391,16 @@ public sealed class DataList : UserControl
         base.OnKeyDown(e);
         if (_body.Rows.Count == 0) return;
         int s = _body.Selected;
+        if (MultiSelect && e.Key == Key.A && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            _body.Picked.Clear();
+            foreach (var r in _body.Rows) if (!r.Heading) _body.Picked.Add(KeyOf(r));
+            _body.InvalidateVisual();
+            SelectionChanged?.Invoke();
+            e.Handled = true;
+            return;
+        }
+        if (MultiSelect && e.Key == Key.Escape) { _body.Picked.Clear(); _body.InvalidateVisual(); SelectionChanged?.Invoke(); e.Handled = true; return; }
         switch (e.Key)
         {
             case Key.Down: s = Math.Min(_body.Rows.Count - 1, s + 1); while (s < _body.Rows.Count - 1 && _body.Rows[s].Heading) s++; break;
@@ -274,6 +409,13 @@ public sealed class DataList : UserControl
             default: return;
         }
         _body.Selected = s;
+        if (MultiSelect && s >= 0 && s < _body.Rows.Count)
+        {
+            // arrows move a single pick; Shift+arrows grow it
+            if (!e.KeyModifiers.HasFlag(KeyModifiers.Shift)) _body.Picked.Clear();
+            _body.Picked.Add(KeyOf(_body.Rows[s]));
+            SelectionChanged?.Invoke();
+        }
         ScrollTo(s, centre: false);
         _body.InvalidateVisual();
         if (Selected is { } picked) Picked?.Invoke(picked);

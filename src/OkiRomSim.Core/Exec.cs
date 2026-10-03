@@ -1,5 +1,4 @@
-// Copyright (c) bmgjet. All rights reserved.
-// OKI 66207 executor: evaluates the Arg tree that Decoder + OperandParser produce, so each mnemonic is implemented once. Conventions taken from the ISA: * Word ops use the full 16-bit accumulator; byte ops (mnemonic ending in B) use its low half. * CF is set on borrow by SUB/SBC/CMP: JLT = CF, JGE = !CF, JGT = !CF && !ZF, JLE = CF || ZF. * LC/CMPC read code space; everything else reads data space.
+// Copyright (c) bmgjet. All rights reserved. OKI 66207 executor: evaluates the Arg tree that Decoder + OperandParser produce, so each mnemonic is implemented once. Conventions taken from the ISA: * Word ops use the full 16-bit accumulator; byte ops (mnemonic ending in B) use its low half. * CF is set on borrow by SUB/SBC/CMP: JLT = CF, JGE = !CF, JGT = !CF && !ZF, JLE = CF || ZF. * LC/CMPC read code space; everything else reads data space.
 namespace OkiRomSim.Core;
 
 public sealed class ExecException : Exception
@@ -15,13 +14,23 @@ public sealed class ExecException : Exception
 
 internal sealed class Exec
 {
-    private readonly Cpu _cpu;
-    private readonly Bus _bus;
-    private readonly Decoded _d;
+    private Cpu _cpu;
+    private Bus _bus;
+    private Decoded _d;
 
     public Exec(Cpu cpu, Bus bus, Decoded d)
     {
         _cpu = cpu; _bus = bus; _d = d;
+    }
+
+    /// One Exec per thread, pointed at the instruction about to run (a new object for every instruction was most of the garbage a simulation made).
+    [ThreadStatic] static Exec? _shared;
+    internal static Exec For(Cpu cpu, Bus bus, Decoded d)
+    {
+        var e = _shared;
+        if (e == null) return _shared = new Exec(cpu, bus, d);
+        e._cpu = cpu; e._bus = bus; e._d = d; e.BranchTaken = false;
+        return e;
     }
 
     public bool BranchTaken { get; private set; }
@@ -268,7 +277,7 @@ internal sealed class Exec
         bool byteWidth = p.ByteWidth;
         var args = p.Args;
         // Base name with any byte-width suffix removed, so ADD/ADDB share an arm.
-        string baseOp = byteWidth ? p.Op[..^1] : p.Op;
+        string baseOp = p.BaseOp;
 
         switch (baseOp)
         {
@@ -329,20 +338,23 @@ internal sealed class Exec
                     uint carryIn = (baseOp == "ADC" || baseOp == "SBC") ? (_cpu.Cf ? 1u : 0u) : 0u;
                     uint a = lhs, b = rhs;
                     uint widthMask = byteWidth ? 0xFFu : 0xFFFFu;
-                    uint res; bool carry;
+                    uint res; bool carry, half;
                     if (baseOp is "ADD" or "ADC")
                     {
                         uint r = (a & widthMask) + (b & widthMask) + carryIn;
                         res = r & widthMask;
                         carry = r > widthMask;
+                        half = ((a & 0xF) + (b & 0xF) + carryIn) > 0xF;       // carry out of bit 3: what DAA needs
                     }
                     else
                     {
                         uint r = (a & widthMask) - (b & widthMask) - carryIn;
                         res = r & widthMask;
                         carry = (a & widthMask) < (b & widthMask) + carryIn;
+                        half = (a & 0xF) < (b & 0xF) + carryIn;               // borrow from bit 4
                     }
                     _cpu.Cf = carry;
+                    _cpu.Hc = half;
                     SetZf((ushort)res, byteWidth);
                     if (baseOp != "CMP" && baseOp != "CMPC") Write(args[0], byteWidth, (ushort)res);
                     break;
@@ -731,7 +743,7 @@ public static class ExecStep
         if (parsed == null) throw ExecException.Unimplemented(pc, d.Mnemonic);
 
         var ddAfter = d.DdAfter;
-        var ex = new Exec(cpu, bus, d);
+        var ex = Exec.For(cpu, bus, d);
         ex.Run(parsed);
         branchTaken = ex.BranchTaken;
 
