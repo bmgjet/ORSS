@@ -162,6 +162,17 @@ public sealed class SimHost
 
     public string LabelAt(long addr) => _labels.TryGetValue(addr, out var n) ? n : "";
 
+    /// After a patch build: the definitions from the new build, and every one the old set had that the source does not
+    /// (found by Detect, or defined by an MCP client with cal_define) carried across, so the Calibration pages lose nothing.
+    void KeepDefinitions(DefinitionSet? old)
+    {
+        if (old == null) return;
+        var fresh = Defs();
+        foreach (var f in old.Formulas.Where(f => !fresh.Formulas.Any(x => x.Name.Equals(f.Name, StringComparison.OrdinalIgnoreCase)))) fresh.Formulas.Add(f);
+        foreach (var it in old.Items.Where(it => !fresh.Items.Any(x => x.Name.Equals(it.Name, StringComparison.OrdinalIgnoreCase) || x.Address == it.Address)))
+            fresh.Items.Add(it);
+    }
+
     public DefinitionSet Defs()
     {
         lock (_lock)
@@ -315,7 +326,12 @@ public sealed class SimHost
             int bytes = ranges.Sum(r => r.Length);
             if (bytes == 0)
             {
+                // the same bytes (new names, comments, annotations): the names and definitions are the new build's
+                var kept = Definitions;
                 Assembly = asm; Definitions = null; _ramMap = null;
+                KeepDefinitions(kept);
+                _labels = asm.Symbols.Values.Where(s => s.Kind == SymbolKind.Label).GroupBy(s => s.Value).ToDictionary(g => g.Key, g => g.First().Name);
+                Interlocked.Increment(ref _version);
                 return new(true, diags, asm, 0, ranges, false, "nothing to patch: the bytes are the same");
             }
             // the CPU (or a routine it will return to) inside changed code
@@ -325,8 +341,10 @@ public sealed class SimHost
                 return new(false, diags, asm, bytes, ranges, true, $"the program is running inside code that changes (PC {Sim.Cpu.Pc:X4} {LabelAt(Sim.Cpu.Pc)})");
             foreach (var (start, len) in ranges)
                 for (int i = 0; i < len; i++) Sim.Bus.Rom[start + i] = neu[start + i];
+            var keptDefs = Definitions;
             Assembly = asm;
             Definitions = null; _ramMap = null;
+            KeepDefinitions(keptDefs);
             _labels = asm.Symbols.Values.Where(s => s.Kind == SymbolKind.Label).GroupBy(s => s.Value).ToDictionary(g => g.Key, g => g.First().Name);
             BalanceChecksum();
             Sim.InvalidateDecodeCache();
@@ -641,8 +659,20 @@ public sealed class SimHost
     /// Send bytes to the simulated ROM's serial port, as a datalogging tool would.
     public void SerialToRom(byte[] data)
     {
-        lock (_lock) Sim.Bus.QueueSerialRx(data, (uint)Math.Max(1, (long)Bus.CpuHz * 10 / Math.Max(300, SerialBaud)));
+        lock (_lock) Sim.Bus.QueueSerialRx(BaudMismatchLocked() ? Garble(data) : data, (uint)Math.Max(1, (long)Bus.CpuHz * 10 / Math.Max(300, SerialBaud)));
     }
+
+    /// The baud rate the ROM set its serial port to (0: it has not, or this chip is not modelled that way).
+    public int RomSerialBaud { get { lock (_lock) return Bus.Is66911 ? 0 : Sim.Bus.RomSerialBaud; } }
+
+    /// The ROM's line speed and the cable's more than 4 % apart: as on a car, every byte comes out garbled both ways.
+    public bool BaudMismatch { get { lock (_lock) return BaudMismatchLocked(); } }
+    bool BaudMismatchLocked()
+    {
+        int rom = Bus.Is66911 ? 0 : Sim.Bus.RomSerialBaud;
+        return rom > 0 && Math.Abs(rom - SerialBaud) > rom * 0.04;
+    }
+    static byte[] Garble(byte[] data) => [.. data.Select((b, i) => (byte)(b * 37 + 0x5B + i))];
 
     /// Take up to `max` bytes the ROM has transmitted.
     public int SerialFromRom(byte[] buffer, int offset, int max)
@@ -660,7 +690,8 @@ public sealed class SimHost
 
     void PumpSerialLocked()
     {
-        foreach (var b in Sim.Bus.TakeSerialTx()) _romTx.Enqueue(b);
+        var tx = Sim.Bus.TakeSerialTx();
+        foreach (var b in BaudMismatchLocked() ? Garble(tx) : tx) _romTx.Enqueue(b);
         while (_romTx.Count > 65536) _romTx.Dequeue();
     }
 
@@ -948,7 +979,8 @@ public sealed class SimHost
                 var i = t.IndexOf('|');
                 if (i > 0 && ushort.TryParse(t[..i], System.Globalization.NumberStyles.HexNumber, null, out var pc)) _trace.Enqueue(new TraceEntry(pc, t[(i + 1)..]));
             }
-            // the sensor readings the ROM last latched came back with the fields; worked out afresh now they would be this moment's, not the ones it had (an older project, without them, gets fresh ones)
+            // the sensor readings the ROM last latched came back with the fields; worked out afresh now they would be
+            // this moment's, not the ones it had (an older project, without them, gets fresh ones)
             if (st.Fields.Count == 0) Sim.SyncSensors();
             ResetRates();
             _stopReason = "project restored";
@@ -1410,6 +1442,27 @@ public sealed class SimHost
                     return Sim.Bus.Rom[(int)sw.Value & (Bus.RomSize - 1)] == 1;
                 return RomChecksum.Sum(Sim.Bus.Rom) == 0;
             }
+        }
+    }
+
+    /// The ROM's 8-bit sum now (0 = what a ROM checking its own sum needs), and the byte kept to balance it, if any.
+    public (int Sum, int? Site) ChecksumNow()
+    {
+        lock (_lock) return (RomChecksum.Sum(Sim.Bus.Rom), ChecksumAddress);
+    }
+
+    /// Make the ROM's sum 0: with its balancing byte, or - a ROM that has none (HTS) - a free byte at the top of the ROM,
+    /// which from then on every edit keeps right. What was done, for the status line.
+    public string RecalculateChecksum()
+    {
+        lock (_lock)
+        {
+            ChecksumAddress ??= RomChecksum.Site(Sim.Bus.Rom, Assembly) ?? RomChecksum.FreeByte(Sim.Bus.Rom, Assembly);
+            if (ChecksumAddress is not int at) return "no free byte at the top of the ROM to balance the sum with";
+            byte was = Sim.Bus.Rom[at];
+            if (RomChecksum.Balance(Sim.Bus.Rom, at)) QueueUpload(at, 1);
+            Interlocked.Increment(ref _version);
+            return $"checksum recalculated: byte {at:X4}h {was:X2}h -> {Sim.Bus.Rom[at]:X2}h, the ROM now sums to {RomChecksum.Sum(Sim.Bus.Rom):X2}h";
         }
     }
 

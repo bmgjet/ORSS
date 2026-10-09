@@ -28,17 +28,14 @@ undef MODRAM_NEXT
 define MODRAM_NEXT (gio4_timer + 1)
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_GIO4
-                JNE     gio4_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_GIO4 == TICK_SLOT
                 CAL     gio4_tick
-gio4_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
-;@ GIO4Enable type=u8 flag=1 on=1 off=0 category="GIO 4" slot=gpo4.enable desc="Programmable output 4 on."
+;@ GIO4Enable type=u8 flag=1 on=1 off=0 category="GIO 4" slot=gpo4.enable desc="Programmable output 4: drive the chosen output while every condition below is met (an rpm window, throttle, speed, gear, battery)."
 gio4_block:              DB  000h
 ;@ GIO4Output type=u8 formula=raw category="GIO 4" slot=gpo4.output desc="The output it drives: 0 none, 1 P0.0 (A/C clutch, A15), 2 P0.1 (EVAP purge), 3 P0.4 (A/T lock-up, automatic ECUs), 4 P1.2 (O2 heater), 5 P1.4 (check-engine lamp, A13), 6 P1.5 (ECU LED), 7 P0.2 (alternator control, A16) high, 8 P0.2 low, 9 P0.0 held off (A/C clutch disengaged), 10 P0.3 (radiator fan), 11 P4.3 (pin A17; boost control uses it too)."
                         DB  000h
@@ -48,13 +45,13 @@ gio4_block:              DB  000h
                         DB  080h
 ;@ GIO4InputInvert type=u8 flag=1 on=1 off=0 category="GIO 4" slot=gpo4.input.invert desc="The input must be off instead."
                         DB  000h
-;@ GIO4RpmOn type=u16 formula=rpm_period_word category="GIO 4" slot=gpo4.rpm.on desc="On at or above this rpm."
+;@ GIO4RpmOn type=u16 formula=rpm_period_word category="GIO 4" slot=gpo4.rpm.on desc="On at or above this rpm (off again below the off point)."
                         DW  0ffffh
 ;@ GIO4RpmOff type=u16 formula=rpm_period_word category="GIO 4" slot=gpo4.rpm.off desc="Once on, off again below this rpm (set it a little under the on rpm)."
                         DW  0ffffh
-;@ GIO4ThrottleMin type=u8 formula=tps_pct category="GIO 4" slot=gpo4.tps.min desc="Throttle at least this."
+;@ GIO4ThrottleMin type=u8 formula=tps_pct category="GIO 4" slot=gpo4.tps.min desc="Throttle at least this open."
                         DB  000h
-;@ GIO4ThrottleMax type=u8 formula=tps_pct category="GIO 4" slot=gpo4.tps.max desc="Throttle no more than this."
+;@ GIO4ThrottleMax type=u8 formula=tps_pct category="GIO 4" slot=gpo4.tps.max desc="Throttle no more than this open."
                         DB  0ffh
 ;@ GIO4MapMin type=u8 formula=map_mbar category="GIO 4" slot=gpo4.map.min desc="Manifold pressure at least this."
                         DB  000h
@@ -72,9 +69,9 @@ gio4_block:              DB  000h
                         DB  0ffh
 ;@ GIO4GearMin type=u8 formula=raw category="GIO 4" slot=gpo4.gear.min desc="Gear at least this (needs gear detection; 0 = neutral or not known)."
                         DB  000h
-;@ GIO4GearMax type=u8 formula=raw category="GIO 4" slot=gpo4.gear.max desc="Gear no more than this."
+;@ GIO4GearMax type=u8 formula=raw category="GIO 4" slot=gpo4.gear.max desc="Gear no higher than this (needs gear detection)."
                         DB  0ffh
-;@ GIO4BatteryMin type=u8 formula=battery_v category="GIO 4" slot=gpo4.batt.min desc="Battery at least this."
+;@ GIO4BatteryMin type=u8 formula=battery_v category="GIO 4" slot=gpo4.batt.min desc="Battery at least this many volts."
                         DB  000h
 ;@ GIO4OnDelay type=u8 formula="x * 32.8" inverse="x / 32.8" unit=ms decimals=0 category="GIO 4" slot=gpo4.delay.on desc="The conditions must hold this long before it switches on (flash mode: the time on and off)."
                         DB  000h

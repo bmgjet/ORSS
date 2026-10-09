@@ -1,4 +1,5 @@
-// Copyright (c) bmgjet. All rights reserved. Honda OBD1 D16Z6 / P28 Engine Simulator.
+// Copyright (c) bmgjet. All rights reserved.
+// Honda OBD1 D16Z6 / P28 Engine Simulator.
 namespace OkiRomSim.Core;
 
 public sealed class EngineState

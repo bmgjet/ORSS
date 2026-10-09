@@ -284,6 +284,9 @@ WORKFLOW
   4. file_edit / file_edit_lines to change the source, assemble to build (errors carry file:line)
   5. run to boot it: it must reach the main loop with the fuel pump ON, injecting, and no BRK traps;
      compare_bins against the original to confirm only the intended bytes changed
+ANNOTATING (naming code and data by what it does)
+  naming_guide first - every name follows it. annotate_todo -> explore -> rename -> comment -> cal_define, repeat.
+  Inside the app every rename / comment / file edit shows in its editor, Lookup and Calibration pages straight away.
 Paths are confined to the workspace. Large outputs go to .okirom/ files - read them with file_read.
 """);
         return sb.ToString();
@@ -348,7 +351,7 @@ Paths are confined to the workspace. Large outputs go to .okirom/ files - read t
     string FileRead(JsonObject a)
     {
         var path = _ws.Resolve(Req(a, "path"));
-        var lines = File.ReadAllLines(path);
+        var lines = ReadSource(path).Replace("\r\n", "\n").Split('\n');
         int start = Math.Max(1, I(a, "start_line", 1)), n = Math.Clamp(I(a, "lines", 200), 1, 2000);
         var sb = new StringBuilder($"{_ws.Show(path)}: lines {start}-{Math.Min(lines.Length, start + n - 1)} of {lines.Length}\n");
         for (int i = start; i < start + n && i <= lines.Length; i++) sb.Append(i.ToString().PadLeft(6)).Append("  ").AppendLine(lines[i - 1]);
@@ -389,14 +392,14 @@ Paths are confined to the workspace. Large outputs go to .okirom/ files - read t
         if (File.Exists(path) && !B(a, "overwrite", false)) throw new ToolException("the file exists; pass overwrite=true to replace it (or use file_edit)");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var content = S(a, "content") ?? "";
-        OkiRomSim.Core.SafeFile.WriteAllText(path, content);
-        return $"wrote {_ws.Show(path)} ({content.Count(c => c == '\n') + 1} lines)";
+        var note = WriteSource(path, content, "file_write");
+        return $"wrote {_ws.Show(path)} ({content.Count(c => c == '\n') + 1} lines){note}";
     }
 
     string FileEdit(JsonObject a)
     {
         var path = _ws.Resolve(Req(a, "path"), forWrite: true);
-        var text = File.ReadAllText(path);
+        var text = ReadSource(path);
         var old = S(a, "old_text") ?? throw new ToolException("'old_text' is required");
         var neu = S(a, "new_text") ?? "";
         if (old.Length == 0) throw new ToolException("old_text is empty");
@@ -408,8 +411,20 @@ Paths are confined to the workspace. Large outputs go to .okirom/ files - read t
         if (count > 1 && !B(a, "all", false)) throw new ToolException($"old_text occurs {count} times; add surrounding lines to make it unique, or pass all=true");
         int line = text[..text.IndexOf(old, StringComparison.Ordinal)].Count(c => c == '\n') + 1;
         text = B(a, "all", false) ? text.Replace(old, neu) : ReplaceFirst(text, old, neu);
+        var note = WriteSource(path, text, $"file_edit at line {line}");
+        return $"edited {_ws.Show(path)}: {(count > 1 ? count + " replacements" : "1 replacement")} starting at line {line}{note}";
+    }
+
+    /// A file's text: the app's editor copy when it is a source of the ROM open there (the user may have unsaved edits), else the disk.
+    internal string ReadSource(string path) => _server.Session?.SourceText(path) ?? File.ReadAllText(path);
+
+    /// Write a file: through the app when it is a source of the ROM open there (its editor, Lookup, Calibration pages and the
+    /// disassembly show the change at once; the result says how the build went), else to the disk. Returns a note for the result.
+    internal string WriteSource(string path, string text, string what)
+    {
+        if (_server.Session?.SetSource(path, text, what) is { } done) return "\n" + done;
         OkiRomSim.Core.SafeFile.WriteAllText(path, text);
-        return $"edited {_ws.Show(path)}: {(count > 1 ? count + " replacements" : "1 replacement")} starting at line {line}";
+        return "";
     }
 
     static string ReplaceFirst(string s, string a, string b)
@@ -421,7 +436,7 @@ Paths are confined to the workspace. Large outputs go to .okirom/ files - read t
     string FileEditLines(JsonObject a)
     {
         var path = _ws.Resolve(Req(a, "path"), forWrite: true);
-        var raw = File.ReadAllText(path);
+        var raw = ReadSource(path);
         string nl = raw.Contains("\r\n") ? "\r\n" : "\n";
         var lines = raw.Replace("\r\n", "\n").Split('\n').ToList();
         int s = I(a, "start_line", -1), e = I(a, "end_line", -1);
@@ -430,8 +445,8 @@ Paths are confined to the workspace. Large outputs go to .okirom/ files - read t
         var add = text.Length == 0 ? [] : text.Replace("\r\n", "\n").TrimEnd('\n').Split('\n').ToList();
         lines.RemoveRange(s - 1, e - s + 1);
         lines.InsertRange(s - 1, add);
-        OkiRomSim.Core.SafeFile.WriteAllText(path, string.Join(nl, lines));
-        return $"{_ws.Show(path)}: replaced {e - s + 1} line(s) at {s} with {add.Count}; the file now has {lines.Count} lines";
+        var note = WriteSource(path, string.Join(nl, lines), $"file_edit_lines {s}-{e}");
+        return $"{_ws.Show(path)}: replaced {e - s + 1} line(s) at {s} with {add.Count}; the file now has {lines.Count} lines{note}";
     }
 
     // ------------------------------------------------------------------ build

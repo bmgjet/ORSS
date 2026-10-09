@@ -227,6 +227,7 @@ public sealed class MainWindow : Window
         SizeChanged += (_, e) => _chip.MaxHeight = Math.Max(240, e.NewSize.Height * 0.46);
         _editor.TextChanged += (_, _) => OnEditorChanged();
         _editor.WordDoubleClicked += OnWordDoubleClicked;
+        _editor.WordMenu = EditorMenu;
         _checkTimer.Tick += (_, _) => { _checkTimer.Stop(); CheckBuildNeeded(); };
 
         // the shipped ROM sources: the formulas of tables Detect places from them
@@ -262,6 +263,8 @@ public sealed class MainWindow : Window
             _calibration.UpdateEmulator();
             _datalog.UpdateConnect();
         };
+        // the Transmission page: the gearbox presets and Gear learning, above its rows
+        FeaturePageView.TopExtensions.Add(("transmission", _ => GearboxPanel.Build(_host, _datalog.Engine, m => SetStatus(m), () => this)));
         _plugins.AddBar(_pluginBarSim);
         _plugins.AddBar(_pluginBarTuner);
         foreach (var p in _settings.Plugins.Where(p => p.Enabled))
@@ -554,7 +557,8 @@ public sealed class MainWindow : Window
         var bar = new WrapPanel { Margin = new Thickness(6, 4) };
         bar.Children.Add(FileMenu());
         bar.Children.Add(new Separator { Width = 8 });
-        // the calibration editor's Tools, Emulator, Datalogging, Back, Undo and Redo come onto this line in Tuner mode; the status goes beside its Definition bar (and to the Debug page's log)
+        // the calibration editor's Tools, Emulator, Datalogging, Back, Undo and Redo come onto this line in Tuner mode;
+        // the status goes beside its Definition bar (and to the Debug page's log)
         bar.Children.Add(_tunerSlot);
         bar.Children.Add(_pluginsMenuTuner);
         bar.Children.Add(_pluginBarTuner);
@@ -578,6 +582,7 @@ public sealed class MainWindow : Window
     readonly StackPanel _pluginBarSim = new() { Orientation = Orientation.Horizontal }, _pluginBarTuner = new() { Orientation = Orientation.Horizontal };
     PluginManager? _plugins;
     internal PluginManager? PluginsForCheck => _plugins;
+    internal CalibrationView CalibrationForCheck => _calibration;
     // the Plugins drop-down on each bar: shown only while a plugin is loaded (Settings > Plugins picks them)
     Button? _pluginsMenuSimField, _pluginsMenuTunerField;
     Button _pluginsMenuSim => _pluginsMenuSimField ??= PluginsMenu();
@@ -848,7 +853,8 @@ public sealed class MainWindow : Window
         _calibration.TargetLow = TargetMap.Parse(s.AfrTargetLow);
         _calibration.TargetHigh = TargetMap.Parse(s.AfrTargetHigh);
         _calibration.WidebandCorrection = LookupCurve.Parse(s.WidebandCorrection);
-        // a Demon datalogs over the emulator's own port: the datalog goes through it (or logs the simulator), whatever port was set before the port, the protocol or the line speed changed while logging: the link starts again with them, and the page and the graph follow what it sends
+        // a Demon datalogs over the emulator's own port: the datalog goes through it (or logs the simulator), whatever port was set before
+        // the port, the protocol or the line speed changed while logging: the link starts again with them, and the page and the graph follow what it sends
         _datalog.SetLink(s.EmulatorType == "Demon" && s.DatalogPort != "simulator" ? "emulator" : s.DatalogPort, s.DatalogProtocol, s.DatalogBaud);
         var picks = s.DatalogStreamChannels is { Count: > 0 } sc ? sc : [.. OkiRomSim.Calibration.DatalogChannels.Defaults];
         bool picksChanged = !picks.SequenceEqual(OkiRomSim.Calibration.ChannelStream.Selected);
@@ -982,12 +988,7 @@ public sealed class MainWindow : Window
             var transfer = McpTransferDir;
             try { Directory.CreateDirectory(transfer); if (!roots.Contains(transfer)) roots.Add(transfer); }
             catch (Exception ex) { AppLog.Error("mcp", "could not make the transfer folder", ex); }
-            var session = new AppMcpSession(_host, _datalog,
-                () => { if (_current != null) _buffers[_current] = EditorText; return _buffers.Select(kv => (kv.Key, kv.Value)).ToList(); },
-                m => Dispatcher.UIThread.Post(() => SetStatus(m)),
-                () => (_settings.DatalogPort, _settings.DatalogProtocol, _settings.DatalogBaud),
-                (rom, name) => OpenRomImage(rom, name),
-                path => OpenFile(path));
+            var session = NewMcpSession();
             var workspace = new OkiRomSim.Mcp.Workspace(roots) { ReadOnly = s.McpReadOnly, TransferDir = transfer };
             // a client on another machine can ask for a folder here; the user decides
             workspace.AskToAddRoot = (folder, why) => Dispatcher.UIThread.Invoke(async () =>
@@ -1016,6 +1017,19 @@ public sealed class MainWindow : Window
             SetStatus("MCP server " + _mcpState);
         }
     }
+
+    /// The app as an MCP client sees it: the ROM open here, its editor, datalog and simulator.
+    AppMcpSession NewMcpSession() => new(_host, _datalog,
+        () => { if (_current != null) _buffers[_current] = EditorText; return _buffers.Select(kv => (kv.Key, kv.Value)).ToList(); },
+        m => Dispatcher.UIThread.Post(() => SetStatus(m)),
+        () => (_settings.DatalogPort, _settings.DatalogProtocol, _settings.DatalogBaud),
+        (rom, name) => OpenRomImage(rom, name),
+        path => OpenFile(path))
+    { SourceTextFn = McpSourceText, SetSourcesFn = McpSetSources };
+
+    /// An MCP server on the app's session, for the UI check (no HTTP: its Handle is called directly).
+    internal OkiRomSim.Mcp.McpServer McpServerForCheck(string root) =>
+        new(new OkiRomSim.Mcp.Workspace([root]), NewMcpSession());
 
     void StopMcp()
     {
@@ -1094,12 +1108,35 @@ public sealed class MainWindow : Window
     /// Problems: the build's errors and warnings, the worst first.
     Control ProblemsPanel()
     {
+        // right-click: copy the message (or the whole line, or every line) to paste into a search or a message
+        _problems.MultiSelect = true;
+        _problems.KeyOf = r => string.Join("\t", r.Cells.Select(c => c.Text));
+        _problems.SelectionMenu = rows =>
+        {
+            string Line(DataList.Row r) => string.Join("  ", r.Cells.Skip(1).Select(c => c.Text).Where(t => t.Length > 0));
+            string Msg(DataList.Row r) => r.Cells.Length > 3 ? r.Cells[3].Text : Line(r);
+            return
+            [
+                (rows.Count == 1 ? "Copy message" : $"Copy {rows.Count} messages", () => CopyText(string.Join(Environment.NewLine, rows.Select(Msg)))),
+                (rows.Count == 1 ? "Copy line (severity, where, message)" : $"Copy {rows.Count} lines", () => CopyText(string.Join(Environment.NewLine, rows.Select(Line)))),
+                ("Copy all", () => CopyText(string.Join(Environment.NewLine, _problems.Rows.Where(r => !r.Heading).Select(Line)))),
+            ];
+        };
         var g = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
         var bar = Panels.BarAround(_problemSummary);
         Grid.SetRow(bar, 0); g.Children.Add(bar);
         Grid.SetRow(_problems, 1); g.Children.Add(_problems);
         return g;
     }
+    async void CopyText(string text)
+    {
+        try
+        {
+            if (Clipboard is { } cb) { await cb.SetTextAsync(text); SetStatus($"copied {text.Split('\n').Length} line(s)"); }
+        }
+        catch (Exception ex) { SetStatus("could not copy: " + ex.Message); }
+    }
+
     readonly TextBlock _problemSummary = new() { Text = "not built yet", FontSize = 12, Margin = new Thickness(10, 6), Opacity = 0.85 };
 
     /// The build's own diagnostics as last shown, so the setup warnings below can be brought up to date without a build.
@@ -1206,8 +1243,17 @@ public sealed class MainWindow : Window
             ("Find references to it", () => { _lookupQ.Text = Hex(r.Address); DoXref(); }),
             ("Copy the address", () => _ = Clipboard?.SetTextAsync(Hex(r.Address))),
         };
-        _traceList.Menu = r => r.Address < 0 ? [] : new (string, Action)[] { SetBreak(r.Address), ("Go to it in the source", () => GoToAddress(r.Address)) };
-        _disList.Menu = r => r.Address < 0 ? [] : new (string, Action)[] { SetBreak(r.Address), ("Go to it in the source", () => GoToAddress(r.Address)) };
+        (string, Action)[] CodeMenu(DataList.Row r) => r.Address < 0 ? [] :
+        [
+            SetBreak(r.Address),
+            ("Go to it in the source", () => GoToAddress(r.Address)),
+            ("Find references to it", () => { _lookupQ.Text = Hex(r.Address); DoXref(); SelectTab("Lookup & breakpoints"); }),
+            ("-", () => { }),
+            ("Copy the address", () => _ = Clipboard?.SetTextAsync(Hex(r.Address))),
+            ("Copy the line", () => _ = Clipboard?.SetTextAsync(string.Join("  ", r.Cells.Select(c => c.Text).Where(t => t.Length > 0)))),
+        ];
+        _traceList.Menu = CodeMenu;
+        _disList.Menu = CodeMenu;
         _bpList.Menu = r => r.Address < 0 ? [] : new (string, Action)[]
         {
             r.Tag is false
@@ -1428,7 +1474,8 @@ public sealed class MainWindow : Window
             }
             else
             {
-                // an image on its own: its build-info table says what it was built with, and that build, made again, says where everything is - when it is the same skeleton (the code matches); otherwise the names in its definitions file
+                // an image on its own: its build-info table says what it was built with, and that build, made again, says where
+                // everything is - when it is the same skeleton (the code matches); otherwise the names in its definitions file
                 foreach (var cand in Skeleton.Find(NewRomWindow.Templates()))
                     if (SkeletonRebuild.FunctionsIn(oldImage, cand) is { } f) { sk = cand; functions = f; break; }
                 if (sk == null || functions == null)
@@ -1880,7 +1927,8 @@ public sealed class MainWindow : Window
                       (dis.RoundTrips ? "; rebuilds byte-identical" : " -- " + dis.Note) + note +
                       $". Unsaved: Ctrl+S writes {Label(asmPath)}";
         SetStatus(opened, sticky: true);
-        // no definitions file beside it: its maps are found now, the way Detect finds them - a .bin read out of the emulator or off a chip opens with its tables, not with an empty list that looks as if nothing came back
+        // no definitions file beside it: its maps are found now, the way Detect finds them - a .bin read out of the
+        // emulator or off a chip opens with its tables, not with an empty list that looks as if nothing came back
         if (_host.Assembly != null && _host.Defs().Items.Count == 0) _ = DetectOnOpen(opened);
     }
 
@@ -1916,7 +1964,8 @@ public sealed class MainWindow : Window
         _lookupRows = []; _lookupLines = [];
         SetItems(_lookupList, []); _lookupData.SetRows([]);
         _lastSourceShown = ""; _lastPcShown = -1;
-        // the emulator and the datalog belong to the ROM that was open: a different project starts with both disconnected - except the ROM just read out of the emulator, which is the one the car is running
+        // the emulator and the datalog belong to the ROM that was open: a different project starts with both disconnected -
+        // except the ROM just read out of the emulator, which is the one the car is running
         _datalog.StopPlayback();
         if (_keepLinksFor != null && SamePath(_keepLinksFor, path)) _keepLinksFor = null;
         else
@@ -2132,7 +2181,8 @@ public sealed class MainWindow : Window
 
     // ------------------------------------------------------------------ build
 
-    /// Put new text on lines of a source file (1-based line -> text), in its buffer: the file is marked edited (saved with the others), and the build counts as this text when the running image already holds the bytes the new lines make (a hard-disabled trouble code).
+    /// Put new text on lines of a source file (1-based line -> text), in its buffer: the file is marked edited (saved with the others), and the
+    /// build counts as this text when the running image already holds the bytes the new lines make (a hard-disabled trouble code).
     bool ReplaceSourceLines(string file, Dictionary<int, string> lines)
     {
         var full = Path.GetFullPath(file);
@@ -2141,7 +2191,10 @@ public sealed class MainWindow : Window
         string nl = text.Contains("\r\n") ? "\r\n" : "\n";
         var all = text.Split('\n').Select(l => l.TrimEnd('\r')).ToList();
         foreach (var (line, newText) in lines)
-            if (line >= 1 && line <= all.Count) all[line - 1] = newText;
+            if (line >= 1 && line <= all.Count)
+            {
+                all[line - 1] = FaultDisable.KeepLabel(all[line - 1], newText);
+            }
         var updated = string.Join(nl, all);
         var key = _buffers.Keys.FirstOrDefault(k => SamePath(k, full)) ?? full;
         bool sameAsBuilt = _builtTexts.TryGetValue(full, out var built) && built == text;
@@ -2154,7 +2207,43 @@ public sealed class MainWindow : Window
         return true;
     }
 
-    string? ReadBuffer(string fullPath) => _buffers.FirstOrDefault(kv => SamePath(kv.Key, fullPath)).Value;
+    string? ReadBuffer(string fullPath) => _buffers.FirstOrDefault(kv => SamePath(kv.Key, fullPath)).Value
+        // a project from another PC: the included files it carried, where this PC does not have them
+        ?? (File.Exists(fullPath) ? null : _included.FirstOrDefault(kv => SamePath(kv.Key, fullPath)).Value ?? FromTemplates(fullPath));
+
+    /// A file a project's build includes that is neither on this PC where it was nor carried in the project (one saved
+    /// before projects carried their includes): the app's own copy of it, from Templates (a skeleton's features.inc and
+    /// modules), found by its folder and name.
+    static string? FromTemplates(string missing)
+    {
+        try
+        {
+            var templates = NewRomWindow.Templates();
+            if (templates == null) return null;
+            string name = Path.GetFileName(missing), folder = Path.GetFileName(Path.GetDirectoryName(missing) ?? "");
+            foreach (var candidate in new[] { Path.Combine(templates, folder, name), Path.Combine(templates, name) })
+                if (File.Exists(candidate)) { AppLog.Info("project", $"{missing} is not here: using the app's {candidate}"); return File.ReadAllText(candidate); }
+        }
+        catch { }
+        return null;
+    }
+
+    /// Files a project carried that the build includes (its modules, features.inc), by their path on the PC it was saved on.
+    readonly Dictionary<string, string> _included = new(StringComparer.OrdinalIgnoreCase);
+
+    /// Every file the last build read that is not open: so a project carries its includes (a skeleton ROM's
+    /// features.inc and modules) and builds on a PC that does not have them.
+    List<ProjectSource> IncludedSources()
+    {
+        var list = new List<ProjectSource>();
+        foreach (var f in _host.Assembly?.Files ?? [])
+        {
+            if (_buffers.Keys.Any(k => SamePath(k, f))) continue;
+            string? text = File.Exists(f) ? File.ReadAllText(f) : _included.FirstOrDefault(kv => SamePath(kv.Key, f)).Value;
+            if (text != null) list.Add(new ProjectSource { Path = f, Text = text, Included = true });
+        }
+        return list;
+    }
 
     void Build()
     {
@@ -2194,6 +2283,88 @@ public sealed class MainWindow : Window
         if (SelectedTab() == "Calibration") _calibration.Refresh();
         _lastSourceShown = "";
         RefreshDisassembly(true);
+    }
+
+    // ---------------------------------------------------------------- MCP clients editing the source (annotating a ROM)
+
+    /// A source file of the ROM open here: the main build file, or any file its build read.
+    bool IsBuildFile(string path)
+    {
+        if (_target == null) return false;
+        if (SamePath(path, _target) || _buffers.Keys.Any(k => SamePath(k, path))) return true;
+        var asm = _host.Assembly;
+        return asm != null && (asm.SourceMap.Any(e => SamePath(e.File, path)) || asm.Symbols.Values.Any(x => x.File != null && SamePath(x.File, path)));
+    }
+
+    /// The editor's copy of a source file of the open ROM (unsaved edits included), or null: then the file on disk is it.
+    internal string? McpSourceText(string path) => Dispatcher.UIThread.Invoke(() =>
+    {
+        if (!IsBuildFile(path)) return null;
+        if (_current != null && SamePath(_current, path)) return EditorText;
+        return ReadBuffer(Path.GetFullPath(path));
+    });
+
+    /// New text for source files of the open ROM from an MCP client: into the editor (the place kept), saved where the user has
+    /// no unsaved edits of their own, then built and patched in without a reset so Lookup & breakpoints, the disassembly and the
+    /// Calibration pages show the new names straight away. Null when none of the files is one of its sources.
+    internal string? McpSetSources(IReadOnlyList<(string Path, string Text)> files, string what)
+    {
+        var mine = Dispatcher.UIThread.Invoke(() => files.Where(f => IsBuildFile(f.Path)).ToList());
+        if (mine.Count == 0) return null;
+        // files of no use to the build go to the disk as they are
+        foreach (var f in files.Where(f => !mine.Contains(f))) OkiRomSim.Core.SafeFile.WriteAllText(f.Path, f.Text);
+        var (target, snapshot) = Dispatcher.UIThread.Invoke(() =>
+        {
+            foreach (var (path, text) in mine)
+            {
+                var key = _buffers.Keys.FirstOrDefault(k => SamePath(k, path)) ?? Path.GetFullPath(path);
+                bool userEdits = _dirty.Any(d => SamePath(d, path));
+                _buffers[key] = text;
+                if (_current != null && SamePath(_current, path) && !_editorParked)
+                {
+                    _suppressEdit = true;
+                    _editor.ReplaceKeepingView(text);
+                    _suppressEdit = false;
+                }
+                if (userEdits) _dirty.Add(key);
+                else { try { OkiRomSim.Core.SafeFile.WriteAllText(path, text); } catch (Exception ex) { AppLog.Error("mcp", $"could not save {path}", ex); _dirty.Add(key); } }
+            }
+            UpdateDocHeader();
+            var snap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (k, v) in _buffers) snap[Path.GetFullPath(k)] = v;
+            return (_target, snap);
+        });
+        if (target == null) return "saved (nothing is built here)";
+        string? Read(string f) => snapshot.TryGetValue(Path.GetFullPath(f), out var t) ? t : ReadBuffer(Path.GetFullPath(f));
+        var res = _host.PatchBuild(target, Read, force: false);
+        string note = !res.Success && res.Diagnostics.Any(d => d.Severity == Severity.Error)
+            ? $"the build now FAILS ({res.Diagnostics.Count(d => d.Severity == Severity.Error)} error(s)):\n" +
+              string.Join("\n", res.Diagnostics.Where(d => d.Severity == Severity.Error).Take(8).Select(d => $"  {Path.GetFileName(d.File)}:{d.Line}: {d.Message}"))
+            : !res.Success ? $"not loaded: {res.Note} (Build in the app loads it)"
+            : res.Ranges.Count == 0 ? "the app shows it (the code is unchanged: names, comments and definitions refreshed)"
+            : $"the app shows it; {res.Note}";
+        Dispatcher.UIThread.Post(() =>
+        {
+            _diags = res.Diagnostics;
+            ShowProblems([.. _diags.OrderByDescending(d => d.Severity)]);
+            if (res.Success && res.Assembly != null)
+            {
+                var built = res.Assembly.SourceMap.Select(e => e.File).Append(Path.GetFullPath(target)).Distinct(StringComparer.OrdinalIgnoreCase);
+                _builtTexts = built.ToDictionary(f => f, f => ReadBuffer(f) ?? (File.Exists(f) ? File.ReadAllText(f) : ""), StringComparer.OrdinalIgnoreCase);
+                _builtImage = [.. res.Assembly.Image];
+                UpdateBuildButton(false, "Up to date: the running ROM has the source on screen.");
+            }
+            else UpdateBuildButton(true, "An MCP client changed the source and it was not patched in: Build loads it.");
+            _editor.SetDiagnostics(_diags.Where(d => SamePath(d.File, _current)).Select(d => (d.Line, d.Severity == Severity.Error)).ToList());
+            _calibration.Refresh();
+            _lastSourceShown = "";
+            _bpShown = null;
+            RefreshDisassembly(true);
+            RedoLookup();
+            SetStatus($"MCP: {what} - {note.Split('\n')[0]}");
+        });
+        AppLog.Write(LogKind.Mcp, "mcp", $"{what}: {string.Join(", ", mine.Select(m => Path.GetFileName(m.Path)))}", note);
+        return note;
     }
 
     /// Build and patch the running ROM with what changed (SimHost.PatchBuild): code and tables take effect without a reset.
@@ -2317,7 +2488,8 @@ public sealed class MainWindow : Window
             var p = new ProjectData
             {
                 Target = _target, Current = _current, CaretLine = _editor.CaretLine, FirstVisibleLine = _editor.FirstVisibleLine,
-                Sources = [.. _buffers.Select(kv => new ProjectSource { Path = kv.Key, Text = kv.Value, Unsaved = _dirty.Contains(kv.Key) })],
+                Sources = [.. _buffers.Select(kv => new ProjectSource { Path = kv.Key, Text = kv.Value, Unsaved = _dirty.Contains(kv.Key) }),
+                           .. IncludedSources()],
                 MemoryAddress = _memAddr.Text ?? "", DisassemblyAddress = _disAddr.Text ?? "",
                 LookupQuery = _lookupQ.Text ?? "", LookupLines = [.. _lookupLines],
                 SelectedTab = SelectedTab(), SpeedIndex = _settings.SpeedIndex,
@@ -2456,8 +2628,11 @@ public sealed class MainWindow : Window
             try { ApplyRomSettings(System.Text.Json.JsonSerializer.Deserialize<AppSettings>(sj)); }
             catch (Exception ex) { AppLog.Error("project", "settings.json is not valid; keeping the current settings", ex); }
         _buffers.Clear(); _dirty.Clear(); _diags.Clear();
+        _included.Clear();
         foreach (var src in p.Sources)
         {
+            // what the build includes without it being open (a skeleton's modules): kept for the build, not shown
+            if (src.Included) { _included[src.Path] = src.Text; continue; }
             _buffers[src.Path] = src.Text;
             bool differs = !File.Exists(src.Path) || File.ReadAllText(src.Path) != src.Text;
             if (src.Unsaved || differs) _dirty.Add(src.Path);
@@ -2547,6 +2722,17 @@ public sealed class MainWindow : Window
     internal SimHost Host => _host;
     internal DatalogView DatalogPanel => _datalog;
     internal void LookupForCheck(string q) { _lookupQ.Text = q; DoXref(); }
+    /// The UI check: the source editor's menu on a label, and the disassembly's menu opened twice (only one may stay open).
+    internal string MenusForCheck(string label)
+    {
+        GoToLabelForCheck(label);
+        var words = string.Join(" | ", EditorMenu(label, _editor.CaretLine).Select(i => i.Text));
+        int dis = _disList.MenuForCheck(0);
+        dis = _disList.MenuForCheck(1);
+        int ed = _editor.OpenMenuForCheck();
+        return $"editor on {label}: {words} ({ed} entries); disassembly menus open after two right-clicks: {dis}";
+    }
+    internal void GoToLabelForCheck(string name) { if (_host.Assembly?.Symbols.GetValueOrDefault(name) is { } sy) GoToAddress((int)sy.Value); }
     internal void OpenFileForCheck(string path) => OpenFileNow(path);
     /// A Demon datalogs over the emulator's own port: when the emulator connects, the datalog is connected too (once per connection, so stopping the datalog by hand is left alone), and disconnecting the emulator stops it.
     int _demonLinked;
@@ -2624,7 +2810,8 @@ public sealed class MainWindow : Window
     {
         if (_tuner)
         {
-            // Tuner mode: no simulator to look at. Where the engine is on the map goes straight from each frame (DatalogView posts it as it arrives); this is the slower rest - values, gauges, the emulator, the overlay
+            // Tuner mode: no simulator to look at. Where the engine is on the map goes straight from each frame
+            // (DatalogView posts it as it arrives); this is the slower rest - values, gauges, the emulator, the overlay
             _datalog.Tick(null);
             _calibration.Tick();
             if ((DateTime.UtcNow - _lastSlowTuner).TotalMilliseconds >= Perf.SidePanelsMs)
@@ -2642,7 +2829,8 @@ public sealed class MainWindow : Window
         _cpu.Update(s, s.Label.Length > 0 ? s.Label : _host.NearestLabel(s.Pc), s.HotWindow > 0
             ? $"hot {Hex(s.HotAddress)} {_host.NearestLabel(s.HotAddress)} {100.0 * s.HotCount / s.HotWindow:F0}% of the recent window · coverage {s.Coverage} addresses"
             : "");
-        // the call stack, outputs and ports change less than the registers: a few times a second is plenty (and while stopped, once per step)
+        // the call stack, outputs and ports change less than the registers: a few times a second is plenty (and while
+        // stopped, once per step)
         if (!s.Running || (DateTime.UtcNow - _lastSidePanels).TotalMilliseconds >= Perf.SidePanelsMs)
         {
             _lastSidePanels = DateTime.UtcNow;
@@ -2727,6 +2915,45 @@ public sealed class MainWindow : Window
     string? _bpShown;
 
     /// Double-click in the source: a label or address of a defined table/setting opens it on the Calibration tab; a code label jumps to it.
+    /// The source editor's right-click entries for the word under the caret: its definition, its table, its references, and a breakpoint on the line.
+    IEnumerable<(string Text, Action Run)> EditorMenu(string word, int line)
+    {
+        var list = new List<(string, Action)>();
+        word = word.Trim().TrimStart('#').TrimEnd(',', ':');
+        int addr = -1;
+        if (word.Length > 0)
+        {
+            var hex = word.EndsWith("h", StringComparison.OrdinalIgnoreCase) ? word[..^1] : word;
+            if (!_host.Defs().TryResolve(word, out addr) && !int.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out addr)) addr = -1;
+        }
+        bool label = word.Length > 0 && _host.Assembly?.Symbols.TryGetValue(word, out var sym) == true && sym.Kind == SymbolKind.Label && sym.Value < Bus.RomSize;
+        if (label)
+        {
+            int at = (int)_host.Assembly!.Symbols[word].Value;
+            var src = _host.Assembly.Lookup(at);
+            if (src != null && !(SamePath(src.File, _current) && src.Line == line)) list.Add(($"Go to the definition of {word}", () => GoToAddress(at)));
+            addr = at;
+        }
+        if (addr >= 0 && addr < Bus.RomSize && _host.Defs().Items.FirstOrDefault(i => i.Contains(addr)) is { } item)
+            list.Add(($"Go to the table {item.Name}", () => { if (_calibration.ShowAddress(addr)) { SelectTab("Calibration"); SetStatus($"{word} = {Hex(addr)}: opened on the Calibration tab"); } }));
+        if (word.Length > 0 && (label || addr >= 0))
+        {
+            list.Add(($"Find all references to {word}", () => { _lookupQ.Text = word; DoXref(); SelectTab("Lookup & breakpoints"); }));
+            if (addr >= 0) list.Add(($"Copy the address of {word} ({Hex(addr)})", () => _ = Clipboard?.SetTextAsync(Hex(addr))));
+        }
+        if (_current != null)
+        {
+            if (list.Count > 0) list.Add(("-", () => { }));
+            list.Add(($"Toggle a breakpoint on line {line}", () =>
+            {
+                var r = _host.ToggleBreakpointAt(Path.GetFullPath(_current), line);
+                SetStatus(r.ok ? $"breakpoint {(r.enabled ? "set" : "cleared")} at {Hex(r.address)}" : r.error);
+                RefreshDisassembly(true);
+            }));
+        }
+        return list;
+    }
+
     void OnWordDoubleClicked(string word, int line)
     {
         word = word.Trim().TrimStart('#').TrimEnd(',', ':');
@@ -2897,8 +3124,18 @@ public sealed class MainWindow : Window
 
     // ------------------------------------------------------------------ lookup / xref
 
+    bool _lookupWasXref;
+
+    /// The lookup shown again, so names changed under it (an MCP rename) show.
+    void RedoLookup()
+    {
+        if ((_lookupQ.Text ?? "").Trim().Length == 0 || _lookupRows == null || _lookupRows.Count == 0) return;
+        if (_lookupWasXref) DoXref(); else DoLookup();
+    }
+
     void DoLookup()
     {
+        _lookupWasXref = false;
         var rows = _host.Lookup(_lookupQ.Text ?? "");
         _lookupRows = rows;
         _lookupLines = rows.Count == 0
@@ -2913,6 +3150,7 @@ public sealed class MainWindow : Window
 
     void DoXref()
     {
+        _lookupWasXref = true;
         var hits = _host.Xref(_lookupQ.Text ?? "");
         _lookupRows = [.. hits.Select(h => (h.Label, h.Address, 0, h.Kind))];
         _lookupLines = hits.Count == 0

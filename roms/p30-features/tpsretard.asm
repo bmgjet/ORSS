@@ -32,25 +32,22 @@ undef MODRAM_NEXT
 define MODRAM_NEXT (tpsr_age + 1)
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_TPSRETARD
-                JNE     tpsr_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_TPSRETARD == TICK_SLOT
                 CAL     tpsr_tick
-tpsr_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
-;@ TPSRetardEnable type=u8 flag=1 on=1 off=0 category="TPS tip-in retard" slot=tpsretard.enable desc="Tip-in retard on."
+;@ TPSRetardEnable type=u8 flag=1 on=1 off=0 category="TPS tip-in retard" slot=tpsretard.enable desc="Tip-in retard: pull timing for a moment when the throttle opens fast, to stop knock as the load jumps."
 tpsr_enable:            DB  000h
-;@ TPSRetardRate type=u8 formula=x/2.04 unit="% per 32 ms" decimals=1 category="TPS tip-in retard" slot=tpsretard.rate desc="Opening faster than this."
+;@ TPSRetardRate type=u8 formula=x/2.04 unit="% per 32 ms" decimals=1 category="TPS tip-in retard" slot=tpsretard.rate desc="It acts when the throttle opens faster than this."
 tpsr_rate:              DB  00ah
-;@ TPSRetardAmount type=u8 formula=x/4 unit=deg decimals=2 category="TPS tip-in retard" slot=tpsretard.amount desc="Timing pulled."
+;@ TPSRetardAmount type=u8 formula=x/4 unit=deg decimals=2 category="TPS tip-in retard" slot=tpsretard.amount desc="The timing pulled then."
 tpsr_amount:            DB  010h                 ; 4 degrees
-;@ TPSRetardDecay type=u8 formula=x/4 unit="deg per 32 ms" decimals=2 category="TPS tip-in retard" slot=tpsretard.decay desc="Given back this fast."
+;@ TPSRetardDecay type=u8 formula=x/4 unit="deg per 32 ms" decimals=2 category="TPS tip-in retard" slot=tpsretard.decay desc="The timing is given back at this rate afterwards."
 tpsr_decay:             DB  001h
-;@ TPSRetardRPM type=u16 formula=rpm_period_word category="TPS tip-in retard" slot=tpsretard.rpm desc="Only below this rpm."
+;@ TPSRetardRPM type=u16 formula=rpm_period_word category="TPS tip-in retard" slot=tpsretard.rpm desc="It only acts below this rpm."
 tpsr_rpm:               DW  00177h               ; 5000 rpm
 endif
 

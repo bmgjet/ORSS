@@ -64,7 +64,7 @@ public static class DatalogChannels
 
     /// The limiter modules, by their bit in lib.asm's cut-request words (MB_...).
     public static readonly string[] Limiters =
-        ["revlimit", "launch", "fts", "burnout", "boostcut", "ectpro", "antistart", "speedlimit", "ceiling", "leanpro", "traction", "gearlimit", "watermark"];
+        ["revlimit", "launch", "fts", "burnout", "boostcut", "ectpro", "antistart", "speedlimit", "ceiling", "leanpro", "traction", "gearlimit", "watermark", "remote", "popcorn"];
 
     static double RpmLog(int x) => Math.Pow(2, x / 64) * (500 + (7.8125 * (x % 64)));
     static int W(byte[] b) => b[0] | (b[1] << 8);
@@ -280,12 +280,19 @@ public static class DatalogChannels
         return 4 + l.Where(p => !p.Slow).Sum(p => p.Channel.Bytes) + (l.Any(p => p.Slow) ? 2 : 0);
     }
 
-    /// What the ECU sends a second, whatever the line could carry (38400 baud is 3840): it holds its serial interrupt off while its crank task runs, so about this many (measured in the simulator at 3000 rpm). Fewer bytes a frame is more frames.
-    public const double EcuBytesPerSecond = 870;
+    /// The datalog line's baud rate (Settings > Datalog), for the estimates below.
+    public static int LineBaud { get; set; } = 38400;
+
+    /// What a ROM made here sends a second at cruise (3000 rpm; measured in the simulator, SkeletonTest --dlrate). Far less than the line
+    /// could carry (3906 at 38400): every byte costs the ECU about 0.1 ms, so it paces them by its spark calculation (the byte budget, a few
+    /// bytes each time, fewer the higher the rpm) to never take the engine code's time - about 900 a second at idle, 400 at cruise, 150 at
+    /// 5000 rpm, 50-80 past 6500, whatever the line speed. Fewer bytes a frame is more frames.
+    public static double EcuBytesPerSecond(int baud) => baud >= 30000 ? 400 : baud / 10.0 * 0.8;
 
     /// Frames a second, and how often each slow byte comes round.
-    public static (double FramesPerSecond, double SlowEverySeconds) Rate(IEnumerable<StreamPick> picks, double bytesPerSecond = EcuBytesPerSecond)
+    public static (double FramesPerSecond, double SlowEverySeconds) Rate(IEnumerable<StreamPick> picks, double bytesPerSecond = 0)
     {
+        if (bytesPerSecond <= 0) bytesPerSecond = EcuBytesPerSecond(LineBaud);
         var l = picks.ToList();
         double fps = bytesPerSecond / FrameBytes(l);
         int slowBytes = l.Where(p => p.Slow).Sum(p => p.Channel.Bytes);

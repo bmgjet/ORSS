@@ -9,7 +9,9 @@ using Avalonia.Media;
 
 namespace OkiRomSim.Desktop;
 
-/// MSM66207 pinout (64-pin shrink DIP or 64-pin QFP, from the datasheet) and, behind the tab on its right edge, the board's 8255 PPI (the GPIO expander that drives the outputs: port B mirrors P0, port C mirrors P1; port A reads the switches) with its traces, coloured live from the simulator. Hover a pin to see what it is doing; click an input to change it.
+/// MSM66207 pinout (64-pin shrink DIP or 64-pin QFP, from the datasheet) and, behind the tab on its right edge, the board's 8255 PPI (the
+/// GPIO expander that drives the outputs: port B mirrors P0, port C mirrors P1; port A reads the switches) with its traces, coloured live
+/// from the simulator. Hover a pin to see what it is doing; click an input to change it.
 public sealed class ChipView : UserControl
 {
     /// A port A pin of the 8255 was clicked (its bit): the switches panel toggles it, so both show the same.

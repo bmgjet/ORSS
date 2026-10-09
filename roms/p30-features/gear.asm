@@ -19,13 +19,10 @@ endif
 
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_GEAR
-                JNE     gear_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_GEAR == TICK_SLOT
                 CAL     gear_tick
-gear_tick_skip:
+endif
 endif
 
 if XP == XP_CAL

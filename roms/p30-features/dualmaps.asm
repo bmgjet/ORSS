@@ -23,17 +23,14 @@ define NEED_MAPSELECT
 endif
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_DUALMAPS
-                JNE     dualmaps_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_DUALMAPS == TICK_SLOT
                 CAL     dualmaps_tick
-dualmaps_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
-;@ SecondMapsEnable type=u8 flag=1 on=1 off=0 category="Secondary maps" slot=dualmap.enable desc="Secondary maps on."
+;@ SecondMapsEnable type=u8 flag=1 on=1 off=0 category="Secondary maps" slot=dualmap.enable desc="Use a second full set of fuel and ignition maps while the chosen input is on (a race fuel or boost map on a switch)."
 dualmaps_enable:        DB  000h
 ;@ SecondMapsInput type=u8 formula=raw category="Secondary maps" slot=dualmap.input desc="The switch that selects them: 01h power steering, 02h service connector, 04h start, 08h VTEC pressure, 10h A/C, 20h brake, 40h park/neutral, 80h always."
                         DB  080h

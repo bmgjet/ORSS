@@ -71,6 +71,11 @@ public sealed record CalPage(string Key, string Name, string Category, string Bl
     public static readonly string[] InputsAlwaysOn = [.. GpoInputs[..7], "Always on", "Disabled"];
     public static readonly int[] InputValuesAlwaysOn = [1, 2, 4, 8, 16, 32, 64, 128, 0];
 
+    /// A setting whose description lists the one-hot switch inputs (a skeleton module's "01h power steering ... 80h always"):
+    /// the input byte the module library reads, serial inputs included.
+    public static bool IsOneHotInput(string description) =>
+        description.Contains("01h power steering", StringComparison.OrdinalIgnoreCase) && description.Contains("80h always", StringComparison.OrdinalIgnoreCase);
+
     /// A skeleton ROM with the serial inputs built in takes them as switch inputs too: C0h-C7h, on while the value is not 0.
     public static readonly string[] SerialSwitchInputs = [.. Enumerable.Range(1, 8).Select(i => $"Serial input {i} (on when not 0)")];
     public static readonly int[] SerialSwitchValues = [0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7];

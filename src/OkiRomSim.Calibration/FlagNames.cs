@@ -1,7 +1,9 @@
 // Copyright (c) bmgjet. All rights reserved.
 namespace OkiRomSim.Calibration;
 
-/// What the engine's flag bytes hold, bit by bit: worked out from the stock code that sets and reads each bit (the skeleton's p30 source). 116h-119h are the main loop's working copies of 216h-219h, so they share names. A bit no code uses has no channel. The board options (216h, 227h, some of 217h and 219h) are set once at start from the ROM's Option bytes.
+/// What the engine's flag bytes hold, bit by bit: worked out from the stock code that sets and reads each bit (the skeleton's
+/// p30 source). 116h-119h are the main loop's working copies of 216h-219h, so they share names. A bit no code uses has no channel.
+/// The board options (216h, 227h, some of 217h and 219h) are set once at start from the ROM's Option bytes.
 public static class FlagNames
 {
     /// A flag byte: what it is as a whole (its channel's name and the key its raw value is logged under) and its bits.
@@ -182,7 +184,8 @@ public static class FlagNames
     }
 }
 
-/// The eight RAM addresses of your own (the ROM's DatalogUserAddress): which address each is, and what the memory map says is there, so its channel carries that name ("ram_0b4_road_speed") rather than "RAM address 1".
+/// The eight RAM addresses of your own (the ROM's DatalogUserAddress): which address each is, and what the memory map says is
+/// there, so its channel carries that name ("ram_0b4_road_speed") rather than "RAM address 1".
 public static class UserRam
 {
     static readonly (int Address, string Name)[] _picked = new (int, string)[8];
@@ -190,7 +193,8 @@ public static class UserRam
     /// Set from the ROM open: the address picked in each slot (0 for none) and the memory map's name for it.
     public static void Set(int slot, int address, string? name) { if (slot is >= 0 and < 8) { _picked[slot] = (address, name ?? ""); Known = true; } }
 
-    /// The ROM open said which addresses are picked: a slot with none is not logged. (A car logged with no ROM open: every slot is logged as ram1-8.)
+    /// The ROM open said which addresses are picked: a slot with none is not logged. (A car logged with no ROM open: every slot
+    /// is logged as ram1-8.)
     public static bool Known { get; private set; }
 
     public static (int Address, string Name) At(int slot) => slot is >= 0 and < 8 ? _picked[slot] : (0, "");

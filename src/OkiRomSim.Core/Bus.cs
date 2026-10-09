@@ -1,4 +1,5 @@
-// Copyright (c) bmgjet. All rights reserved. OKI MSM66207 Memory Bus & Peripheral Simulation.
+// Copyright (c) bmgjet. All rights reserved.
+// OKI MSM66207 Memory Bus & Peripheral Simulation.
 
 namespace OkiRomSim.Core;
 
@@ -184,7 +185,11 @@ public sealed class Bus
     public bool VtecSolenoidActive => Is66911 ? (Ppi.Read(2) & 0xC0) != 0xC0 : IsOutput(1, 0) && Latch(1, 0);
     public bool InjectorOpen(int n) => Is66911 ? P66911.InjectorOpen(n) : IsOutput(2, n) && !Latch(2, n);
 
-    // Injector pulse width. P2.0-P2.3 only select the injector: the ROM pulls the line low to open it and every timer-0 compare match closes one, the one opened longest ago (int_timer_0 sets TMR0 for the next close in opening order). At light load a pulse ends before the next one starts; at high load it outlasts the gap between injections, and the ROM pulls the still-open injector's line again beside the new one and lets it go at once - a re-select of an open injector, not a new pulse.
+    // Injector pulse width. P2.0-P2.3 only select the injector: the ROM pulls the line low to open it and every
+    // timer-0 compare match closes one, the one opened longest ago (int_timer_0 sets TMR0 for the next close in
+    // opening order). At light load a pulse ends before the next one starts; at high load it outlasts the gap
+    // between injections, and the ROM pulls the still-open injector's line again beside the new one and lets it
+    // go at once - a re-select of an open injector, not a new pulse.
     readonly List<(int Inj, ulong At)> _injOpen = [];
     /// Last measured pulse width per injector, microseconds.
     public readonly uint[] InjectorPulseUs = new uint[4];
@@ -243,6 +248,15 @@ public sealed class Bus
 
     /// Bit-time for the modeled UART, in machine cycles. 10 bits at the diagnostic link's 10,400 baud is ~960us; the exact rate only matters for relative timing, so this stays a single tunable.
     public uint SerialByteCycles = (uint)(960 * CyclesPerUs);
+
+    public const ushort SfrSttmr = 0x49, SfrSttmc = 0x4A;
+
+    /// The baud rate the ROM set its serial timer to (0 when it has not started it): machine clock / 8 / (256 - STTMR).
+    /// At 10 MHz F8h is 39,063 (the "38400" setting), FBh 62,500, DFh 9,470.
+    public int RomSerialBaud => Ram[SfrSttmc] == 0 ? 0 : (int)(CpuHz / 8 / (ulong)(256 - Ram[SfrSttmr]));
+
+    /// Machine cycles one transmitted byte takes: ten bit times at the ROM's own baud rate, or SerialByteCycles before it set one.
+    public uint TxByteCycles() => Ram[SfrSttmc] == 0 ? SerialByteCycles : (uint)(80 * (256 - Ram[SfrSttmr]));
 
     /// Serial transmit-complete interrupt, vector-table slot 2 (int_serial_tx_vec at code address 0x000C).
     public const int IrqSerialTx = 2;
@@ -599,7 +613,7 @@ public sealed class Bus
             // a one-wire link: what the ECU sends comes straight back into its own receiver, and the stock Honda tester protocol sends each byte of its answer on the echo of the one before
             if (SerialEcho) QueueSerialRx([val], EchoByteCycles);
             // The byte is in flight; TickTimers raises the transmit-complete interrupt when it lands.
-            SerialTxCyclesRemaining = SerialByteCycles;
+            SerialTxCyclesRemaining = TxByteCycles();
         }
         else if (addr == SfrWdt)
         {
@@ -621,7 +635,9 @@ public sealed class Bus
             if (!IsOutput(2, n)) continue;
             if (Pins.JustFell(2, n) && !_injOpen.Exists(o => o.Inj == n))
             {
-                // a new injection: whatever is still open the ROM has just pulled low again beside it, so an open event whose line is not low closed without a match of its own (a cut, a reset) and must not take the next one
+                // a new injection: whatever is still open the ROM has just pulled low again beside it, so an open
+                // event whose line is not low closed without a match of its own (a cut, a reset) and must not
+                // take the next one
                 _injOpen.RemoveAll(o => !InjectorOpen(o.Inj));
                 _injOpen.Add((n, ElapsedCycles));
             }
@@ -850,7 +866,8 @@ public sealed class Bus
             // TCON bit 4 is the run bit; a stopped timer neither counts nor toggles its pin.
             if ((tcon & (1 << 4)) == 0) continue;
 
-            // Prescaler (in machine cycles). Only encodings 00b (/8) and 01b (/2, timer 1's 4x-faster rate) are attested by the P28 ROMs. (every division is a power of two: 8, 2, then 2 and 1 - a shift gives the same count as a 64-bit divide, at a fraction of the cost)
+            // Prescaler (in machine cycles). Only encodings 00b (/8) and 01b (/2, timer 1's 4x-faster rate) are attested by the P28 ROMs.
+            // (every division is a power of two: 8, 2, then 2 and 1 - a shift gives the same count as a 64-bit divide, at a fraction of the cost)
             int shift = ((tcon >> 5) & 0x03) switch
             {
                 0b00 => 3,

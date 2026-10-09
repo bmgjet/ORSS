@@ -42,13 +42,14 @@ public sealed class DatalogChannelsWindow : Window
         // a search box: there are over a hundred channels with the every-channel module
         var search = new TextBox { Watermark = "search the channels (knock, idle, limit, VTEC...)", Margin = new Thickness(0, 0, 0, 4) };
         list.Children.Add(search);
-        var rows = new List<(Control Row, Control Head, DatalogChannel Ch)>();
+        var rows = new List<(Control Row, Control Head, DatalogChannel Ch, string Hay)>();
+        // what a row is found by: everything it shows (the label, which for a function's byte names the function), its tooltip,
+        // its group and key - lower case, with and without spaces and underscores, every word typed found somewhere in it
+        static string Squash(string t) => new(t.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
         search.TextChanged += (_, _) =>
         {
-            var q = (search.Text ?? "").Trim();
-            foreach (var (row, _, ch) in rows)
-                row.IsVisible = q.Length == 0 || ch.Name.Contains(q, StringComparison.OrdinalIgnoreCase) || ch.Group.Contains(q, StringComparison.OrdinalIgnoreCase)
-                                || ch.Key.Contains(q, StringComparison.OrdinalIgnoreCase) || ch.Description.Contains(q, StringComparison.OrdinalIgnoreCase);
+            var words = (search.Text ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(Squash).Where(w => w.Length > 0).ToList();
+            foreach (var (row, _, _, hay) in rows) row.IsVisible = words.Count == 0 || words.All(hay.Contains);
             foreach (var g in rows.GroupBy(r => r.Head)) g.Key.IsVisible = g.Any(r => r.Row.IsVisible);
         };
         foreach (var group in DatalogChannels.All.GroupBy(c => c.Group))
@@ -84,7 +85,8 @@ public sealed class DatalogChannelsWindow : Window
                 row.Children.Add(slow);
                 row.Children.Add(on);
                 list.Children.Add(row);
-                rows.Add((row, headText, c));
+                string tip = ToolTip.GetTip(on) as string ?? "";
+                rows.Add((row, headText, c, Squash(string.Join(" ", text, tip, c.Name, c.Key, c.Group, c.Description, ModuleDebug.Describe(c.Key) ?? ""))));
             }
         }
 
@@ -202,7 +204,8 @@ public sealed class DatalogChannelsWindow : Window
         else _count.ClearValue(TextBlock.ForegroundProperty);
         ToolTip.SetTip(_count, (all > OldMost ? $"An older ROM (datalog version 3 or less) takes {OldMost} bytes and sends all of them in every frame: " +
                                                 $"{all - OldMost} byte(s) would be left out, the slow ones first.\n" : "") +
-                               $"The ECU sends about {DatalogChannels.EcuBytesPerSecond:0} bytes a second (it holds its serial interrupt off while its crank task runs), " +
+                               $"The ECU sends about {DatalogChannels.EcuBytesPerSecond(DatalogChannels.LineBaud):0} bytes a second at cruise: it paces them by its spark calculation " +
+                               "so logging never takes the engine code's time (about 900 at idle, 150 at 5000 rpm, 50-80 past 6500), " +
                                "so a shorter frame is more frames. A frame is A5h, the ECU's tick (two bytes), the fast channels, " +
                                "the slow channel's number and byte, and a checksum.");
     }

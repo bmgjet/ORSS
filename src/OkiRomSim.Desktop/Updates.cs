@@ -67,7 +67,23 @@ public static class Updater
     static string FileUrl(string site, string path) => Site(site) + "index.php?file=" + Uri.EscapeDataString(path);
 
     /// Where the app's own files are (the program, Templates...).
-    public static string Home => AppContext.BaseDirectory;
+    public static string Home => _home ?? AppContext.BaseDirectory;
+    static string? _home;
+
+    /// --update-check [folder]: run the check as the start-up one does, for the install in that folder, and print what it would offer.
+    public static int CheckFromCommandLine(string? folder)
+    {
+        if (folder != null) _home = Path.GetFullPath(folder) + Path.DirectorySeparatorChar;
+        try
+        {
+            var changes = Check(DefaultSite).GetAwaiter().GetResult();
+            Console.WriteLine($"{changes.Count} differ from {DefaultSite} (install: {Home}{(DeveloperBuild ? ", a developer build" : "")})");
+            foreach (var c in changes) Console.WriteLine($"  {(c.Recommended ? "OFFER" : "skip ")}  {c.Server.Path}: {c.Why}");
+            Console.WriteLine(changes.Any(c => c.Recommended) ? "the start-up check would say an update is available" : "the start-up check would say nothing");
+            return 0;
+        }
+        catch (Exception ex) { Console.WriteLine("check failed: " + ex.Message); return 1; }
+    }
 
     static bool IsProgram(string path) =>
         !path.Contains('/') && (path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase));

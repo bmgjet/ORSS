@@ -24,7 +24,8 @@ public sealed class GaugeControl : Control
         ToolTip.SetTip(this, $"{spec.Title}: the logged channel '{spec.Channel}', {spec.Min:0.##} to {spec.Max:0.##}. Drag to move it, drag the corner to resize.");
     }
 
-    /// The gauge in the units picked in Settings > Units: a channel kept in °C, km/h or kPa, on a gauge set up in that unit, reads (and is scaled, and warns) in °F, mph or psi instead. The layout keeps what was set; only the drawing changes.
+    /// The gauge in the units picked in Settings > Units: a channel kept in °C, km/h or kPa, on a gauge set up in that unit, reads (and is
+    /// scaled, and warns) in °F, mph or psi instead. The layout keeps what was set; only the drawing changes.
     string Native => _native ??= LogFrame.UnitOf(Spec.Channel);
     string? _native;
     bool Converts => Units.Of(Native) != null && Units.Shown(Native) != Native && (Spec.Unit.Length == 0 || Units.Label(Native).Equals(Spec.Unit.Trim(), StringComparison.OrdinalIgnoreCase));

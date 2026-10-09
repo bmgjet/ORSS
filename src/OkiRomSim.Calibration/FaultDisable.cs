@@ -3,7 +3,10 @@ using OkiRomSim.Core;
 
 namespace OkiRomSim.Calibration;
 
-/// A trouble code taken out of the ROM's code rather than masked: every instruction that latches its bit of the fault field ("MB 098h.3, C" - C5 98 3B - and "SB 098h.3" - C5 98 1B) is replaced with NOPs of the same length, so the check still runs but can never set the fault, and nothing after it moves. A code switched off on the error codes page can be switched back on by anyone; this one is gone from the ROM until the bytes are put back.
+/// A trouble code taken out of the ROM's code rather than masked: every instruction that latches its bit of the fault field
+/// ("MB 098h.3, C" - C5 98 3B - and "SB 098h.3" - C5 98 1B) is replaced with NOPs of the same length, so the check still runs but
+/// can never set the fault, and nothing after it moves. A code switched off on the error codes page can be switched back on by
+/// anyone; this one is gone from the ROM until the bytes are put back.
 public static class FaultDisable
 {
     /// One instruction that sets the fault bit.
@@ -11,7 +14,9 @@ public static class FaultDisable
 
     public const byte Nop = 0x00;
 
-    /// The instructions that set bit `bit` (0-47) of the fault field at `fieldBase`: each one only where an instruction really starts (the build's source map says so), so a table byte that happens to read C5 98 3B is never touched. Without a source map the whole image is searched, which only a raw ROM needs.
+    /// The instructions that set bit `bit` (0-47) of the fault field at `fieldBase`: each one only where an instruction really starts
+    /// (the build's source map says so), so a table byte that happens to read C5 98 3B is never touched. Without a source map the whole
+    /// image is searched, which only a raw ROM needs.
     public static List<Site> Find(byte[] rom, int fieldBase, int bit, IReadOnlyList<(int Address, int Length, string File, int Line)>? code = null)
     {
         byte addr = (byte)(fieldBase + (bit / 8));
@@ -42,6 +47,15 @@ public static class FaultDisable
     /// The NOPs that take the sites out.
     public static List<BytePatch> Patches(IEnumerable<Site> sites) =>
         [.. sites.SelectMany(s => Enumerable.Range(0, s.Original.Length).Select(i => new BytePatch(s.Address + i, Nop)))];
+
+    /// A source line replaced, keeping the label at its start (code jumps to it: without it every jump there is an
+    /// undefined symbol).
+    public static string KeepLabel(string original, string replacement)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(original, @"^\s*([A-Za-z_.$?@][\w.$?@]*):");
+        if (!m.Success || replacement.TrimStart().StartsWith(m.Groups[1].Value + ":", StringComparison.Ordinal)) return replacement;
+        return m.Groups[1].Value + ":" + (replacement.Length > 0 && char.IsWhiteSpace(replacement[0]) ? replacement : " " + replacement);
+    }
 
     /// The source line a site becomes: the same three bytes of NOP, with what was there and why in its comment.
     public static string SourceLine(Site s, int code, string indent = "    ") =>

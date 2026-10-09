@@ -53,6 +53,53 @@ public static class ModulePages
                 S($"gpo{n}.flash", "Flash while on", "On and off, each for the on delay, while the conditions hold: a warning light.")),
         ]);
 
+    static readonly string[] Cuts = ["Fuel cut", "Ignition cut", "Fuel and ignition cut"];
+    const string CutTip = "Fuel cut: the injectors stop - quiet and easy on the exhaust. Ignition cut: the sparks stop and the fuel burns in the " +
+                          "exhaust - the crackle, hard on the converter. Both: the hardest cut. Whichever is picked, the engine is never let past the limit.";
+
+    /// The rev limits as the skeleton's limiter modules lay them out: the rev limiter, the speed limiter by switch, the rpm ceilings, the limit by gear and the ignition cut shaping.
+    public static CalPage RevLimitModule() => new("revlimit", "Rev limits", "Limits",
+        "The limits that cut fuel or spark: the rev limiter (one point for each cam), a road speed limiter worked by a switch, rpm ceilings by road " +
+        "speed and by gear, and how an ignition cut is shaped. The lowest limit in force wins; the skeleton's own over-rev cut stays above them all.",
+        [
+            G("Rev limiter",
+                S("revlimit.enable", "Enable rev limiter", "On: cut at the points below. Off: only the skeleton's own over-rev cut is left, as a safety net."),
+                C("revlimit.cut", "Low cam cut", Cuts, tip: CutTip),
+                V("revlimit.low.set", "Low cam cut at", "rpm", "Cut at this rpm while the low cam is in use."),
+                V("revlimit.low.reset", "Low cam back in below", "rpm", "Fuel / spark come back once the rpm falls under this. A little under the cut point (100-200 rpm) for a smooth limiter; further for a harder bounce."),
+                S("revlimit.high.enable", "Enable high cam limit", "Normally the same as the low cam's switch. Off: the high cam has no limit of its own (only the over-rev cut)."),
+                C("revlimit.high.cut", "High cam cut", Cuts, tip: CutTip),
+                V("revlimit.high.set", "High cam cut at", "rpm", "Cut at this rpm while VTEC is engaged."),
+                V("revlimit.high.reset", "High cam back in below", "rpm", "Fuel / spark come back once the rpm falls under this.")),
+            G("Speed limiter by switch",
+                S("revlimit.swlimit.enable", "Enable speed limiter by switch",
+                  "A road speed limit that only works while a switch is on (or off, with \"Limit while the input is off\"): a pit lane limiter on a " +
+                  "button, a valet limit, or a limit with the A/C on. It cuts like a rev limiter, at a road speed instead of an rpm."),
+                C("revlimit.swlimit.cut", "Cut", Cuts, tip: CutTip),
+                V("revlimit.swlimit.speed", "Limit to", "km/h", "Cut at this road speed while the switch is on, until the speed drops back under it. 255 = off."),
+                C("revlimit.swlimit.input", "Switch", CalPage.InputsAlwaysOn, CalPage.InputValuesAlwaysOn,
+                  "Which input turns the limit on. Always on: the limit always applies (a plain speed limiter)."),
+                S("revlimit.swlimit.invert", "Limit while the input is off", "The limit applies while the switch is off instead - e.g. until the clutch or a key switch is pressed.")),
+            G("Rpm ceilings by road speed",
+                S("revlimit.ceiling.enable", "Enable rpm ceilings", "A lower rev limit at low road speeds: easier on the drivetrain pulling away. 12500 rpm in an entry = no ceiling there."),
+                C("revlimit.ceiling.cut", "Cut", Cuts, tip: CutTip),
+                T("revlimit.ceiling.speed", "Ceiling by road speed", "rpm", "Five points, falling road speed: at or above each km/h, the rpm ceiling beside it.")),
+            G("Rev limit by gear",
+                S("revlimit.ceiling.gear.enable", "Enable rev limit by gear", "A rev limit for each gear (needs gear detection). 12500 rpm = none in that gear."),
+                C("revlimit.ceiling.gear.cut", "Cut", Cuts, tip: CutTip),
+                T("revlimit.ceiling.gear", "Limit in each gear", "rpm", "Gear 0 is neutral or not known yet.")),
+            G("Ignition cut shaping",
+                S("revlimit.icmod", "Shape the ignition cuts", "On: an ignition cut (rev limit, launch, full throttle shift) is held for the times below, " +
+                  "with sparks back in between, instead of cutting spark for as long as it is over the limit."),
+                V("revlimit.cutdelay", "Cut time", "ms", "How long each cut lasts (the rev limiter and the rest)."),
+                V("revlimit.cutdelay.launch", "Launch cut time", "ms", "How long each launch control cut lasts."),
+                V("revlimit.cutdelay.fts", "Full throttle shift cut time", "ms", "How long each full throttle shift cut lasts."),
+                V("revlimit.refire", "Sparks back for", "ms", "Sparks come back for this long between cuts. 0 = a plain cut."),
+                V("revlimit.icenrich", "Extra fuel while cutting", "%", "More fuel while an ignition cut is wanted: cooler, and a louder crackle."),
+                S("revlimit.icstatic.on", "Hold the timing while cutting", "Hold the ignition timing at one value while an ignition cut is wanted."),
+                V("revlimit.icstatic", "Timing then", "°", "The timing held while cutting (with the switch above on).")),
+        ]);
+
     /// VTEC as the skeleton's VTEC control module lays it out: the HTS page, with the switch between its own engage points and the stock ones, and the outputs a module can drive.
     public static CalPage VtecModule() => new("vtec", "VTEC", "Outputs",
         "Where the cam changes over, the conditions it needs, and the checks that can be switched off. Tick \"Use these engage points\" " +
@@ -225,6 +272,27 @@ public static class ModulePages
                 V("rpmswitch.tps", "Only above TPS", "%", "0: any throttle.")),
         ]);
 
+    public static CalPage Nitrous() => new("nitrous", "Nitrous (N2O)", "Fuel",
+        "Nitrous mode: while armed, at wide throttle and inside its rpm window, the nitrous maps - the secondary fuel and ignition maps " +
+        "(FuelLow2, FuelHigh2, IgnitionLow2, IgnitionHigh2 in the table list), tuned for the base shot - are blended in, and an output " +
+        "can drive the solenoid. A shot input (a voltage, or a serial input over the datalog cable) scales how far they are from the " +
+        "normal maps, so one tune covers several jets: tune the maps for the base jet, then the shot table says what more each volt means.",
+        [
+            G("Nitrous", [
+                S("nitrous.enable", "Enable nitrous mode", "On: the nitrous maps (and the solenoid) while every condition below is met. Off: the normal maps always."),
+                .. Input("nitrous.input", "Arming switch", "The switch that arms it - the dash arming switch, or a serial input from a panel. Always on: armed whenever the rest is met."),
+                V("nitrous.tps", "Only above TPS", "%", "Spray only at wide throttle: nitrous at part throttle runs lean and damages engines. 90 % or more is usual."),
+                V("nitrous.rpm.min", "From rpm", "rpm", "No shot below this: too low and the shot hammers the engine (and the bottom end)."),
+                V("nitrous.rpm.max", "Up to rpm", "rpm", "And none above this: keep it under the rev limit, so the shot is off before the limiter cuts."),
+                C("nitrous.output", "Solenoid output", ModOutputs, tip: "The output that switches the nitrous solenoid relay while spraying. None: an external controller sprays; the ROM only changes the maps.")]),
+            G("Shot size",
+                C("nitrous.shotinput", "Shot input", ["O2 pin (D14)", "ELD pin (D10)", "EGR pin (D12)", "B6 pin", "Serial input 1", "Serial input 2", "Serial input 3", "Serial input 4",
+                    "Serial input 5", "Serial input 6", "Serial input 7", "Serial input 8", "None: the maps as tuned"], [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 255],
+                    "Where the shot size comes from: a 0-5 V signal on a free pin (a jet selector, a potentiometer), or a serial input sent over the datalog cable (0-255 read as 0-5 V). None: always 100 %."),
+                T("nitrous.shot", "Shot table", "%", "How much of the nitrous maps' change from the normal maps is used, by the shot input's volts: 100 % is the maps as tuned " +
+                    "(the base jet, e.g. 50 hp), 150 % half as much more fuel added and timing taken out (75 hp), 200 % twice the change (100 hp). Blended between the points.")),
+        ]);
+
     public static CalPage GearFuel() => new("gearfuel", "Fuel by gear", "Fuel",
         "A fuel change for each gear, on top of the maps. Needs gear detection.",
         [G("Fuel by gear", S("gearfuel.enable", "Enable fuel by gear"), T("gearfuel.table", "Fuel change per gear", "%"))]);
@@ -257,9 +325,44 @@ public static class ModulePages
                 V("serialin.timeout", "Back to the defaults after", "ms", "No input for this long and every one reads as its default. 0: keep the last value.")),
         ]);
 
+    /// Added features > Serial port: the datalog cable's settings - the service commands' and the remote control commands'.
+    public static CalPage Datalog() => new("datalog", "Serial port", "Added features",
+        "What the datalog cable (the ECU's serial port) can do besides logging: its speed, the timing the service commands lock at, and the " +
+        "remote control commands - a phone, a tablet or a button box sets the fan, the rev and speed limits, the boost cut, the VTEC " +
+        "point, the shift light, the launch rpm, fuel or ignition cut and rolling idle, turns popcorn mode on, and works an anti-start " +
+        "lock: no password, no start (or valet mode); the main password runs the engine as tuned, the guest password in valet mode. " +
+        "Whatever is set over the cable is forgotten at power-up. Every command is in the documentation (Remote control and serial commands).",
+        [
+            G("Line speed",
+                S("datalog.fast", "62,500 baud instead of 38,400",
+                    "Each frame comes in sooner, and more of them with the engine stopped. With the engine running the ECU paces what it sends by its spark " +
+                    "calculation (so logging never takes the engine code's time), whatever the line. Needs a cable that can be set to 62,500 exactly (an FTDI " +
+                    "one can) and the same rate in Settings > Datalog. HTS and other loggers, and a Demon, want 38,400: leave it off for them. Takes effect at the next power-up.")),
+            G("Service commands",
+                V("datalog.servicetiming", "Timing locked at", "°", "What Lock timing (53h) holds the timing at, for a timing light.")),
+            G("Remote control",
+                S("remote.enable", "Take the remote control commands"),
+                V("remote.boostmax", "Boost cut may be set above the tune's by", "", "MAP sensor counts past the tune's own cut point. 0: the boost cut can only be set lower over the cable, never above the tune.")),
+            G("Anti-start lock",
+                S("remote.lock", "No password, no start (locked at every key-on)"),
+                S("remote.lockvalet", "No or a wrong password: valet mode instead of no start", "With the lock on: the engine starts, held to valet mode's limits and timing, until the main password is sent. (Off: it will not start at all.)"),
+                V("remote.password.main", "Main password (as tuned)", "", "A number 0-65535."),
+                S("remote.guest", "Take the guest password (valet mode)"),
+                V("remote.password.guest", "Guest password (valet mode)", "", "A number 0-65535, different from the main one.")),
+            G("Valet mode (the guest password)",
+                V("remote.valet.rev", "Rev limit", "rpm", "0 = the ROM's own. A rev limit set over the cable wins."),
+                V("remote.valet.speed", "Speed limit", "", "0 = none. A speed limit set over the cable wins."),
+                V("remote.valet.ign", "Timing offset", "°", "Negative = softer.")),
+            G("Popcorn mode (decel pops)",
+                V("remote.pop.rpm", "Works above", "rpm"),
+                V("remote.pop.tps", "With the throttle at or under", ""),
+                V("remote.pop.fuel", "Fuel added", "%", "The overrun fuel cut is held off while it pops."),
+                V("remote.pop.retard", "Timing taken out", "°", "The sparks are also cut every other tick, so the fuel burns in the exhaust.")),
+        ]);
+
     public static IReadOnlyList<CalPage> All() =>
-        [RollingIdle(), AntiStall(), SmartAlternator(), WaterMeth(), RpmSwitch(), GearFuel(), WarningLamp(), Tach(),
-         .. BoardOptions(), Watermark(), CheckEngineCodes(), SerialInputs(), MapSensor(), DatalogExtra()];
+        [RollingIdle(), AntiStall(), Nitrous(), SmartAlternator(), WaterMeth(), RpmSwitch(), GearFuel(), WarningLamp(), Tach(),
+         .. BoardOptions(), Watermark(), CheckEngineCodes(), SerialInputs(), Datalog(), MapSensor(), DatalogExtra()];
 
     // ---------------------------------------------------------------- the pages for one ROM
 
@@ -273,6 +376,8 @@ public static class ModulePages
             if (p.Key is ['g', 'p', 'o', >= '1' and <= '9'] && defs.Items.Any(i => i.HasSlot(p.Key + ".rpm.on"))) pages.Add(Gio(p.Key[3] - '0'));
             // the skeleton's VTEC control module: its own outputs, and a switch between its points and the stock ones
             else if (p.Key == "vtec" && defs.Items.Any(i => i.HasSlot("vtec.custom"))) pages.Add(VtecModule());
+            // the skeleton's limiter modules: their own switches and cuts, and the switch inputs in the module's encoding
+            else if (p.Key == "revlimit" && defs.Items.Any(i => i.HasSlot("revlimit.enable") || i.HasSlot("revlimit.swlimit.enable"))) pages.Add(RevLimitModule());
             else pages.Add(p);
         }
         // the password block is kept by the watermark row, not shown as a setting of its own

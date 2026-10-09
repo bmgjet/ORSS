@@ -121,7 +121,10 @@ public static class Toolbar
     {
         Text = icon, FontSize = size, VerticalAlignment = VerticalAlignment.Center, Opacity = 0.95,
         // the glyphs are symbols, not letters: keep them from being italicised or bolded by a theme
-        FontStyle = FontStyle.Normal, FontWeight = FontWeight.Normal, MinWidth = 14, TextAlignment = TextAlignment.Center,
+        FontStyle = FontStyle.Normal, FontWeight = FontWeight.Normal, TextAlignment = TextAlignment.Center,
+        // a fixed width: an emoji comes from a fallback font whose width is only right after the first layout, so a button
+        // sized on the first one shrank as the pointer first went over it
+        Width = Math.Ceiling(size * 1.4),
     };
 
     // the glyphs used across the app, in one place so they stay consistent

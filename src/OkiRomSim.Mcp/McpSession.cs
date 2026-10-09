@@ -43,4 +43,10 @@ public interface IMcpSession
     string Simulator(string action, JsonObject args);
     /// Something for the user to see on screen (the status bar and the Debug page).
     void Notify(string message);
+    /// The text of a source file of the ROM open in the app, as its editor has it (unsaved edits included); null when the file is not one of its sources.
+    string? SourceText(string path) => null;
+    /// Put new text into a source file of the open ROM through the app: its editor shows it at once, the file is saved (unless the user has unsaved edits in it), and the build's names, definitions and pages are refreshed without a reset. Returns what happened (the build's errors when it broke), or null when the file is not one of its sources.
+    string? SetSource(string path, string text, string what) => null;
+    /// The same for several files at once (a rename touches every file that uses the name): one refresh, after the last.
+    string? SetSources(IReadOnlyList<(string Path, string Text)> files, string what) => null;
 }

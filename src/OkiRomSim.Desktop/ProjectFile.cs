@@ -59,6 +59,9 @@ public sealed class ProjectSource
     public string Path { get; set; } = "";
     public string Entry { get; set; } = "";
     public bool Unsaved { get; set; }
+    /// A file the build reads by include (a skeleton's modules, features.inc) without it being open: carried so the
+    /// project builds on another PC, but not opened as a tab.
+    public bool Included { get; set; }
     [System.Text.Json.Serialization.JsonIgnore] public string Text { get; set; } = "";
 }
 

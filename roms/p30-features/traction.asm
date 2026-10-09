@@ -30,27 +30,24 @@ undef MODRAM_NEXT
 define MODRAM_NEXT (tc_now + 1)
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_TRACTION
-                JNE     tc_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_TRACTION == TICK_SLOT
                 CAL     tc_tick
-tc_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
-;@ TCEnable type=u8 flag=1 on=1 off=0 category="Traction control" slot=tcc.enable desc="Traction control on."
+;@ TCEnable type=u8 flag=1 on=1 off=0 category="Traction control" slot=tcc.enable desc="Traction control: pull timing while the rpm climbs faster than the gear allows (wheel spin), and give it back once it grips."
 tc_enable:              DB  000h
 ;@ TCRateByGear type=u8 count=6 formula=x*1000 unit="rpm/s" decimals=0 category="Traction control" slot=tcc.rate colvalues=0,1,2,3,4,5 colunit=gear desc="In each gear, an rpm climb faster than this is wheelspin (0 = not in that gear)."
 tc_rate:                DB  000h, 004h, 003h, 003h, 002h, 002h
 ;@ TCStep type=u8 formula=x/4 unit=deg decimals=2 category="Traction control" slot=tcc.step desc="Timing pulled each 32 ms while it spins."
 tc_step:                DB  008h                 ; 2 degrees
-;@ TCMax type=u8 formula=x/4 unit=deg decimals=2 category="Traction control" slot=tcc.max desc="No more than this pulled."
+;@ TCMax type=u8 formula=x/4 unit=deg decimals=2 category="Traction control" slot=tcc.max desc="Never more than this much timing pulled."
 tc_max:                 DB  028h                 ; 10 degrees
 ;@ TCDecay type=u8 formula=x/4 unit="deg per 32 ms" decimals=2 category="Traction control" slot=tcc.decay desc="Given back this fast once it grips."
 tc_decay:               DB  002h
-;@ TCMinSpeed type=u8 formula=speed_kmh_byte category="Traction control" slot=tcc.speed desc="Only above this road speed."
+;@ TCMinSpeed type=u8 formula=speed_kmh_byte category="Traction control" slot=tcc.speed desc="It only acts above this road speed (so a launch is left alone)."
 tc_speed:               DB  005h
 ;@ TCMinTPS type=u8 formula=tps_pct category="Traction control" slot=tcc.tps desc="Only above this throttle opening."
 tc_tps:                 DB  04ah                 ; 25 %

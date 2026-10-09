@@ -96,7 +96,8 @@ public sealed class McpHttp : IAsyncDisposable
     async Task HandleCoreAsync(HttpContext ctx)
     {
         string who = ctx.Connection.RemoteIpAddress?.ToString() ?? "?";
-        // a web page in the user's browser can send a request to this address too (a plain-text POST needs no permission): one that names an origin other than this machine, or a host name that is not this machine's (DNS rebinding), is refused
+        // a web page in the user's browser can send a request to this address too (a plain-text POST needs no permission): one
+        // that names an origin other than this machine, or a host name that is not this machine's (DNS rebinding), is refused
         if (!FromThisMachine(ctx.Request))
         {
             OkiRomSim.Core.AppLog.Warn("mcp " + who, $"refused: origin '{ctx.Request.Headers.Origin}' / host '{ctx.Request.Host}' is not this machine");

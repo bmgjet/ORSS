@@ -34,12 +34,11 @@ endif
 
 if XP == XP_TICK
                 CAL     rollidle_every_tick
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_ROLLIDLE
-                JNE     rollidle_tick_skip
+endif
+if XP == XP_TICKSLOT
+if SLOT_ROLLIDLE == TICK_SLOT
                 CAL     rollidle_tick
-rollidle_tick_skip:
+endif
 endif
 
 if XP == XP_SPARK
@@ -47,7 +46,7 @@ if XP == XP_SPARK
 endif
 
 if XP == XP_CAL
-;@ RollingIdleEnable type=u8 flag=1 on=1 off=0 category="Rolling idle" slot=rollidle.enable desc="Rolling idle on."
+;@ RollingIdleEnable type=u8 flag=1 on=1 off=0 category="Rolling idle" slot=rollidle.enable desc="Rolling idle: a lumpy, cammy idle made by leaving out one injector opening or spark in every few, only while idling."
 rollidle_enable:        DB  000h
 ;@ RollingIdleMode type=u8 formula=raw category="Rolling idle" slot=rollidle.mode desc="What is left out: 0 an injector opening, 1 a spark."
 rollidle_mode:          DB  000h
@@ -57,7 +56,7 @@ rollidle_every:         DB  005h
 rollidle_input:         DB  080h
 ;@ RollingIdleInputInvert type=u8 flag=1 on=1 off=0 category="Rolling idle" slot=rollidle.input.invert desc="The switch must be off instead."
 rollidle_invert:        DB  000h
-;@ RollingIdleRpmMax type=u16 formula=rpm_period_word category="Rolling idle" slot=rollidle.rpm.max desc="Only below this rpm."
+;@ RollingIdleRpmMax type=u16 formula=rpm_period_word category="Rolling idle" slot=rollidle.rpm.max desc="It only works below this rpm (an idle, not while driving)."
 rollidle_rpm_max:       DW  004e2h                 ; 1500 rpm
 ;@ RollingIdleRpmMin type=u16 formula=rpm_period_word category="Rolling idle" slot=rollidle.rpm.min desc="Only above this rpm (so it lets go before a stall)."
 rollidle_rpm_min:       DW  00ea6h                 ; 500 rpm
@@ -83,6 +82,10 @@ rollidle_tick:
                 PUSHS   A
                 CLRB    A
                 LCB     A, rollidle_enable
+if defined(FEAT_REMOTE)
+                MOV     DP, #rc_ri_en          ; on or off over the cable (remote.asm)
+                CAL     rc_byte_less1
+endif
                 CMPB    A, #000h
                 JEQ     rollidle_off
                 MOV     X1, #rollidle_input
@@ -108,6 +111,10 @@ rollidle_tick:
                 JGE     rollidle_off
                 CLRB    A
                 LCB     A, rollidle_mode
+if defined(FEAT_REMOTE)
+                MOV     DP, #rc_ri_mode        ; what it leaves out, over the cable (remote.asm)
+                CAL     rc_byte_less1
+endif
                 CMPB    A, #000h
                 JNE     rollidle_sparks
                 RB      0fdh.4
@@ -126,8 +133,24 @@ rollidle_done:  J       mod_tick_exit
 ; count lands every miss on the same one or two cylinders (wear, plug fouling, a hot or washed bore); an odd
 ; one moves it round all four. An even setting is taken as the odd number above it.
 rollidle_reload:
+if defined(FEAT_REMOTE)
+                L       A, DP                  ; (an interrupt: the caller's DP kept; 0FBh, set below anyway, the scratch)
+                PUSHS   A
+                MOV     DP, #rc_ri_every       ; one in n set over the cable (remote.asm)...
+                CLRB    A
+                LB      A, [DP]
+                JNE     rollidle_reload_rc
+                LCB     A, rollidle_every      ; ...or the tune's
+rollidle_reload_rc:
+                STB     A, 0fbh
+                POPS    A
+                MOV     DP, A
+                CLRB    A
+                LB      A, 0fbh
+else
                 CLRB    A
                 LCB     A, rollidle_every
+endif
                 CMPB    A, #003h
                 JGE     rollidle_reload_hi
                 LB      A, #003h

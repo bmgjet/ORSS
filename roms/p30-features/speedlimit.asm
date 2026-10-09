@@ -17,23 +17,20 @@ define NEED_MODLIB
 endif
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_SPEEDLIMIT
-                JNE     speedlim_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_SPEEDLIMIT == TICK_SLOT
                 CAL     speedlim_tick
-speedlim_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
-;@ SwLimitEnable type=u8 flag=1 on=1 off=0 category="Speed limiter" slot=revlimit.swlimit.enable desc="Speed limiter on."
+;@ SwLimitEnable type=u8 flag=1 on=1 off=0 category="Speed limiter" slot=revlimit.swlimit.enable desc="A road speed limiter: cuts at the speed below, always or only while a switch is on (a pit lane or valet limit on a button)."
 speedlim_block:         DB  000h
 ;@ SwLimitCut type=u8 category="Speed limiter" slot=revlimit.swlimit.cut desc="0 = fuel cut, 1 = ignition cut, 2 = both."
 speedlim_cut:           DB  000h
 ;@ SwLimitSpeed type=u8 formula=speed_kmh_byte category="Speed limiter" slot=revlimit.swlimit.speed desc="Cut at this road speed. 255 = off."
 speedlim_speed:         DB  060h                 ; 96 km/h
-;@ SwLimitInput type=u8 category="Speed limiter" slot=revlimit.swlimit.input desc="While this input is on: 01h power steering, 02h service connector, 04h start, 08h VTEC pressure, 10h A/C, 20h brake, 40h park/neutral, 80h always."
+;@ SwLimitInput type=u8 category="Speed limiter" slot=revlimit.swlimit.input desc="While this input is on: 01h power steering, 02h service connector, 04h start, 08h VTEC pressure, 10h A/C, 20h brake, 40h park/neutral, 80h always, C0h-C7h serial input 1-8 (on while not 0)."
 speedlim_input:         DB  080h
 ;@ SwLimitInvert type=u8 flag=1 on=1 off=0 category="Speed limiter" slot=revlimit.swlimit.invert desc="Limit while the input is off instead."
 speedlim_invert:        DB  000h

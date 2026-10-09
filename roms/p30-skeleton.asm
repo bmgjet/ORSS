@@ -59,6 +59,7 @@ XP_OUT          EQU     7       ; after the output block (main loop)
 XP_CAL          EQU     8       ; calibration tables (after the stock ones)
 XP_CODE         EQU     9       ; module code, at the start of the free space
 XP_SPARK        EQU     10      ; every timer-3 (spark) interrupt: crank-synchronous (interrupt, bank page 0)
+XP_TICKSLOT     EQU     11      ; the modules on this tick's slot (tickslots.inc builds a list per slot of 16)
 ; the fuel, ignition and VE maps: load columns (FEAT_EXTMAPS widens them to 20, the stock ROM has 10)
 if defined(FEAT_EXTMAPS)
 MAP_COLS        EQU     20
@@ -70,13 +71,13 @@ define XP XP_DEFS
 include "p30-features/features.inc"
 ; ---------------------------------------------------------------------------------------------------
                 org 0000h
-int_start_vec:            DW  int_start        ; 0000 E221
-int_break_vec:            DW  int_break        ; 0002 E921
-int_WDT_vec:              DW  int_WDT          ; 0004 D121
-int_NMI_vec:              DW  int_NMI          ; 0006 3C00
-int_INT0_vec:             DW  int_INT0         ; 0008 D301
+int_start_vec:            DW  int_start
+int_break_vec:            DW  int_break
+int_WDT_vec:              DW  int_WDT
+int_NMI_vec:              DW  int_NMI
+int_INT0_vec:             DW  int_INT0
 if defined(FEAT_STOCK_SERIAL)
-int_serial_rx_vec:        DW  int_serial_rx    ; 000A FD01
+int_serial_rx_vec:        DW  int_serial_rx
 elseif defined(NEED_SERIAL_RX)
 int_serial_rx_vec:        DW  mod_serial_rx    ; 000A serial receive: a feature module (datalog)
 else
@@ -85,74 +86,74 @@ endif
 if defined(NEED_SERIAL_TX)
 int_serial_tx_vec:        DW  mod_serial_tx    ; 000C serial transmit complete: a feature module (datalog)
 else
-int_serial_tx_vec:        DW  int_spurious_irq_trap    ; 000C CB21
+int_serial_tx_vec:        DW  int_spurious_irq_trap
 endif
 if defined(FEAT_STOCK_SERIAL)
-int_serial_rx_BRG_vec:    DW  int_crank_sync; 000E DC03
+int_serial_rx_BRG_vec:    DW  int_crank_sync
 else
 int_crank_sync_vec:       DW  int_crank_sync  ; (IRQ bit 3: crank/cylinder sync - named int_serial_rx_BRG in the p30.asm annotations, it has nothing to do with serial)
 endif
-int_timer_0_overflow_vec: DW  int_spurious_irq_trap    ; 0010 CB21
-int_timer_0_vec:          DW  int_timer_0      ; 0012 8600
-int_timer_1_overflow_vec: DW  int_spurious_irq_trap    ; 0014 CB21
-int_timer_1_vec:          DW  int_timer_1      ; 0016 1401
-int_timer_2_overflow_vec: DW  int_timer_2_overflow; 0018 DD02
-int_timer_2_vec:          DW  int_timer_2      ; 001A 4D01
-int_timer_3_overflow_vec: DW  int_spurious_irq_trap    ; 001C CB21
-int_timer_3_vec:          DW  int_timer_3      ; 001E FB02
-int_a2d_finished_vec:     DW  int_spurious_irq_trap    ; 0020 CB21
-int_PWM_timer_vec:        DW  int_PWM_timer    ; 0022 1E03
-int_serial_tx_BRG_vec:    DW  int_spurious_irq_trap    ; 0024 CB21
-int_INT1_vec:             DW  int_INT1         ; 0026 7B03
-vcal_0_vec:               DW  vcal_0           ; 0028 624E
-vcal_1_vec:               DW  vcal_1           ; 002A C04E
-vcal_2_vec:               DW  vcal_2           ; 002C 9C4E
-vcal_3_vec:               DW  vcal_3           ; 002E AE4E
+int_timer_0_overflow_vec: DW  int_spurious_irq_trap
+int_timer_0_vec:          DW  int_timer_0
+int_timer_1_overflow_vec: DW  int_spurious_irq_trap
+int_timer_1_vec:          DW  int_timer_1
+int_timer_2_overflow_vec: DW  int_timer_2_overflow
+int_timer_2_vec:          DW  int_timer_2
+int_timer_3_overflow_vec: DW  int_spurious_irq_trap
+int_timer_3_vec:          DW  int_timer_3
+int_a2d_finished_vec:     DW  int_spurious_irq_trap
+int_PWM_timer_vec:        DW  int_PWM_timer
+int_serial_tx_BRG_vec:    DW  int_spurious_irq_trap
+int_INT1_vec:             DW  int_INT1
+vcal_0_vec:               DW  vcal_0
+vcal_1_vec:               DW  vcal_1
+vcal_2_vec:               DW  vcal_2
+vcal_3_vec:               DW  vcal_3
 if defined(FEAT_STOCK_SERIAL)
-vcal_4_vec:               DW  vcal_4           ; 0030 A125
+vcal_4_vec:               DW  vcal_4
 else
 vcal_4_vec:               DW  background_task_scheduler  ; (skeleton: straight to the scheduler, the serial command handler is gone)
 endif
-vcal_5_vec:               DW  vcal_5           ; 0032 7F4F
-vcal_6_vec:               DW  vcal_6           ; 0034 844F
-vcal_7_vec:               DW  vcal_7           ; 0036 CE4F
+vcal_5_vec:               DW  vcal_5
+vcal_6_vec:               DW  vcal_6
+vcal_7_vec:               DW  vcal_7
 ;@ VectorPad type=u8 count=4 formula=raw category="Internal" desc="Bytes between the interrupt vectors and the code (not a tuning value)."
 VectorPad:     DB  000h,07Fh,031h,000h
 int_NMI:        CLR     PSW
-                MOV     LRB, #00041h  ; [H] local register base = #00041h (base address 0x0208)
-                RB      off(00230h).7  ; [H] test-and-reset edge-detect bit 00230h.7
-                JEQ     nmi_snapshot_dp_skip  ; [H] skip snapshot if bit was already 0
-                L       A, DP  ; [H] bit just transitioned 1->0: snapshot DP
-                ST      A, 00084h[X1]  ; [H] ...into 00084h[X1]
+                MOV     LRB, #00041h  ; local register base = #00041h (base address 0x0208)
+                RB      off(00230h).7  ; test-and-reset edge-detect bit 00230h.7
+                JEQ     nmi_snapshot_dp_skip  ; skip snapshot if bit was already 0
+                L       A, DP  ; bit just transitioned 1->0: snapshot DP
+                ST      A, 00084h[X1]  ; ...into 00084h[X1]
 nmi_snapshot_dp_skip:     MOV     DP, #00009h
-nmi_poll_p4_1:     MB      C, P4.1  ; [H] sample pin P4.1 into carry
-                JGE     nmi_enter_lowpower_seq  ; [H] JGE branches on Carry=0 (arch.ml) -> as soon as P4.1 reads 0, jump ahead immediately
-                JRNZ    DP, nmi_poll_p4_1  ; [H] else (P4.1 still 1) keep polling until DP counts out, then fall through anyway
+nmi_poll_p4_1:     MB      C, P4.1  ; sample pin P4.1 into carry
+                JGE     nmi_enter_lowpower_seq  ; JGE branches on Carry=0 -> as soon as P4.1 reads 0, jump ahead immediately
+                JRNZ    DP, nmi_poll_p4_1  ; else (P4.1 still 1) keep polling until DP counts out, then fall through anyway
                 J       nmi_poll_p4_1_load_p2
-nmi_poll_p4_1_store_adsel:     STB     A, ADSEL  ; [H] clear A/D channel select
-                MOV     IE, #00040h  ; [H] mask interrupt-enable to one source
+nmi_poll_p4_1_store_adsel:     STB     A, ADSEL  ; clear A/D channel select
+                MOV     IE, #00040h  ; mask interrupt-enable to one source
                 MOVB    TCON1, #0e0h
-                CLR     IRQ  ; [H] clear pending IRQ flags
+                CLR     IRQ  ; clear pending IRQ flags
                 SB      P4SF.1
-                MOV     TM1, #0ffffh  ; [H] reload timer1 to max (effectively stop it counting down soon)
+                MOV     TM1, #0ffffh  ; reload timer1 to max (effectively stop it counting down soon)
                 SB      TCON1.4
-                SB      SBYCON.2  ; [H] standby-control bit set (see routine note above)
+                SB      SBYCON.2  ; standby-control bit set (see routine note above)
                 LB      A, #005h
-; [H] STPACP = "Stop Code Acceptor" per the MSM66207 datasheet -- not a clock prescaler. Writing
-; [H] N then N<<1 (5, then 10) is the write-unlock sequence this register requires before STOP/HALT
-; [H] mode will actually be entered; it's a safety interlock against accidental entry, not a divider.
-                STB     A, STPACP  ; [H] stop-code-acceptor unlock write, step 1: N=5
-                SLLB    A  ; [H] ...step 2: N<<1=10
-                STB     A, STPACP  ; [H] unlock write, step 2
-                SB      SBYCON.0  ; [H] standby-control bit 0 set (likely the actual STOP-mode trigger)
+; STPACP = "Stop Code Acceptor" per the MSM66207 datasheet -- not a clock prescaler. Writing
+; N then N<<1 (5, then 10) is the write-unlock sequence this register requires before STOP/HALT
+; mode will actually be entered; it's a safety interlock against accidental entry, not a divider.
+                STB     A, STPACP  ; stop-code-acceptor unlock write, step 1: N=5
+                SLLB    A  ; ...step 2: N<<1=10
+                STB     A, STPACP  ; unlock write, step 2
+                SB      SBYCON.0  ; standby-control bit 0 set (likely the actual STOP-mode trigger)
                 RB      09fh.1
 nmi_enter_lowpower_seq:     J       nmi_enter_lowpower_seq_load_ram0eb
 int_timer_0:    MOV     LRB, #00037h
-; [H] --- Timer0 ISR: bit-shifts a value (r6, 16 bits across er0/er1/er2 chain) out one bit per
-; [H] timer period, reloading TMR0 for the next bit's timing, tracking bit count in r7 (0-15,
-; [H] matching a 16-bit shift register), accumulating into off(00197h) and driving P2 with the
-; [H] result. Reads as a software bit-banged serial or pulse-train output; no calibration anchors
-; [H] to identify the specific protocol/signal.
+; --- Timer0 ISR: bit-shifts a value (r6, 16 bits across er0/er1/er2 chain) out one bit per
+; timer period, reloading TMR0 for the next bit's timing, tracking bit count in r7 (0-15,
+; matching a 16-bit shift register), accumulating into off(00197h) and driving P2 with the
+; result. Reads as a software bit-banged serial or pulse-train output; no calibration anchors
+; to identify the specific protocol/signal.
                 ANDB    TCON0, #0fbh
                 CMPB    r7, #00fh
                 JEQ     timer0_return
@@ -253,6 +254,7 @@ timer1_tmr1_reload:     ORB     off(TCON1), #008h
 timer1_tick_done:
 if defined(TICK_CHAIN_FIRST)
 ; (diagnostic: the old order, the modules' tick code before the next PWM phase is set - see below)
+include "p30-features/tickslots.inc"
 undef XP
 define XP XP_TICK
 include "p30-features/features.inc"
@@ -268,6 +270,7 @@ endif
 ; ROMs with enough modules (a tick of 315 us or more) would not start, every output strobing. Now the compare
 ; is set first and comes due while the modules run: the interrupt is taken as soon as this one returns.
 if !defined(TICK_CHAIN_FIRST)
+include "p30-features/tickslots.inc"
 undef XP
 define XP XP_TICK
 include "p30-features/features.inc"
@@ -527,7 +530,7 @@ int_PWM_timer:  L       A, 0f4h
 if defined(FEAT_STOCK_AT)
                 JBS     off(00354h).0, int_PWM_timer_load_r2
 else
-                                                ; 0328 (skeleton: the PWM tick only paces the scheduler now - no EGR duty output, no A/T lock-up output on P4.3)
+                                                ; (skeleton: the PWM tick only paces the scheduler now - no EGR duty output, no A/T lock-up output on P4.3)
 endif
                 LB      A, r0
                 ADDB    A, #001h
@@ -752,8 +755,9 @@ crank_tooth_carry_clear:     RC
 if defined(FEAT_STOCK_DTC)
                 JBR     off(00113h).6, crank_sync_store_flag
                 SJ      crank_sync_confirmed_flag
+else
+                SJ      crank_sync_store_flag ; (skeleton: fault flags are always clear)
 endif
-                SJ       crank_sync_store_flag ; (skeleton: fault flags are always clear)
 crank_tooth_mod6_calc:     CLR     A
                 MOVB    r0, #006h
                 LB      A, off(0012ah)
@@ -1083,7 +1087,95 @@ crank_cycle_adc_prep_load_dp_ind:     L       A, [DP]
                 JEQ     rpm_period_avg_store
 rpm_period_invalid:     SB      off(00231h).5
                 L       A, #0ffffh
-rpm_period_avg_store:     ST      A, er0
+rpm_period_avg_store:
+                MOV     DP, #00231h            ; (skeleton) the over-rev latch, 1F0h bit 7, here where the rpm is measured
+                MB      C, [DP].5              ; rather than in the main loop (slow at high rpm): over the rev limit, fuel
+                JGE     skel_ovr_read          ; cut from the very next injection; it lets go only once a good reading is
+; An unreadable period right after a reading near the limit (over 4/5 of the resume rpm) cuts too, until a good
+; reading: no engine goes from there to stopped between two readings, so it is the reading that failed - teeth lost
+; at very high rpm - and the stock code would fuel it as a start. After a slow reading (a stall, cranking) or an
+; unreadable one, the latch stays as it was.
+                L       A, 0ach                ; the reading before (FFFFh when that was unreadable too)
+                ST      A, er1
+                MOV     DP, #00182h            ; the resume period...
+                L       A, [DP]
+                SRL     A
+                SRL     A
+                ADD     A, [DP]                ; ...x 1.25
+                JGE     skel_ovr_near
+                L       A, #0fffeh             ; (a resume rpm too low to matter)
+skel_ovr_near:  CMP     A, er1
+                JLT     skel_ovr_keep          ; the reading before was slower
+                MOV     DP, #001f0h
+                SB      [DP].7
+skel_ovr_keep:  L       A, #0ffffh
+                SJ      skel_ovr_done
+skel_ovr_read:  ST      A, er1                 ; back under the resume rpm. An unreadable period keeps it as it was: far
+                L       A, 0ach                ; over the limit the period can read as the engine stopped, and the stock
+                SUB     A, er1                 ; code would have started fuelling again. Rising, it looks one reading
+                JLT     skel_ovr_now           ; ahead (the newest less the last change: the period only updates every
+                ST      A, er3                 ; few revs), so it cuts before the limit, not a reading after it. The
+                L       A, er1                 ; change is taken as 1/4 of the period at most: starting, the rpm
+                SRL     A                      ; doubles from one reading to the next, and a guess from that is no
+                SRL     A                      ; guide. (DP, er1 and er3 are free here: set again below.)
+                CMP     A, er3
+                JGE     skel_ovr_step
+                ST      A, er3
+skel_ovr_step:  L       A, er3                 ; one and a half readings ahead: 0ACh is an average of
+                SRL     A                      ; several, so the engine is already past it
+                ADD     A, er3
+                ST      A, er3
+                L       A, er1
+                SUB     A, er3
+                JGE     skel_ovr_cmp
+                CLR     A
+                SJ      skel_ovr_cmp
+skel_ovr_now:   L       A, er1
+skel_ovr_cmp:   ST      A, er0                 ; (er0: the period looking ahead, er1: the newest; er2, er3 are free too)
+                MOV     DP, #00180h
+                CMP     A, [DP]
+                JGE     skel_ovr_under
+                MOV     DP, #001f0h
+                SB      [DP].7
+                SJ      skel_ovr_mod
+skel_ovr_under: L       A, er1
+                MOV     DP, #00182h
+                CMP     A, [DP]
+                JLE     skel_ovr_mod
+                MOV     DP, #001f0h
+                RB      [DP].7
+skel_ovr_mod:
+if defined(NEED_REVCAP)
+                MOV     DP, #MOD_REVCAP        ; the modules' rev cap (lib.asm): past it by 1/64, 1F0h bit 6 cuts the fuel
+                CLR     A                      ; until the engine is back under it
+                LB      A, [DP]
+                JEQ     skel_cap_off
+                L       A, ACC
+                SLL     A
+                SLL     A
+                ST      A, er2                 ; the cap as a period
+                SRL     A
+                SRL     A
+                SRL     A
+                SRL     A
+                SRL     A
+                SRL     A
+                ST      A, er3
+                L       A, er2
+                SUB     A, er3                 ; 1/64 past it (an ignition-cut limiter bouncing at its limit stays one)
+                CMP     A, er0
+                JLT     skel_cap_under
+                MOV     DP, #001f0h
+                SB      [DP].6
+                SJ      skel_ovr_back
+skel_cap_under: L       A, er1
+                CMP     A, er2
+                JLE     skel_ovr_back
+skel_cap_off:   MOV     DP, #001f0h
+                RB      [DP].6
+endif
+skel_ovr_back:  L       A, er1
+skel_ovr_done:  ST      A, er0
                 MOV     DP, #0036ch
                 XCHG    A, 0ach
                 ST      A, er1
@@ -1637,7 +1729,11 @@ ignmap_2d_lookup:     RB      PSWL.5
 if defined(NEED_MAPSELECT)
                 CAL     mod_mapselect          ; (skeleton) module hook: X1, the ignition map, may be swapped for a second one
 endif
+if defined(NEED_MAPLOOKUP)
+                CAL     mod_maplookup          ; (skeleton) module hook: the lookup itself (nitrous blends a second map in)
+else
                 CAL     table2d_lookup_interp
+endif
                 LB      A, r4
                 SJ      ignmap_result_common
 ignmap_alt_path:     LB      A, 0aah
@@ -2211,7 +2307,7 @@ if defined(FEAT_STOCK_O2HEATER)
 igntiming_enable_pin_drive:     MB      P1.2, C
 else
 igntiming_enable_pin_drive:
-                                                ; 101D (skeleton: no O2 heater - P1.2 stays at its power-up level, heater off)
+                                                ; (skeleton: no O2 heater - P1.2 stays at its power-up level, heater off)
 endif
                 AND     IE, #002a0h
                 RB      PSWH.0
@@ -2510,7 +2606,11 @@ fuel_base_lookup_done:     SB      PSWL.5
 if defined(NEED_MAPSELECT)
                 CAL     mod_mapselect          ; (skeleton) module hook: X1, the fuel map, may be swapped for a second one
 endif
+if defined(NEED_MAPLOOKUP)
+                CAL     mod_maplookup          ; (skeleton) module hook: the lookup itself (nitrous blends a second map in)
+else
                 CAL     table2d_lookup_interp
+endif
                 CAL     map_result_postscale
                 STB     A, off(00138h)
                 LB      A, off(00170h)
@@ -3255,9 +3355,11 @@ fuelcut_output_flags:
 if defined(NEED_DECELPOP)
                 MB      C, 0fdh.1              ; (skeleton) module hook: 0FDh.1 = the overrun fuel cut is held off (decel pops)
                 JGE     skel_decelpop_none
+                L       A, 0ach                ; (the closed-throttle cut is flagged as a rev-limit one too, so
+                CMP     A, off(00180h)         ;  the rpm itself: over the rev limit the cut stays)
+                JLT     skel_decelpop_none
                 RB      PSWL.4                 ; not an overrun cut...
-                MB      C, PSWL.5
-                JLT     skel_decelpop_none     ; (a rev-limit cut stays)
+                RB      PSWL.5
                 RB      off(0011ch).2          ; ...and no cut at all
 skel_decelpop_none:
 endif
@@ -3965,7 +4067,6 @@ rpm_decel_diff_check2:     L       A, off(001deh)
 rpm_decel_table_lookup:     LB      A, off(0012dh)
                 MOV     X1, #DecelRpmTbl
                 VCAL    1
-                ; warning: had to flip DD
                 CMP     A, 0b0h
                 CLR     A
                 MOVB    r0, off(0017dh)
@@ -4106,12 +4207,12 @@ injtimer_bank_c_store:     MOV     X1, A
                 JBR     off(00123h).2, injtimer_critsection_start
                 CLR     A
 injtimer_critsection_start:     AND     IE, #002a0h
-; [H] --- Per-cylinder injector timer write (critical section, interrupts masked via IE/PSWH):
-; [H] cylinder_ign_correct_loop applies CylinderIGNCorrect (real per-cylinder ignition-correction
-; [H] calibration table) and a mul5/div4 scale to each cylinder's computed value, writing results
-; [H] to the injector timer-compare registers up through 0x3C0 -- this is the routine referenced
-; [H] back in ign_angle_to_timer_convert's comment as "programming the two ignition coil-channel
-; [H] hardware timers" (the same critical-section pattern, here for injector-side output).
+; --- Per-cylinder injector timer write (critical section, interrupts masked via IE/PSWH):
+; cylinder_ign_correct_loop applies CylinderIGNCorrect (real per-cylinder ignition-correction
+; calibration table) and a mul5/div4 scale to each cylinder's computed value, writing results
+; to the injector timer-compare registers up through 0x3C0 -- this is the routine referenced
+; back in ign_angle_to_timer_convert's comment as "programming the two ignition coil-channel
+; hardware timers" (the same critical-section pattern, here for injector-side output).
                 RB      PSWH.0
                 MOV     off(001c4h), X1
                 ST      A, off(001c0h)
@@ -4246,7 +4347,7 @@ endif
                 ST      A, IE
                 SJ      crank_edge_direction_toggle
 else
-                                                ; 2087 (skeleton: no O2 heater drive / feedback check)
+                                                ; (skeleton: no O2 heater drive / feedback check)
 endif
 if defined(FEAT_STOCK_O2HEATER)
 crank_edge_sync_check:     JEQ     crank_edge_carry_set
@@ -4478,11 +4579,11 @@ else
 endif
 if !(defined(FEAT_STOCK_SELFTEST))
 selftest_reg_stuckbit_check:     CLR     A
-endif
                 ST      A, IE
                 ST      A, 0f2h
                 ST      A, 0f4h
                 MOV     LRB, #00010h
+endif
 periph_init_start:     CLRB    off(PRPHF)
                 LB      A, #0ffh
                 MOVB    off(P0), #0ebh
@@ -4666,13 +4767,13 @@ clear_0x324_high_nibble:     MOV     DP, #00320h
                 MOVB    off(002bch), #014h
                 RC
 fuelpump_prime_check:     MB      off(00230h).5, C
-; [H] --- Runtime state init: A/D channel setup, initial sensor snapshot, working-RAM seeding,
-; [H] and diagnostic-serial baud/config setup, run once during boot after the self-test/RAM-clear
-; [H] passes above. Ends by jumping to stack_sanity_check (0x3359) before falling into the main loop.
-; [H] Individual working-RAM addresses here (0xD8-0xE1, 0xDC-0xDF, etc.) are not yet traced to
-; [H] specific named parameters -- confidently identified: ADCR2H/ADCR4/ADCR6 (A/D conversion
-; [H] results), tbl_boot_copy_block (a calibration table copied verbatim into 0x1D1-0x1DD), and
-; [H] STTM/STTMR/STTMC/STCON/SRCON (serial timer + control regs -- diagnostic link baud setup).
+; --- Runtime state init: A/D channel setup, initial sensor snapshot, working-RAM seeding,
+; and diagnostic-serial baud/config setup, run once during boot after the self-test/RAM-clear
+; passes above. Ends by jumping to stack_sanity_check before falling into the main loop.
+; Individual working-RAM addresses here (0xD8-0xE1, 0xDC-0xDF, etc.) are not yet traced to
+; specific named parameters -- confidently identified: ADCR2H/ADCR4/ADCR6 (A/D conversion
+; results), tbl_boot_copy_block (a calibration table copied verbatim into 0x1D1-0x1DD), and
+; STTM/STTMR/STTMC/STCON/SRCON (serial timer + control regs -- diagnostic link baud setup).
                 MOV     USP, #00180h
                 CLR     A
                 ST      A, IE
@@ -4943,23 +5044,13 @@ vcal_4_load_dp_4:     MOV     DP, #0037ah
 endif
 if defined(FEAT_STOCK_SERIAL)
 vcal_4_store_stbuf:     STB     A, STBUF
-; [CG] background_task_scheduler  @0x2686
-; [CG] TRACED: manages an IE interrupt-mask cycle counter (RAM 0xCE), runs housekeeping
-; [CG] (ResetWatchDog + decrement_timer_array x3), runs a divide-by-10 slow-tick generator
-; [CG] that raises off(231h).1/.2 for the two periodic decay tasks, then dispatches - by
-; [CG] unconditional JUMP, not CALL - to exactly one of five subsystem tasks per invocation
-; [CG] based on a priority-ordered chain of flag tests (off 09Eh.6/.4, off(227h).2,
-; [CG] off(216h).3, off(231h).0/.1/.2). Reached via VCAL 4, 199 call sites' worth of VCAL
-; [CG] usage total across the ROM makes this the busiest entry point in the firmware.
 endif
-; [CG] background_task_scheduler  @0x2686
-; [CG] TRACED: manages an IE interrupt-mask cycle counter (RAM 0xCE), runs housekeeping
-; [CG] (ResetWatchDog + decrement_timer_array x3), runs a divide-by-10 slow-tick generator
-; [CG] that raises off(231h).1/.2 for the two periodic decay tasks, then dispatches - by
-; [CG] unconditional JUMP, not CALL - to exactly one of five subsystem tasks per invocation
-; [CG] based on a priority-ordered chain of flag tests (off 09Eh.6/.4, off(227h).2,
-; [CG] off(216h).3, off(231h).0/.1/.2). Reached via VCAL 4, 199 call sites' worth of VCAL
-; [CG] usage total across the ROM makes this the busiest entry point in the firmware.
+; manages an IE interrupt-mask cycle counter (RAM 0xCE), runs housekeeping
+; (ResetWatchDog + decrement_timer_array x3), runs a divide-by-10 slow-tick generator
+; that raises off(231h).1/.2 for the two periodic decay tasks, then dispatches - by
+; unconditional JUMP, not CALL - to exactly one of five subsystem tasks per invocation
+; based on a priority-ordered chain of flag tests (off 09Eh.6/.4, off(227h).2,
+; off(216h).3, off(231h).0/.1/.2). Reached through VCAL 4, the busiest entry point in the firmware.
 background_task_scheduler:     L       A, 0f4h
                 ST      A, IE
                 RB      PSWH.0
@@ -4993,7 +5084,7 @@ vcal3_leanprotect_ratelimit_if_ram227_bit2_set:     JBS     off(00227h).2, vcal3
                 JEQ     vcal3_dispatch_check1
                 J       ignition_timing_calc_task
 else
-                                                ; 26B8 (skeleton: no A/T lock-up / shift control task - P0.4 stays off)
+                                                ; (skeleton: no A/T lock-up / shift control task - P0.4 stays off)
 vcal3_leanprotect_ratelimit_if_ram227_bit2_set:
 endif
 vcal3_dispatch_check1:     RB      off(00231h).1
@@ -5047,8 +5138,8 @@ if defined(FEAT_STOCK_DTC)
                 JBR     off(0021ah).6, scheduler_gate_common
                 JBS     off(0021ah).7, scheduler_gate_common
 else
-                                                ; 2731 (skeleton: no VTEC pressure-switch state to test - treated as healthy)
-                                                ; 2734 (skeleton: no VTEC pressure-switch state to test - treated as healthy)
+                                                ; (skeleton: no VTEC pressure-switch state to test - treated as healthy)
+                                                ; (skeleton: no VTEC pressure-switch state to test - treated as healthy)
 endif
                 LB      A, 0c1h
                 CMPB    A, #00ch
@@ -5155,7 +5246,7 @@ idle_gate1:     JGE     idle_gate1_timer_check
 if defined(FEAT_STOCK_KNOCK)
                 JBS     off(00233h).7, idle_gate1_timer_check
 else
-                                                ; 2815 (skeleton: no knock flag to test)
+                                                ; (skeleton: no knock flag to test)
 endif
 idle_gate1_trigger:     MOVB    off(002e8h), #00ah
 idle_gate1_clear:     RC
@@ -5320,9 +5411,8 @@ idle_debounce_disabled:     MOV     DP, #04700h
                 JBS     off(00211h).4, idle_debounce_return
                 MOVB    off(002d6h), #00fh
 idle_debounce_return:     RT
-; [CG] transit_flag_check  @0x2964
-; [CG] TRACED: dispatch-adjacent task in the same background_task_scheduler region. Tests
-; [CG] TRNSIT (edge-detect SFR) bit 3, conditionally decrements a counter at RAM 0x2EB.
+; dispatch-adjacent task in the same background_task_scheduler region. Tests
+; TRNSIT (edge-detect SFR) bit 3, conditionally decrements a counter at RAM 0x2EB.
 transit_flag_check:     LB      A, #0ffh
                 RB      TRNSIT.3
                 JNE     transit_flag_common
@@ -5335,12 +5425,11 @@ transit_flag_store:     MB      off(00230h).6, C
                 STB     A, off(002ebh)
                 JBR     off(002e4h).1, transit_gate_check
                 RT
-; [CG] transit_gate_check  @0x297C
-; [CG] TRACED: reads RAM 0xC4 (unnamed byte), tests off(214h).3 and SFR bit 099h.7, compares
-; [CG] the periodic counter at RAM 0xE9 (the same counter periodic_decay_task_1 increments)
-; [CG] against 50, and on threshold calls mul_scale_helper2 with the tiny table at 0x6000
-; [CG] before setting the slow-tick flag off(231h).0. Dispatch target from
-; [CG] background_task_scheduler, sandwiched between other tasks.
+; reads RAM 0xC4 (unnamed byte), tests off(214h).3 and SFR bit 099h.7, compares
+; the periodic counter at RAM 0xE9 (the same counter periodic_decay_task_1 increments)
+; against 50, and on threshold calls mul_scale_helper2 with the tiny table at 0x6000
+; before setting the slow-tick flag off(231h).0. Dispatch target from
+; background_task_scheduler, sandwiched between other tasks.
 transit_gate_check:     MOV     DP, #000f6h
                 LB      A, 0c4h
                 STB     A, ACCH
@@ -5886,7 +5975,6 @@ idle_sub_alt_path_store_ram262:     ST      A, off(00262h)
                 MOV     X1, #IdleCoolantGateTbl
                 LB      A, 0c1h
                 VCAL    1
-                ; warning: had to flip DD
                 CMP     A, 0b0h
                 JLT     idle_table_lookup2
 idle_gate6_result:     MOVB    off(002e0h), off(00294h)
@@ -6294,7 +6382,6 @@ idle_pi_final_calc:     MOV     X2, A
 idle_pi_final_calc_load_ram0c1:     LB      A, 0c1h
                 VCAL    1
                 MOV     DP, #0030ch
-                ; warning: had to flip DD
                 SUB     A, [DP]
                 SLL     A
                 ST      A, er0
@@ -6802,7 +6889,7 @@ ignition_timing_calc_task_if_ram22f_bit2_set:     JBS     off(0022fh).2, ignitio
                 CAL     clamp_0_3ff_simple
                 SJ      ignition_timing_calc_task_goto_77b7
 endif
-                DW  to_injtimer_store_0x166       ; 357D CB1C
+                DW  to_injtimer_store_0x166
 if defined(FEAT_STOCK_AT)
 ignition_timing_calc_task_store_ram29a_2:     ST      A, off(0029ah)
                 SJ      ignition_timing_calc_task_goto_77b7
@@ -6838,10 +6925,9 @@ ignition_timing_calc_task_load_er0_3:     MOV     er0, #00064h
                 STB     A, 0dfh
                 RT
 endif
-; [CG] periodic_decay_task_1  @0x35B9
-; [CG] TRACED: dispatch target from background_task_scheduler, runs only when the
-; [CG] divide-by-10 slow tick sets off(231h).1. Calls decrement_timer_array (0x5204) over two
-; [CG] RAM ranges, then increments a counter at RAM 0xE9.
+; dispatch target from background_task_scheduler, runs only when the
+; divide-by-10 slow tick sets off(231h).1. Calls decrement_timer_array over two
+; RAM ranges, then increments a counter at RAM 0xE9.
 periodic_decay_task_1:     MOV     DP, #00011h
                 MOV     X1, #0018eh
                 CAL     decrement_timer_array
@@ -6926,7 +7012,7 @@ percyl_counter_dp_select:     MOV     DP, #0031dh
                 JBS     off(002a9h).3, percyl_counter_increment
                 DEC     DP
 percyl_counter_increment:     INCB    off(002a9h)
-                TRB     [DP]  ; [H] ;mnemonic was "TBR" (letter transposition); confirmed as TRB against HondaTuningSuiteRom120.asm, same opcode C213
+                TRB     [DP]  ; ;mnemonic was "TBR" (letter transposition); confirmed as TRB against HondaTuningSuiteRom120.asm, same opcode C213
                 JNE     percyl_wrap_check1
                 LB      A, off(002a9h)
                 ANDB    A, #007h
@@ -6984,10 +7070,9 @@ set_carry_flag:     SC
 tach_output_drive2:     MB      P1.4, C
 tach_output_return:     RT
 endif
-; [CG] vcal3_task_b_body  @0x36CE
-; [CG] TRACED: dispatch target from background_task_scheduler, runs only when the
-; [CG] divide-by-10 slow tick sets off(231h).2. Structurally identical to
-; [CG] periodic_decay_task_1 but over different RAM ranges and counter (RAM 0xE8).
+; dispatch target from background_task_scheduler, runs only when the
+; divide-by-10 slow tick sets off(231h).2. Structurally identical to
+; periodic_decay_task_1 but over different RAM ranges and counter (RAM 0xE8).
 vcal3_task_b_body:     MOV     DP, #00006h
                 MOV     X1, #00188h
                 CAL     decrement_timer_array
@@ -7174,12 +7259,12 @@ irqmode_done:     SB      PSWH.0
 if defined(FEAT_STOCK_SELFTEST)
                 NOP
 stack_sanity_check:     CMP     SSP, #0047eh
-; [H] --- Post-init peripheral verification: re-reads SSP, LRB, every port direction/special-
-; [H] function register, all four timer control regs, PWM control regs, A/D select/scan, and the
-; [H] diagnostic-serial baud/control regs, comparing each against the exact values int_break's
-; [H] init sequence (0x235F periph_init_start onward) programmed them to. Any mismatch -> stamps
-; [H] trapReasonCode=0x50 (selftest_fail_050) and BRKs, forcing a full re-init retry. This is a
-; [H] "did my own initialization actually stick" check, not a fresh self-test of new hardware.
+; --- Post-init peripheral verification: re-reads SSP, LRB, every port direction/special-
+; function register, all four timer control regs, PWM control regs, A/D select/scan, and the
+; diagnostic-serial baud/control regs, comparing each against the exact values int_break's
+; init sequence (0x235F periph_init_start onward) programmed them to. Any mismatch -> stamps
+; trapReasonCode=0x50 (selftest_fail_050) and BRKs, forcing a full re-init retry. This is a
+; "did my own initialization actually stick" check, not a fresh self-test of new hardware.
                 JNE     selftest_fail_050
                 MOV     DP, #00400h
                 L       A, [DP]
@@ -7282,12 +7367,12 @@ periph_init_verify_pwm_adc_and_ie:     AND     IE, #00020h
                 L       A, 0f2h
                 ST      A, IE
                 L       A, X1
-; [H] --- Oscillator/timer cross-check: snapshots TM0/TM1/TM2 into X1/X2/DP, re-enables
-; [H] interrupts briefly (IE/PSWH toggling), re-snapshots into er0/er1/er2, then verifies the
-; [H] deltas fall within expected ranges (0x22, 0x80, 0x22, a ratio check against er1>>2) --
-; [H] confirms the timers are actually counting at the rate the code expects (i.e. the clock
-; [H] source/oscillator is running correctly) before trusting any timing-dependent logic
-; [H] (ignition/injection scheduling) downstream. Out-of-range -> selftest_fail_04b.
+; --- Oscillator/timer cross-check: snapshots TM0/TM1/TM2 into X1/X2/DP, re-enables
+; interrupts briefly (IE/PSWH toggling), re-snapshots into er0/er1/er2, then verifies the
+; deltas fall within expected ranges (0x22, 0x80, 0x22, a ratio check against er1>>2) --
+; confirms the timers are actually counting at the rate the code expects (i.e. the clock
+; source/oscillator is running correctly) before trusting any timing-dependent logic
+; (ignition/injection scheduling) downstream. Out-of-range -> selftest_fail_04b.
                 SUB     A, er0
                 ST      A, er0
                 JEQ     selftest_fail_04b
@@ -8354,7 +8439,7 @@ if defined(FEAT_STOCK_O2)
                 RB      off(00223h).3
                 SJ      injidx_flag_set
 else
-                                                ; 4155 (skeleton: no O2 control - closed loop never enables (219h.0 stays 0), no O2 switching timers)
+                                                ; (skeleton: no O2 control - closed loop never enables (219h.0 stays 0), no O2 switching timers)
 endif
 if defined(FEAT_STOCK_O2)
 injidx_gate1:     JBR     off(00223h).7, injidx_gate3
@@ -8539,7 +8624,7 @@ fuelpump_state_active_store_carry_p1_bit4:     MB      P1.4, C
 else
 ; (skeleton: the stock key-on bulb check wrote P1.4 here; the lamp output is left to feature modules)
 fuelpump_state_active_store_carry_p1_bit4:
-                                                ; 42B1 (skeleton: no A/C clutch control - P0.0 stays at its power-up level, clutch off; the A/C request is ignored)
+                                                ; (skeleton: no A/C clutch control - P0.0 stays at its power-up level, clutch off; the A/C request is ignored)
 endif
 if defined(FEAT_STOCK_AC)
 fuelpump_state_active_cmp_ram0e9:     CMPB    0e9h, #014h
@@ -8622,9 +8707,11 @@ if defined(FEAT_STOCK_PURGE)
 else
                 VCAL    4  ; (skeleton: no EVAP purge control - P0.1 stays at its power-up level, solenoid off, the stock warm-engine state)
 endif
-if (defined(FEAT_STOCK_DTC) && defined(FEAT_STOCK_PURGE))
+if defined(FEAT_STOCK_PURGE)
+if defined(FEAT_STOCK_DTC)
                 JBS     off(00212h).5, accut_output_drive_goto_purge_counter_check
-                CMPB    0c1h, #035h
+endif
+                CMPB    0c1h, #035h            ; (purge: the coolant and counter checks stay without the trouble codes)
                 JGE     purge_result_clear
 accut_output_drive_goto_purge_counter_check:     J       purge_counter_check
 endif
@@ -8790,7 +8877,7 @@ flags_b8_2_set:     SB      0a0h.5
 else
 altc_normal_drive_nop_acc:
 flags_b8_2_set:
-                                                ; 44A1 (skeleton: no O2 heater - 219h.3 stays 0)
+                                                ; (skeleton: no O2 heater - 219h.3 stays 0)
 endif
 if defined(FEAT_STOCK_O2HEATER)
 altc_condition_check:     JBS     off(00215h).2, gio_p1_2_check
@@ -9690,14 +9777,12 @@ define XP XP_MAIN
 include "p30-features/features.inc"
                 CAL     hook_main              ; (skeleton) module slot: once per main-loop pass
                 J       regbank_selftest2_start
-; [CG] crank_helper2  @0x4B32
-; [CG] VERIFIED: entry point that first checks off(120h).2; if set, skips straight to the
-; [CG] shared clamp body (injector_timer_schedule). If clear, also bails immediately when
-; [CG] off(1BFh)==0x0Fh (an apparent "not yet valid" sentinel).
+; entry point that first checks off(120h).2; if set, skips straight to the
+; shared clamp body (injector_timer_schedule). If clear, also bails immediately when
+; off(1BFh)==0x0Fh (an apparent "not yet valid" sentinel).
 crank_helper2:     JBR     off(00120h).2, injtimer_shift_path
-; [CG] injector_timer_schedule  @0x4B35
-; [CG] VERIFIED: clamps a 3-word array based at RAM 0x1C0 to a ceiling of 0xC0 (192), one
-; [CG] word at a time. Direct-entry form of crank_helper2.
+; clamps a 3-word array based at RAM 0x1C0 to a ceiling of 0xC0 (192), one
+; word at a time. Direct-entry form of crank_helper2.
 injector_timer_schedule:     MOVB    r0, #0ffh
                 L       A, off(001c6h)
                 ST      A, er1
@@ -9734,14 +9819,13 @@ injtimer_shift_path:     LB      A, off(001b6h)
                 SLLB    A
                 ROLB    off(001beh)
                 RT
-; [CG] injtimer_bank2_zero  @0x4B76
-; [CG] TRACED: substantial routine (~0x150 bytes, 30+ internal branches) directly
-; [CG] manipulating TMR0 (ADD TMR0,A - the hardware injector/ignition timer register) using
-; [CG] values staged in RAM 0x1B6-0x1BC, decoded through four digital input bits at
-; [CG] off(109h).0-3. Calls inj_wrap_clamp_calc twice internally. RAM 0x1B6-0x1BC sits
-; [CG] immediately before the 0x1C0 array that injector_timer_schedule/_gated operate on,
-; [CG] confirming this is the parent context for that pair - together they form the core
-; [CG] injector pulse-width timer-bank assembly.
+; substantial routine (~0x150 bytes, 30+ internal branches) directly
+; manipulating TMR0 (ADD TMR0,A - the hardware injector/ignition timer register) using
+; values staged in RAM 0x1B6-0x1BC, decoded through four digital input bits at
+; off(109h).0-3. Calls inj_wrap_clamp_calc twice internally. RAM 0x1B6-0x1BC sits
+; immediately before the 0x1C0 array that injector_timer_schedule/_gated operate on,
+; confirming this is the parent context for that pair - together they form the core
+; injector pulse-width timer-bank assembly.
 injtimer_bank2_zero:     ST      A, er1
                 LB      A, off(001beh)
                 SRLB    A
@@ -9784,6 +9868,11 @@ injenable_p2_update:     LB      A, off(001b7h)
 if defined(NEED_INJSKIP)
                 CAL     mod_injskip            ; (skeleton) module hook: A, the injectors to open (0 = open), may be set to FFh (none)
 endif
+                JBS     off(0011ch).5, skel_inj_cut    ; (skeleton) a fuel cut (the rev limiter's flag, which every cut sets) or a
+                CMPB    off(001f0h), #000h     ; module's cut request: no injector opens at all. The stock code only stops
+                JEQ     skel_inj_open          ; adding to the open mask, so an injector already in it went on firing now
+skel_inj_cut:   LB      A, #0ffh               ; and then - an engine over its rev or boost limit kept some fuel
+skel_inj_open:
                 ORB     A, #0f0h
                 ANDB    P2, A
                 ANDB    TRNSIT, #0fbh
@@ -9886,9 +9975,8 @@ inj_p2_calc_or197:     ORB     A, off(001b7h)
 inj_p2_drive_return:     ORB     P2, A
                 RB      off(00122h).7
                 RT
-; [CG] inj_p2_default_f  @0x4CBC
-; [CG] TRACED: alternate entry that presets A=0x0F then jumps back into inj_wrap_clamp_calc's
-; [CG] body (0x4CC0, immediately following) with a different starting value.
+; alternate entry that presets A=0x0F then jumps back into inj_wrap_clamp_calc's
+; body (0x4CC0, immediately following) with a different starting value.
 inj_p2_default_f:     LB      A, #00fh
                 SJ      inj_p2_drive_return
 inj_wrap_clamp_calc:     CLR     A
@@ -9914,10 +10002,9 @@ bitreverse_loop:     MB      C, r6.7
                 JNE     bitreverse_loop
 bitreverse_return:     LB      A, r6
                 RT
-; [CG] tm0_resync_helper  @0x4CE5
-; [CG] VERIFIED: snapshots TMR2 into er3, tests off(10Fh).7/IRQH.0, conditionally increments
-; [CG] an event counter at RAM 0xDE, then divides the captured pair by a fixed divisor of 6.
-; [CG] Called 3x around the TMR0 crank-edge adjustment code at 0x0601-0x061B.
+; snapshots TMR2 into er3, tests off(10Fh).7/IRQH.0, conditionally increments
+; an event counter at RAM 0xDE, then divides the captured pair by a fixed divisor of 6.
+; Called 3x around the TMR0 crank-edge adjustment code at 0x0601-0x061B.
 tm0_resync_helper:     L       A, TMR2
                 ST      A, er3
                 JBS     off(0010fh).7, rpm_resync_gate
@@ -10083,10 +10170,10 @@ endif
                 STB     A, [DP]
                 RT
 ign_angle_to_timer_convert:     CLRB    A
-; [H] --- Converts a computed ignition angle/trim (r4) into a hardware timer-compare value
-; [H] (scaling via MULB by 3 and combining with er1), used when programming the two ignition
-; [H] coil-channel hardware timers (igntiming_output_coil1 and the DP=0x35D channel that follows).
-; [H] Clamps the result if it would exceed 0xFE00 range (CMPB ACC,#0feh check).
+; --- Converts a computed ignition angle/trim (r4) into a hardware timer-compare value
+; (scaling via MULB by 3 and combining with er1), used when programming the two ignition
+; coil-channel hardware timers (igntiming_output_coil1 and the DP=0x35D channel that follows).
+; Clamps the result if it would exceed 0xFE00 range (CMPB ACC,#0feh check).
                 STB     A, r3
                 SUBB    A, r4
                 MOVB    r0, #003h
@@ -10115,11 +10202,11 @@ knockretard_r1_store:     CMPCB   A, 00002h[X1]
 knockretard_sub_result:     MOVB    r0, A
                 SJ      table_interp_delta_calc
 vcal_0:         CMPCB   A, 00002h[X1]
-; [H] --- Generic 1D linear-interpolation table lookup, used 50 times throughout the file (flex
-; [H] fuel, boost/wastegate control, GIO trims, ignition/O2 corrections, etc). Given a table
-; [H] pointer in X1 (entries are (X,Y) byte pairs) and an input value in A, walks the table to
-; [H] find the bracketing X segment, then linearly interpolates the corresponding Y. This is the
-; [H] same routine flex-fuel notes describe as "the shared interpolation helper".
+; --- Generic 1D linear-interpolation table lookup, used 50 times throughout the file (flex
+; fuel, boost/wastegate control, GIO trims, ignition/O2 corrections, etc). Given a table
+; pointer in X1 (entries are (X,Y) byte pairs) and an input value in A, walks the table to
+; find the bracketing X segment, then linearly interpolates the corresponding Y. This is the
+; same routine flex-fuel notes describe as "the shared interpolation helper".
                 JGE     table_interp_bracket_found
                 INC     X1
                 INC     X1
@@ -10203,8 +10290,7 @@ injtimer_bank_calc3_mul_acc:     MUL
 injtimer_bank_calc3_add_acc:     ADD     A, er3
                 ST      A, er3
                 RT
-; [CG] table_interp_lookup_4byte  @0x4EFE
-; [CG] Called 6x; used at 0x0BA6 after a 0x6A79/0x6A89 table select.
+; Called 6x; used at 0x0BA6 after a 0x6A79/0x6A89 table select.
 table_interp_lookup_4byte:     CMPC    A, 00004h[X1]
                 JGE     table_interp_4byte_bracket
                 ADD     X1, #00004h
@@ -10220,9 +10306,8 @@ table_interp_4byte_bracket:     ST      A, er0
                 ST      A, er3
                 LC      A, 00002h[X1]
                 SJ      injtimer_bank_calc3
-; [CG] subtract24_clamp_byte  @0x4F21
-; [CG] VERIFIED: computes A-24, clamps the result to the unsigned byte range - 0 if the
-; [CG] subtraction went negative, 0xFF if it overflowed 255.
+; computes A-24, clamps the result to the unsigned byte range - 0 if the
+; subtraction went negative, 0xFF if it overflowed 255.
 subtract24_clamp_byte:     SUBB    A, #018h
                 JGE     subtract24_clamp_byte_load_carry_ramacc_bit7
                 CLRB    A
@@ -10267,9 +10352,8 @@ if defined(FEAT_STOCK_AT)
                 SJ      injtimer_bank_calc1_sign
 endif
 if defined(FEAT_STOCK_AT)
-; [CG] interp_bracket_delta_scale_2  @0x4F62
-; [CG] VERIFIED: structurally identical to injtimer_bank_calc1, operating on the
-; [CG] upper breakpoint instead of the lower.
+; structurally identical to injtimer_bank_calc1, operating on the
+; upper breakpoint instead of the lower.
 interp_bracket_delta_scale_2:     MOV     er2, 00000h[X1]
                 SUB     A, er2
                 JGE     interp_bracket_delta_scale_2_mul_acc
@@ -10302,10 +10386,9 @@ vcal_5_add_acc:     ADD     A, er3
                 CLR     A
 vcal4_store:     ST      A, er3
                 RT
-; [CG] add_saturate_s16  @0x4F93
-; [CG] VERIFIED: adds er3 to A with explicit signed 16-bit saturation - clamps to 0x7FFF on
-; [CG] positive overflow, 0x8000 on negative overflow, checking ACCH.7 and r7.7 sign bits
-; [CG] before and after the add.
+; adds er3 to A with explicit signed 16-bit saturation - clamps to 0x7FFF on
+; positive overflow, 0x8000 on negative overflow, checking ACCH.7 and r7.7 sign bits
+; before and after the add.
 add_saturate_s16:     MB      C, ACCH.7
                 JLT     add_saturate_s16_load_carry_r7_bit7
                 MB      C, r7.7
@@ -10380,9 +10463,9 @@ scaler_table_search_back:     DECB    r6
 scaler_div_final:     DIV
                 RT
 table2d_lookup_interp:     CLR     A
-; [H] --- Generic 2D table lookup/interpolation helper (row x column, e.g. RPM x Load). Given a
-; [H] table base in X1, row width in r0, row index in r1, column offset in r2, column count in r3.
-; [H] Companion to the 1D table_interp_lookup used elsewhere.
+; --- Generic 2D table lookup/interpolation helper (row x column, e.g. RPM x Load). Given a
+; table base in X1, row width in r0, row index in r1, column offset in r2, column count in r3.
+; Companion to the 1D table_interp_lookup used elsewhere.
                 LB      A, r2
                 ADD     X1, A
                 MOV     DP, X1
@@ -10459,8 +10542,7 @@ knock_244_helper:     EXTND
                 SCAL     table2d_mul_combine
                 LB      A, r4
                 RT
-; [CG] map_result_postscale  @0x5088
-; [CG] Called right after table2d_lookup_interp at 0x1273.
+; Called right after table2d_lookup_interp at 0x1273.
 map_result_postscale:     MOVB    r0, off(00137h)
                 MOVB    r1, #001h
                 CMPB    r0, #080h
@@ -10476,8 +10558,7 @@ mul_scale_rotate:     MUL
                 JEQ     stub_return_short
                 L       A, #0ffffh
 stub_return_short:     RT
-; [CG] sub_clamp_helper  @0x50A5
-; [CG] Called 3x; used at 0x16CF.
+; Called 3x; used at 0x16CF.
 sub_clamp_helper:     MULB
                 L       A, ACC
                 SLL     A
@@ -10485,9 +10566,8 @@ sub_clamp_helper:     MULB
                 JGE     sub_clamp_helper_return
                 LB      A, #0ffh
 sub_clamp_helper_return:     RT
-; [CG] scale_ram1e4_mul_shr2  @0x50B1
-; [CG] VERIFIED: multiplies A by RAM word 0x1E4, then shifts the 32-bit product right by 2
-; [CG] bits (two SRL/RORB pairs) before falling into mul_zero_if_r3_zero.
+; multiplies A by RAM word 0x1E4, then shifts the 32-bit product right by 2
+; bits (two SRL/RORB pairs) before falling into mul_zero_if_r3_zero.
 scale_ram1e4_mul_shr2:     MOV     er0, off(001e4h)
                 MUL
                 SRL     er1
@@ -10495,10 +10575,9 @@ scale_ram1e4_mul_shr2:     MOV     er0, off(001e4h)
                 SRL     er1
                 RORB    A
                 SJ      mul_zero_if_r3_zero_load_r2
-; [CG] mul_zero_if_r3_zero  @0x50BE
-; [CG] VERIFIED: performs MUL, then forces the result to 0xFFFF if r3==0 (a "no data"
-; [CG] sentinel), otherwise returns the swapped product. Direct-entry form used both
-; [CG] standalone and as the tail of scale_ram1e4_mul_shr2.
+; performs MUL, then forces the result to 0xFFFF if r3==0 (a "no data"
+; sentinel), otherwise returns the swapped product. Direct-entry form used both
+; standalone and as the tail of scale_ram1e4_mul_shr2.
 mul_zero_if_r3_zero:     MUL
 mul_zero_if_r3_zero_load_r2:     LB      A, r2
                 L       A, ACC
@@ -10572,18 +10651,16 @@ table_index_add_clamp_er3:     LC      A, 00002h[X1]
                 JLT     table_index_add_clamp_er3_return
                 L       A, er3
 table_index_add_clamp_er3_return:     RT
-; [CG] idle_helper2  @0x5141
-; [CG] VERIFIED: MUL, then feeds into a shared bounds-check against X1/X2 register-supplied
-; [CG] limits (gated by off(20Ch).0) rather than fixed presets.
+; MUL, then feeds into a shared bounds-check against X1/X2 register-supplied
+; limits (gated by off(20Ch).0) rather than fixed presets.
 idle_helper2:     MUL
                 L       A, er1
 if defined(FEAT_STOCK_EGR)
                 SJ      mul_then_clamp_x1x2_2_if_ram20c_bit0_clr
 endif
 if defined(FEAT_STOCK_EGR)
-; [CG] mul_then_clamp_x1x2_2  @0x5146
-; [CG] VERIFIED: identical to idle_helper2 but first zeroes the product if r2==0
-; [CG] before entering the same X1/X2 bounds check.
+; identical to idle_helper2 but first zeroes the product if r2==0
+; before entering the same X1/X2 bounds check.
 mul_then_clamp_x1x2_2:     MUL
                 CMPB    r2, #000h
                 JEQ     mul_then_clamp_x1x2_2_if_ram20c_bit0_clr
@@ -10606,8 +10683,7 @@ idle_pi_clamp_setcarry:     L       A, X1
                 SC
 idle_helper2_store:     ST      A, er3
                 RT
-; [CG] stub_or_short_helper  @0x516B
-; [CG] Called 7x; 4 instructions.
+; Called 7x; 4 instructions.
 stub_or_short_helper:     L       A, #00700h
                 JBS     off(00216h).3, stub_or_short_helper_return
                 L       A, #00500h
@@ -10621,10 +10697,9 @@ idle_pi_clamp_return:     RT
 idle_pi_clamp_low:     L       A, off(0028ch)
                 RT
 if defined(FEAT_STOCK_AT)
-; [CG] weighted_sum_2term_trim  @0x5184
-; [CG] VERIFIED: computes two products (r6*A and r7*X1), conditionally accumulates them into
-; [CG] a running total at off(29Ah) gated by PSWL.4, calling clamp_0_to_3ff to bound the
-; [CG] running total. A two-term weighted-blend accumulator.
+; computes two products (r6*A and r7*X1), conditionally accumulates them into
+; a running total at off(29Ah) gated by PSWL.4, calling clamp_0_to_3ff to bound the
+; running total. A two-term weighted-blend accumulator.
 weighted_sum_2term_trim:     MOV     X1, A
                 CLRB    r0
                 MOVB    r1, r6
@@ -10651,9 +10726,8 @@ weighted_sum_2term_trim_call_clamp_0_to_3ff:     CAL     clamp_0_to_3ff
                 RT
 endif
 if defined(FEAT_STOCK_AT)
-; [CG] clamp_0_to_3ff  @0x51AC
-; [CG] VERIFIED: clamps A to the range [0, 0x3FF] (1023). Called from
-; [CG] weighted_sum_2term_trim.
+; clamps A to the range [0, 0x3FF] (1023). Called from
+; weighted_sum_2term_trim.
 clamp_0_to_3ff:     CLR     er0
                 JLE     clamp_0_to_3ff_load_er0
                 MOV     er0, #003ffh
@@ -10757,19 +10831,17 @@ crank_edge_helper:     L       A, off(0011ch)
                 ST      A, (0021eh-00280h)[USP]
                 RT
 if defined(FEAT_STOCK_DTC)
-; [CG] refresh_engine_flags_snapshot  @0x5262
-; [CG] VERIFIED: copies 5 consecutive words from a USP-relative stack frame (0x212-0x21A)
-; [CG] into fixed RAM locations 0x112-0x11A. A pure register/stack snapshot copier, no
-; [CG] computation.
+; copies 5 consecutive words from a USP-relative stack frame (0x212-0x21A)
+; into fixed RAM locations 0x112-0x11A. A pure register/stack snapshot copier, no
+; computation.
 refresh_engine_flags_snapshot:     L       A, (00212h-00280h)[USP]
                 ST      A, off(00112h)
                 L       A, (00214h-00280h)[USP]
                 ST      A, off(00114h)
 endif
-; [CG] refresh_engine_flags_snapshot  @0x5262
-; [CG] VERIFIED: copies 5 consecutive words from a USP-relative stack frame (0x212-0x21A)
-; [CG] into fixed RAM locations 0x112-0x11A. A pure register/stack snapshot copier, no
-; [CG] computation.
+; copies 5 consecutive words from a USP-relative stack frame (0x212-0x21A)
+; into fixed RAM locations 0x112-0x11A. A pure register/stack snapshot copier, no
+; computation.
 if !(defined(FEAT_STOCK_DTC))
 refresh_engine_flags_snapshot:
 endif
@@ -10783,8 +10855,7 @@ endif
                 L       A, (0021ah-00280h)[USP]
                 ST      A, off(0011ah)
                 RT
-; [CG] timer_or_counter_helper  @0x5277
-; [CG] Most-called CAL in the ROM (17 sites).
+; Most-called CAL in the ROM (17 sites).
 timer_or_counter_helper:     LB      A, r0
                 MBR     C, [DP]
                 LC      A, [X1]
@@ -10858,9 +10929,8 @@ idle_helper1_alt_load_p2:     LB      A, P2
 idle_helper1_return:     RT
 selftest_reason_range_check:     CMPB    off(00236h), #00ah
                 JLT     empty_stub_return
-; [CG] selftest_reason_range_check_entry  @0x530C
-; [CG] VERIFIED: identical body to selftest_reason_range_check; this is the direct-entry
-; [CG] address used when the caller has already passed the off(236)>=0x0A precondition.
+; identical body to selftest_reason_range_check; this is the direct-entry
+; address used when the caller has already passed the off(236)>=0x0A precondition.
 selftest_reason_range_check_entry:     MOV     DP, #003c9h
                 LB      A, [DP]
                 CMPB    A, #0ffh
@@ -10902,11 +10972,11 @@ cfgvariant_result_common:     SJ      cfgvariant_eval_result
 endif
 if defined(FEAT_STOCK_DTC)
 cfgvariant_check_v3:     CMPB    r6, #003h
-; [H] --- cfgvariant_eval_condition's dispatch body: for each specific variant index (3, 6, 7, 10,
-; [H] 11, 13, 20, 26), checks the sign of that variant's associated sensor/config byte (0xBB,
-; [H] 0x3D4, 0x3A4, 0x3CC, 0x3D2, 0x3CD, 0x3D2 again, 0xD7) and increments r0 if negative --
-; [H] reads as a per-variant "is this variant's associated input plausible/connected" check,
-; [H] feeding cfgvariant_eval_result.
+; --- cfgvariant_eval_condition's dispatch body: for each specific variant index (3, 6, 7, 10,
+; 11, 13, 20, 26), checks the sign of that variant's associated sensor/config byte (0xBB,
+; 0x3D4, 0x3A4, 0x3CC, 0x3D2, 0x3CD, 0x3D2 again, 0xD7) and increments r0 if negative --
+; reads as a per-variant "is this variant's associated input plausible/connected" check,
+; feeding cfgvariant_eval_result.
                 JNE     cfgvariant_check_v6
                 LB      A, 0a3h
                 SLLB    A
@@ -11094,10 +11164,9 @@ cfgvariant_check_v1f:     CMPB    r6, #019h
                 RT
 endif
 if defined(FEAT_STOCK_DTC)
-; [CG] cfgvariant_remap_start  @0x547E
-; [CG] TRACED: a manual compare-chain mapping an internal state code in r6 (0x19, 0x1A, ...)
-; [CG] to output fault/reason byte constants (0x23, ...) - a switch-case-style translation
-; [CG] table used by the self-test/fault-reporting subsystem.
+; a manual compare-chain mapping an internal state code in r6 (0x19, 0x1A, ...)
+; to output fault/reason byte constants (0x23, ...) - a switch-case-style translation
+; table used by the self-test/fault-reporting subsystem.
 cfgvariant_remap_start:     CLR     A
                 LB      A, r6
                 CMPB    A, #019h
@@ -11131,11 +11200,10 @@ cfgvariant_bit_calc:     SBR     00320h[X1]
                 RT
 endif
 if defined(FEAT_STOCK_DTC)
-; [CG] cfgvariant_snapshot_capture  @0x54AB
-; [CG] VERIFIED: runs once (gated by RAM 0x340==0), then packs several live state bytes - a
-; [CG] rotated off(21Dh).0 bit, port snapshots at 0xB4/0xAC, and ADC-buffer copies read via
-; [CG] X1=0x3C8/0x3C0 - into a sequential block starting at RAM 0x340. Looks like the
-; [CG] construction of a diagnostic/serial report snapshot.
+; runs once (gated by RAM 0x340==0), then packs several live state bytes - a
+; rotated off(21Dh).0 bit, port snapshots at 0xB4/0xAC, and ADC-buffer copies read via
+; X1=0x3C8/0x3C0 - into a sequential block starting at RAM 0x340. Looks like the
+; construction of a diagnostic/serial report snapshot.
 cfgvariant_snapshot_capture:     MOV     DP, #00340h
                 LB      A, [DP]
                 JNE     cfgvariant_snapshot_return
@@ -11204,10 +11272,9 @@ cfgvariant_state_clear_loop:     DEC     DP
                 JGT     cfgvariant_state_clear_loop
                 RT
 endif
-; [CG] cfgvariant_ram_init_0x300  @0x5513
-; [CG] VERIFIED: initializes RAM 0x300-0x31xx with default sentinel values (0x8000 words, a
-; [CG] 0x7B byte, a 0x332 word). This is exactly the RAM range cfgvariant_checksum2_calc (0x5548)
-; [CG] later checksums (0x320-0x34F), so this is that subsystem's initializer.
+; initializes RAM 0x300-0x31xx with default sentinel values (0x8000 words, a
+; 0x7B byte, a 0x332 word). This is exactly the RAM range cfgvariant_checksum2_calc
+; later checksums (0x320-0x34F), so this is that subsystem's initializer.
 cfgvariant_ram_init_0x300:     L       A, #08000h
                 MOV     DP, #00300h
                 ST      A, [DP]
@@ -11855,8 +11922,9 @@ endif
 if defined(FEAT_STOCK_DTC)
                 AND     A, #08074h
                 J       callhelper_table_interp_lookup_if_ne_goto_tipin_gate_fai
-endif
+else
                 J       skel_tipin_after_fault_test
+endif
 tipin_gate_pass_load_ram24f:     LB      A, off(0024fh)
                 EXTND
                 LCB     A, tbl_5b2e[ACC]
@@ -12465,11 +12533,10 @@ timer2_irq_clear_orb_off_irq:     ORB     off(IRQ), #008h
                 JEQ     timer2_irq_clear_return
                 SB      09fh.2
 timer2_irq_clear_return:     RTI
-; [CG] diag_report_finalize  @0x7681
-; [CG] TRACED: writes into the diagnostic-snapshot RAM area (0x3AC/0x3D4, adjacent to
-; [CG] cfgvariant_snapshot_capture's own 0x340 block), gated by off(120h).2 and off(122h).1, and
-; [CG] hands off to fuelmap_do_lookup_b35. A second stage of the diagnostic/serial report
-; [CG] construction.
+; writes into the diagnostic-snapshot RAM area (0x3AC/0x3D4, adjacent to
+; cfgvariant_snapshot_capture's own 0x340 block), gated by off(120h).2 and off(122h).1, and
+; hands off to fuelmap_do_lookup_b35. A second stage of the diagnostic/serial report
+; construction.
 diag_report_finalize:     JBR     off(00122h).1, diag_report_finalize_load_dp
                 CLR     A
 diag_report_finalize_load_dp:     MOV     DP, #003d4h
@@ -12561,8 +12628,9 @@ crank_cycle_p4_gate_goto_crank_cycle_result_common:     J       crank_cycle_resu
 endif
 if defined(FEAT_STOCK_DTC)
 crank_cycle_p4_gate_goto_crank_cycle_result_a:     J       crank_cycle_result_a
-endif
+else
                 J       crank_cycle_result_common                          ; (skeleton: fault flags are always clear)
+endif
 crank_cycle_p4_gate_goto_crank_cycle_f4_check:     J       crank_cycle_f4_check
 idle_target_final_store_call_stub_or_short_helper:     CAL     stub_or_short_helper
                 VCAL    6
@@ -12572,6 +12640,8 @@ if defined(FEAT_STOCK_DTC)
                 JBR     off(00212h).4, idle_target_final_store_goto_idle_output_vcal5
 idle_target_final_store_load_imm:     L       A, #02000h
 idle_target_final_store_goto_idle_output_vcal5:     J       idle_output_vcal5
+else
+                J       idle_output_vcal5      ; (skeleton: fault flags are always clear)
 endif
 if defined(FEAT_STOCK_AT)
 ignition_timing_calc_task_load_ram2cf:     LB      A, off(002cfh)
@@ -12650,16 +12720,14 @@ ignition_timing_calc_task_clear_ram22f_bit2_3:     RB      off(0022fh).2
                 SJ      ignition_timing_calc_task_clear_ram222_bit6
 endif
 if defined(FEAT_STOCK_AT)
-; [CG] clamp_0_3ff_simple  @0x77C7
-; [CG] VERIFIED: clamps A to [0, 0x3FF] using a simpler direct-compare form than
-; [CG] clamp_0_to_3ff (no register-pair bound source, just two fixed compares).
+; clamps A to [0, 0x3FF] using a simpler direct-compare form than
+; clamp_0_to_3ff (no register-pair bound source, just two fixed compares).
 clamp_0_3ff_simple:     JLT     clamp_0_3ff_simple_load_imm
                 CMP     A, #003ffh
                 JLT     clamp_0_3ff_simple_return
 clamp_0_3ff_simple_load_imm:     L       A, #003ffh
 clamp_0_3ff_simple_return:     RT
 endif
-                J       idle_output_vcal5                              ; (skeleton: fault flags are always clear)
 cfg_selector3_dispatch:     JBS     off(00217h).6, cfg_selector3_dispatch_goto_2b7d
                 CMP     off(00280h), #08000h
                 JGE     cfg_selector3_dispatch_goto_5809
@@ -12707,13 +12775,13 @@ endif
 if defined(FEAT_STOCK_O2)
 idle_state_defaults_goto_426c:     J       idle_stage_c0_load_clear_ram219_bit0
 endif
-if (defined(FEAT_STOCK_DTC) && defined(FEAT_STOCK_PURGE))
+if defined(FEAT_STOCK_PURGE)
 purge_counter_check:     JBR     off(00218h).0, purge_counter_check_cmp_stk
                 JBR     off(0021eh).4, purge_counter_check_goto_purge_result_clear
 purge_counter_check_cmp_stk:     CMP     (001b4h-00180h)[USP], #005dch
                 J       purge_counter_check_if_lt_goto_purge_result_clear
 endif
-if (defined(FEAT_STOCK_DTC) && defined(FEAT_STOCK_PURGE))
+if defined(FEAT_STOCK_PURGE)
 purge_counter_check_goto_purge_result_clear:     J       purge_result_clear
 endif
 if defined(FEAT_STOCK_DTC)
@@ -14154,8 +14222,8 @@ VEHigh:       DB  08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,08Eh,097h,097h,097h
                 DB  08Eh,08Eh,097h,09Bh,09Bh,09Bh,09Bh,09Bh,09Eh,09Eh
 endif
 endif
-; ---- secondary maps (FEAT_DUALMAPS): a full second set of fuel and ignition maps, the same size as the first
-if defined(FEAT_DUALMAPS)
+; ---- secondary maps (FEAT_DUALMAPS, or the nitrous maps of FEAT_NITROUS): a full second set of fuel and ignition maps, the same size as the first
+if defined(FEAT_DUALMAPS) || defined(FEAT_NITROUS)
 if defined(FEAT_EXTMAPS)
 ;@ FuelLow2 type=u8 size=20x20 stride=20 colscale=FuelLow2+400 formula=honda_fuel rows.axis=RpmScalerLow rows.formula=rpm_axis_byte_log cols.axis=MapScaler cols.formula="x * 3.6105 + 114.3" cols.inverse="(x - 114.3) / 3.6105" cols.unit=mbar cols.decimals=0 category="Secondary maps" desc="Secondary low-cam fuel map, used while the secondary maps are selected; its column multipliers follow the last row."
 FuelLow2:        DB  029h,044h,07Ah,079h,096h,08Eh,0A3h,099h,0AAh,0A2h,0B2h,0AAh,0B8h,0C0h,0C9h,0BBh,0C3h,0CAh,0CEh,0D2h ; secondary map (FEAT_DUALMAPS), a copy of FuelLow

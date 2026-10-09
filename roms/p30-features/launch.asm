@@ -4,7 +4,7 @@
 ;> name: Launch control (two-step)
 ;> category: Limits
 ;> pages: launch
-;> ram: 1F2h-1F5h (shared cut requests)
+;> ram: 1F2h-1F5h (shared cut requests), the rev cap: 2 bytes of module RAM shared by every rev limit (lib.asm)
 ;> about: Holds the revs at a launch rpm while the car is standing (below a road speed) and the launch
 ;>        input is on - the clutch switch, or any of the switch inputs - so it leaves the line on boost and
 ;>        in the torque. Past the road speed, or with the input off, the normal limiter is back. Ignition
@@ -13,34 +13,34 @@
 ifdef FEAT_LAUNCH
 
 if XP == XP_DEFS
+ifndef NEED_REVCAP
+define NEED_REVCAP                             ; (its rev limit is a hard limit for the crank interrupt too: lib.asm)
+endif
 ifndef NEED_MODLIB
 define NEED_MODLIB
 endif
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_LAUNCH
-                JNE     launch_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_LAUNCH == TICK_SLOT
                 CAL     launch_tick
-launch_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
-;@ LaunchEnable type=u8 flag=1 on=1 off=0 category="Launch control" slot=launch.enable desc="Launch control on."
+;@ LaunchEnable type=u8 flag=1 on=1 off=0 category="Launch control" slot=launch.enable desc="Launch control (two-step): a lower rev limit while the car is standing and the input is on, so it launches at a set rpm."
 launch_block:           DB  000h
 ;@ LaunchCut type=u8 category="Launch control" slot=launch.cut desc="0 = fuel cut, 1 = ignition cut, 2 = both."
 launch_cut:             DB  001h
-;@ LaunchRPM type=u16 formula=rpm_period_word category="Launch control" slot=launch.rpm desc="Hold the revs here."
+;@ LaunchRPM type=u16 formula=rpm_period_word category="Launch control" slot=launch.rpm desc="The rpm the engine is held at for the launch."
 launch_set:             DW  00177h               ; 5000 rpm
-;@ LaunchRPMReset type=u16 formula=rpm_period_word category="Launch control" slot=launch.rpm.reset desc="Back in below this rpm."
+;@ LaunchRPMReset type=u16 formula=rpm_period_word category="Launch control" slot=launch.rpm.reset desc="Fuel / spark come back once the rpm falls under this."
 launch_reset:           DW  00181h               ; 4870 rpm
 ;@ LaunchInput type=u8 category="Launch control" slot=launch.input desc="The input that arms it: 01h power steering, 02h service connector, 04h start, 08h VTEC pressure, 10h A/C, 20h brake, 40h park/neutral, 80h always."
 launch_input:           DB  020h
 ;@ LaunchInputInvert type=u8 flag=1 on=1 off=0 category="Launch control" slot=launch.input.invert desc="Armed while the input is off instead."
 launch_invert:          DB  000h
-;@ LaunchMaxSpeed type=u8 formula=speed_kmh_byte category="Launch control" slot=launch.speed desc="Only below this road speed."
+;@ LaunchMaxSpeed type=u8 formula=speed_kmh_byte category="Launch control" slot=launch.speed desc="It only works below this road speed; once moving, the normal rev limit applies."
 launch_speed:           DB  005h
 endif
 

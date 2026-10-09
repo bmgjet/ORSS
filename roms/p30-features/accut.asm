@@ -24,25 +24,22 @@ undef MODRAM_NEXT
 define MODRAM_NEXT (accut_timer + 1)
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_ACCUT
-                JNE     accut_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_ACCUT == TICK_SLOT
                 CAL     accut_tick
-accut_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
-;@ AcCutEnable type=u8 flag=1 on=1 off=0 category="A/C cut-off" slot=ac.cutoff.enable desc="A/C cut-off on."
+;@ AcCutEnable type=u8 flag=1 on=1 off=0 category="A/C cut-off" slot=ac.cutoff.enable desc="Turn the A/C compressor off under load (high rpm or wide open throttle) for full power, then back on after a hold time."
 accut_enable:           DB  000h
 ;@ AcCutThrottle type=u8 formula=tps_pct category="A/C cut-off" slot=ac.cutoff.tps desc="Off at or above this throttle."
 accut_tps:              DB  0c0h
-;@ AcCutRpmHigh type=u16 formula=rpm_period_word category="A/C cut-off" slot=ac.cutoff.rpm desc="Off at or above this rpm."
+;@ AcCutRpmHigh type=u16 formula=rpm_period_word category="A/C cut-off" slot=ac.cutoff.rpm desc="The compressor is turned off at or above this rpm."
 accut_rpm_hi:           DW  00177h
 ;@ AcCutRpmLow type=u16 formula=rpm_period_word category="A/C cut-off" slot=ac.idlecut desc="Off below this rpm (a low idle)."
 accut_rpm_lo:           DW  0ffffh
-;@ AcCutHold type=u8 formula="x * 32.8" inverse="x / 32.8" unit=ms decimals=0 category="A/C cut-off" slot=ac.cutoff.hold desc="Kept off this long after."
+;@ AcCutHold type=u8 formula="x * 32.8" inverse="x / 32.8" unit=ms decimals=0 category="A/C cut-off" slot=ac.cutoff.hold desc="Once turned off, the compressor stays off this long after the load is gone, so it does not cycle on and off."
 accut_hold:             DB  01eh
 endif
 

@@ -19,6 +19,8 @@ public sealed class FeaturePageView : UserControl
 
     /// What plugins add to the bottom of a page: (page key or "*", build).
     public static readonly List<(string Key, Func<CalPage, Control?> Build)> Extensions = [];
+    /// The same, above the page's rows (the app's own: the gearbox presets on the Transmission page).
+    public static readonly List<(string Key, Func<CalPage, Control?> Build)> TopExtensions = [];
 
     /// Show only valid: the rows this ROM has nothing for (no definition bound) are left off, and a box left empty goes.
     readonly bool _validOnly;
@@ -30,14 +32,29 @@ public sealed class FeaturePageView : UserControl
     }
 
     /// A row this ROM has something for: one of its slots is bound.
+    /// The row's tip, or (when the page gives none) what the setting's own definition says about it.
+    string TipOf(PageRow row) => row.Tip.Length > 0 ? row.Tip
+        : Slots(row).Select(x => CalPage.Bound(_host.Defs(), x.Slot)?.Description).FirstOrDefault(d => !string.IsNullOrWhiteSpace(d)) ?? "";
+
     bool Valid(PageRow row) => Slots(row).Any(x => CalPage.Bound(_host.Defs(), x.Slot) is { HasLookup: true });
 
     /// Rebuild the page (a binding changed, or a value was written from elsewhere).
     public void Refresh() => Build();
 
+    /// The page's columns, the same in every group: the label (wrapping), the editor (every kind the same width, filling it),
+    /// the unit (as wide as the widest unit on the page), then the reset and binding buttons.
+    const double LabelW = 240, EditW = 260, MinMaxW = EditW / 2;
+    const string UnitGroup = "unit";
+
+    static ColumnDefinition Px(double w) => new(new GridLength(w, GridUnitType.Pixel));
+    /// The unit column: the same width on every row of the page (each row is a grid of its own), a long unit wrapping in it.
+    const double UnitW = 96;
+    static ColumnDefinition UnitColumn() => Px(UnitW);
+
     void Build()
     {
         var root = new StackPanel { Margin = new Thickness(10, 4, 8, 8) };
+        Grid.SetIsSharedSizeScope(root, true);
         root.Children.Add(new TextBlock
         {
             Text = _page.Name, FontWeight = FontWeight.Bold, FontSize = 14, Margin = new Thickness(0, 4, 0, 2),
@@ -77,6 +94,9 @@ public sealed class FeaturePageView : UserControl
             "Put every setting on this page back to its factory value (what the ROM's source says). Tables opened from here are left as they are."));
         root.Children.Add(head);
 
+        foreach (var (key, build) in TopExtensions.Where(x => x.Key.Equals(_page.Key, StringComparison.OrdinalIgnoreCase)))
+            try { if (build(_page) is { } top) root.Children.Add(top); }
+            catch (Exception ex) { AppLog.Error("calibration", "a page section failed", ex); }
         int hidden = 0;
         foreach (var group in _page.Groups)
         {
@@ -127,7 +147,7 @@ public sealed class FeaturePageView : UserControl
     {
         var grid = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("120,150,150,54,*"),
+            ColumnDefinitions = [Px(LabelW), Px(MinMaxW), Px(MinMaxW), UnitColumn(), new ColumnDefinition(GridLength.Star)],
             Margin = new Thickness(10, 6, 8, 8),
         };
         void Cell(Control c, int r, int col) { Grid.SetRow(c, r); Grid.SetColumn(c, col); grid.Children.Add(c); }
@@ -141,23 +161,32 @@ public sealed class FeaturePageView : UserControl
             grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
             Cell(new TextBlock
             {
-                Text = row.Label + ":", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 3, 6, 3),
+                Text = row.Label + ":", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 3, 6, 3), TextWrapping = TextWrapping.Wrap,
             }, line, 0);
             if (row.Kind == RowKind.MinMax)
             {
-                Cell(Editor(row, row.Slot + ".min"), line, 1);
-                Cell(Editor(row, row.Slot + ".max"), line, 2);
+                Cell(Fill(Editor(row, row.Slot + ".min"), new Thickness(0, 2, 4, 2)), line, 1);
+                Cell(Fill(Editor(row, row.Slot + ".max"), new Thickness(0, 2, 0, 2)), line, 2);
             }
-            else Cell(Editor(row, row.Slot), line, 1);
+            else
+            {
+                // a single value spans both columns, as wide as an editor anywhere else on the page
+                var one = Fill(Editor(row, row.Slot), new Thickness(0, 2, 0, 2));
+                Grid.SetColumnSpan(one, 2);
+                one.MaxWidth = EditW;
+                one.HorizontalAlignment = HorizontalAlignment.Left;
+                one.Width = EditW;
+                Cell(one, line, 1);
+            }
             Cell(new TextBlock
             {
-                Text = UnitOf(row, row.Kind == RowKind.MinMax ? row.Slot + ".min" : row.Slot), FontSize = 11, Opacity = 0.8, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0),
+                Text = UnitOf(row, row.Kind == RowKind.MinMax ? row.Slot + ".min" : row.Slot), FontSize = 11, Opacity = 0.8, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0), TextWrapping = TextWrapping.Wrap,
             }, line, 3);
-            var binds = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
+            var binds = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) };
             binds.Children.Add(ResetButton(row));
             foreach (var (slot, _) in Slots(row)) binds.Children.Add(Bind(slot, row));
             Cell(binds, line, 4);
-            if (row.Tip.Length > 0) ToolTip.SetTip(grid.Children[^1], row.Tip);
+            if (TipOf(row) is { Length: > 0 } gt) ToolTip.SetTip(grid.Children[^1], gt);
             line++;
         }
         return Box(group.Title, grid);
@@ -176,20 +205,57 @@ public sealed class FeaturePageView : UserControl
 
     Control Row(PageRow row)
     {
-        var g = new Grid { ColumnDefinitions = new ColumnDefinitions("240,Auto,54,*"), Margin = new Thickness(0, 3) };
-        var label = new TextBlock { Text = row.Label + (row.Kind == RowKind.Switch ? "" : ":"), VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
+        var g = new Grid { ColumnDefinitions = [Px(LabelW), Px(EditW), UnitColumn(), new ColumnDefinition(GridLength.Star)], Margin = new Thickness(0, 3) };
+        var label = new TextBlock { Text = row.Label + (row.Kind == RowKind.Switch ? "" : ":"), VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 6, 0) };
         Grid.SetColumn(label, 0); g.Children.Add(label);
-        var editor = Editor(row, row.Slot);
+        var editor = Fill(Editor(row, row.Slot), default);
         Grid.SetColumn(editor, 1); g.Children.Add(editor);
-        var unit = new TextBlock { Text = UnitOf(row, row.Slot), FontSize = 11, Opacity = 0.8, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) };
+        var unit = new TextBlock { Text = UnitOf(row, row.Slot), FontSize = 11, Opacity = 0.8, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0), TextWrapping = TextWrapping.Wrap };
         Grid.SetColumn(unit, 2); g.Children.Add(unit);
         Control bind = Bind(row.Kind == RowKind.Force ? row.Slot + ".on" : row.Slot, row);
         bind = row.Kind == RowKind.Force
-            ? new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Children = { ResetButton(row), bind, Bind(row.Slot + ".off", row) } }
-            : new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Children = { ResetButton(row), bind } };
+            ? new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(6, 0, 0, 0), Children = { ResetButton(row), bind, Bind(row.Slot + ".off", row) } }
+            : new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(6, 0, 0, 0), Children = { ResetButton(row), bind } };
         Grid.SetColumn(bind, 3); g.Children.Add(bind);
-        if (row.Tip.Length > 0) ToolTip.SetTip(g, row.Tip);
+        if (TipOf(row) is { Length: > 0 } tip) ToolTip.SetTip(g, tip);
+        if (row.Slot == "romoptions.checksum" && editor is CheckBox sumOn) return WithChecksum(g, sumOn);
         return g;
+    }
+
+    /// The ROM checksum option: the sum as it is now under it - green when the ROM sums to 0, red with a Recalculate
+    /// button when it does not (the ECU would reset on it with the check switched on).
+    Control WithChecksum(Control row, CheckBox on)
+    {
+        var line = new TextBlock { FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, FontFamily = MainWindow.MonoFont };
+        var fix = Btn("Recalculate", () =>
+        {
+            _status(_host.RecalculateChecksum());
+            Build();
+        }, "Set the ROM's balancing byte so its 8-bit sum is 0 (a ROM with none gets one: a free byte at the top of the ROM, kept right by every edit after).");
+        var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, Margin = new Thickness(LabelW, 0, 0, 4), Children = { line, fix } };
+        void Show()
+        {
+            var (sum, site) = _host.ChecksumNow();
+            panel.IsVisible = on.IsChecked == true;
+            line.Text = sum == 0 ? $"checksum {sum:X2}h - correct" + (site is int at ? $" (balanced at {at:X4}h)" : "")
+                                 : $"checksum {sum:X2}h - wrong: the ECU resets with the check on";
+            line.Foreground = sum == 0 ? DataList.Good : DataList.Error;
+            fix.IsVisible = sum != 0;
+        }
+        on.IsCheckedChanged += (_, _) => Show();
+        Show();
+        return new StackPanel { Children = { row, panel } };
+    }
+
+    /// An editor made to fill its column (a tick box stays at the left of it), so every kind lines up with the others.
+    static Control Fill(Control c, Thickness margin)
+    {
+        c.Width = double.NaN;
+        c.MinWidth = 0;
+        if (c is not CheckBox) c.HorizontalAlignment = HorizontalAlignment.Stretch;
+        c.VerticalAlignment = VerticalAlignment.Center;
+        if (margin != default) c.Margin = margin;
+        return c;
     }
 
     /// The unit beside a row: the page's own, else the unit of the setting's formula.
@@ -220,9 +286,10 @@ public sealed class FeaturePageView : UserControl
                 return TextEditor(item);
             case RowKind.Table:
                 {
-                    var b = Btn($"{item.Name}  ({item.Rows}×{item.Cols})", () => _openTable(item),
-                                "Open this table in the map editor.");
-                    b.MinWidth = 220;
+                    string name = $"{item.Name}  ({item.Rows}×{item.Cols})";
+                    var b = Btn(name, () => _openTable(item), $"{name}\nOpen this table in the map editor.");
+                    b.Content = new TextBlock { Text = name, TextTrimming = TextTrimming.CharacterEllipsis };
+                    b.HorizontalContentAlignment = HorizontalAlignment.Left;
                     return b;
                 }
             case RowKind.Switch:
@@ -248,10 +315,18 @@ public sealed class FeaturePageView : UserControl
             case RowKind.Choice:
                 {
                     var options = row.Options ?? [];
+                    var rowValues = row.Values;
                     // the ROM's own list where its description has one: a skeleton module numbers its inputs its own way
                     if (row.Values == null && SaneLimits.ChoiceNames(item.Description) is { Length: >= 2 } own) options = own;
+                    // a row laid out for one ROM's bit numbers (HTS120's switch byte) bound to a skeleton module's one-hot input
+                    // ("01h power steering ... 80h always"): that ROM's inputs, with the serial inputs where it has them
+                    if (CalPage.IsOneHotInput(item.Description) && !(row.Values is { } rv && (rv.SequenceEqual(CalPage.InputValues) || rv.SequenceEqual(CalPage.InputValuesAlwaysOn))))
+                    {
+                        options = CalPage.InputsAlwaysOn;
+                        rowValues = CalPage.InputValuesAlwaysOn;
+                    }
                     // a switch input: the serial inputs too, when the ROM has them
-                    var (opts, values) = CalPage.WithSerialInputs(defs, options, row.Values);
+                    var (opts, values) = CalPage.WithSerialInputs(defs, options, rowValues);
                     options = opts;
                     double raw;
                     try { raw = _host.ReadItem(item)[0].Raw; } catch { return Broken(item); }
@@ -267,7 +342,7 @@ public sealed class FeaturePageView : UserControl
                         foreach (var it in CalPage.BoundAll(defs, slot))
                             Write(it, RawOf(box.SelectedIndex), raw: true, options[box.SelectedIndex]);
                     };
-                    ToolTip.SetTip(box, Describe(item) + (row.Values != null
+                    ToolTip.SetTip(box, Describe(item) + (rowValues != null
                         ? $"\nThe stored byte is {raw:0} (0x{(int)raw:X2}): one bit per input."
                         : $"\nThe stored byte is the position in this list (now {raw:0})."));
                     return box;
@@ -333,7 +408,7 @@ public sealed class FeaturePageView : UserControl
         if (it.Text == "watermark") return RomPasswordUi.WatermarkEditor(_host, it, () => TopLevel.GetTopLevel(this) as Window, _status);
         bool wm = it.Text == "watermark";
         int len = wm ? WatermarkCodec.Length : it.Count;
-        var box = new TextBox { Width = 190, MaxLength = len, FontFamily = MainWindow.MonoFont, VerticalAlignment = VerticalAlignment.Center };
+        var box = new TextBox { MaxLength = len, FontFamily = MainWindow.MonoFont, VerticalAlignment = VerticalAlignment.Center };
         var state = new TextBlock { FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0) };
         void Show()
         {
@@ -365,7 +440,11 @@ public sealed class FeaturePageView : UserControl
         box.KeyDown += (_, e) => { if (e.Key == Avalonia.Input.Key.Enter) Save(); };
         ToolTip.SetTip(box, Describe(it) + $"\nUp to {len} characters; Enter or leaving the box writes it.");
         Show();
-        return new StackPanel { Orientation = Orientation.Horizontal, Children = { box, state } };
+        var dock = new DockPanel();
+        DockPanel.SetDock(state, Dock.Right);
+        dock.Children.Add(state);
+        dock.Children.Add(box);
+        return dock;
     }
 
     Control Broken(ItemDef item)
@@ -412,7 +491,7 @@ public sealed class FeaturePageView : UserControl
     Control ResetButton(PageRow row)
     {
         var items = WithDefaults(row);
-        var b = new Button { Content = "↺", Padding = new Thickness(6, 0), MinWidth = 0, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, IsVisible = items.Count > 0 };
+        var b = new Button { Content = "↺", Padding = new Thickness(6, 0), MinWidth = 0, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
         if (items.Count == 0) return b;
         var defs = _host.Defs();
         string Shown(ItemDef i)
@@ -421,6 +500,8 @@ public sealed class FeaturePageView : UserControl
             catch { return string.Join(", ", i.Default!.Take(i.Count)); }
         }
         b.IsEnabled = !items.All(AtDefault);
+        // no factory value: the button keeps its place (unseen), so the binding boxes line up down the page
+        if (items.Count == 0) { b.IsEnabled = false; b.Opacity = 0; b.IsHitTestVisible = false; return b; }
         ToolTip.SetTip(b, "Reset to default: " + string.Join("; ", items.Select(i => $"{i.Name} = {Shown(i)}")) + (b.IsEnabled ? "" : " (it is at the default now)"));
         b.Click += (_, _) => { ResetItems(items); Build(); };
         return b;

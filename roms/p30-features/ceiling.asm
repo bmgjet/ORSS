@@ -18,17 +18,14 @@ define NEED_MODLIB
 endif
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_CEILING
-                JNE     ceiling_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_CEILING == TICK_SLOT
                 CAL     ceiling_tick
-ceiling_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
-;@ CeilingEnable type=u8 flag=1 on=1 off=0 category="Rpm ceilings" slot=revlimit.ceiling.enable desc="Rpm ceilings on."
+;@ CeilingEnable type=u8 flag=1 on=1 off=0 category="Rpm ceilings" slot=revlimit.ceiling.enable desc="A lower rev limit at low road speeds (five points), easier on the clutch and drivetrain pulling away."
 ceiling_block:          DB  000h
 ;@ CeilingCut type=u8 category="Rpm ceilings" slot=revlimit.ceiling.cut desc="0 = fuel cut, 1 = ignition cut, 2 = both."
 ceiling_cut:            DB  000h

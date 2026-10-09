@@ -36,6 +36,8 @@ public sealed class TableModel
     public double[]? Overlay { get; set; }
     public int[]? OverlayCount { get; set; }
     public string OverlayName { get; set; } = "";
+    /// With an overlay: the logged value drawn large and the map's own value small under it (the other way round when off).
+    public static bool OverlayLarge { get; set; }
     /// The values before a change (the Import maps preview): cells that differ are marked, and their tip says by how much.
     public double[]? Before { get; set; }
 
@@ -379,7 +381,8 @@ public sealed class TableGrid : Control
             (CellW, CellH, HeadW, HeadH, _font) = Natural();
             return;
         }
-        // the row headings are a column and a quarter wide, the column headings a row high (all of it on screen, however small that makes it: hovering over a cell tells its value)
+        // the row headings are a column and a quarter wide, the column headings a row high
+        // (all of it on screen, however small that makes it: hovering over a cell tells its value)
         CellW = Math.Max(8, (size.Width - 1) / (m.Cols + 1.25));
         CellH = Math.Max(5, (size.Height - 1) / (m.Rows + 1));
         HeadW = Math.Max(20, CellW * 1.25);
@@ -429,7 +432,8 @@ public sealed class TableGrid : Control
                 if (m.Heat.TryGetValue(i, out var lit))
                     ctx.DrawRectangle(null, new Pen(AppTheme.Brush(Color.FromArgb((byte)(70 + (185 * Math.Min(1, lit / 0.75))), 255, 255, 255)), lit >= 0.75 ? 2.2 : 1.4),
                                       rc.Deflate(1), round, round);
-                // dark figures on every cell, the red ones too: a table reads as one piece (only a colour set in Settings dark enough to lose them gets light ones)
+                // dark figures on every cell, the red ones too: a table reads as one piece (only a colour set in
+                // Settings dark enough to lose them gets light ones)
                 var ink = (0.299 * color.R) + (0.587 * color.G) + (0.114 * color.B) > 60 ? Ink : InkLight;
                 if (m.Overlay is { } ov && i < ov.Length && !double.IsNaN(ov[i]))
                 {
@@ -437,9 +441,19 @@ public sealed class TableGrid : Control
                     double small = Math.Max(7, _font * 0.78);
                     var top = new Rect(rc.X, rc.Y, rc.Width, rc.Height * 0.56);
                     var foot = new Rect(rc.X + 2, rc.Y + (rc.Height * 0.54), rc.Width - 4, rc.Height * 0.44);
-                    Text(ctx, m.Format(m.Values[i]), top, ink, Math.Max(7, _font * 0.9));
+                    string logged = ov[i].ToString(Math.Abs(ov[i]) >= 100 ? "0" : "0.0#", CultureInfo.InvariantCulture);
                     if (foot.Height >= 8) ctx.FillRectangle(OverlayPill, foot, (float)Math.Min(4, foot.Height / 2));
-                    Text(ctx, ov[i].ToString(Math.Abs(ov[i]) >= 100 ? "0" : "0.0#", CultureInfo.InvariantCulture), foot, OverlayInk, small, bold: true);
+                    if (TableModel.OverlayLarge)
+                    {
+                        // the logged number is the one to read: large at the top, the map's value small on the pill
+                        Text(ctx, logged, top, OverlayInk, Math.Max(7, _font * 0.9), bold: true);
+                        Text(ctx, m.Format(m.Values[i]), foot, ink, small);
+                    }
+                    else
+                    {
+                        Text(ctx, m.Format(m.Values[i]), top, ink, Math.Max(7, _font * 0.9));
+                        Text(ctx, logged, foot, OverlayInk, small, bold: true);
+                    }
                 }
                 else Text(ctx, m.Format(m.Values[i]), rc, ink, _font);
                 // a cell the preview would change: a small dark corner

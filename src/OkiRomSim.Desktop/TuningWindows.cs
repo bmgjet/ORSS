@@ -115,7 +115,13 @@ static class Form
 
 // ---------------------------------------------------------------- injectors
 
-/// Injector calibration, laid out the way the established tuning software does it: the size the calibration was written for, the size fitted, the multiplier that follows from the two, the injector offset and the dead time against battery voltage - picked from the injector presets, or typed in and kept as your own - and the fuel trims. The size change is made once, the way the ROM does it best: on a skeleton ROM with the injector size module, its stock and fitted sizes (the module scales every pulse, the other modules' trims with it); on an HTS ROM, its own multiplier (stock / fitted on every pulse, held to x2 - past that the fuel maps take the rest); otherwise every fuel table is scaled. Never two of them, which would scale the fuel twice.
+/// Injector calibration, laid out the way the established tuning software does it: the size the calibration was written for, the
+/// size fitted, the multiplier that follows from the two, the injector offset and the dead time against battery voltage - picked
+/// from the injector presets, or typed in and kept as your own - and the fuel trims.
+/// The size change is made once, the way the ROM does it best: on a skeleton ROM with the injector size module, its stock and
+/// fitted sizes (the module scales every pulse, the other modules' trims with it); on an HTS ROM, its own multiplier (stock /
+/// fitted on every pulse, held to x2 - past that the fuel maps take the rest); otherwise every fuel table is scaled. Never two of
+/// them, which would scale the fuel twice.
 public sealed class InjectorWindow : Window
 {
     enum Way { StockFitted, Multiplier, Maps }
@@ -145,7 +151,8 @@ public sealed class InjectorWindow : Window
     List<InjectorPreset> _lags = [];
     List<InjectorPreset> _mine = [];
     bool _filling;
-    /// What each box showed when the window opened: a setting is written only when its box was changed, so a value shown rounded (a dead time of 0.026 ms as 0.03) is never written back slightly different.
+    /// What each box showed when the window opened: a setting is written only when its box was changed, so a value shown
+    /// rounded (a dead time of 0.026 ms as 0.03) is never written back slightly different.
     readonly Dictionary<NumericUpDown, decimal?> _opened = [];
 
     public bool Applied { get; private set; }

@@ -125,7 +125,7 @@ Status:
 
 | Function | Source | Status | Define |
 | --- | --- | --- | --- |
-| Datalogging core: the serial link at 38400 and the HTS 10h/20h frame, C0h+n, 40h packet (stored codes in bytes 12-15) | HTS120, p30-features | Module | `FEAT_DATALOG` |
+| Datalogging core: the serial link at 38400 (or 62,500, DatalogFast) and the HTS 10h/20h frame, C0h+n, 40h packet (stored codes in bytes 12-15) | HTS120, p30-features | Module | `FEAT_DATALOG` |
 | Datalogging: channel stream (version 4: any of 53 channels, fast ones in every frame and slow ones in turn, one a frame; words read in one go; picked in Datalog > Channels…; the 70h/73h lists of versions 1-3 still answered) | p30-features | Module | `FEAT_DLSTREAM` |
 | Datalogging: QD3 frame (ABh -> BCh, 46h -> 40 bytes and a checksum) | p30-features | Module | `FEAT_DLQD3` |
 | Datalogging: service commands: clear the codes (50h), injectors off, timing locked for a timing light, maps chosen, GIO 1-4 forced on; the check-engine lamp flashes quickly while injectors are off or timing is locked. Datalogging > Codes and service… | p30-features | Module | `FEAT_DLSERVICE` |

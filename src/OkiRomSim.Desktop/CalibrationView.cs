@@ -56,6 +56,7 @@ public sealed class CalibrationView : UserControl
     // fuel maps: how the numbers are shown (0 the ROM's own units, 1 pulse ms, 2 duty %, 3 fuel per cycle mm3); the injector size is for the last
     readonly ComboBox _fuelView = new() { FontSize = 11, MinHeight = 0, Padding = new Thickness(6, 1), ItemsSource = new[] { "Honda units", "Pulse (ms)", "Duty (%)", "Fuel per cycle (mm³)" }, SelectedIndex = 0 };
     readonly NumericUpDown _injCc = new() { Minimum = 50, Maximum = 5000, Value = 240, Increment = 10, FormatString = "0", Width = 110, FontSize = 11, MinHeight = 0, Padding = new Thickness(4, 1) };
+    readonly Button _overlaySwap = new() { Content = "⇅ Map large", FontSize = 11, MinHeight = 0, Padding = new Thickness(6, 1), Margin = new Thickness(8, 0, 0, 0), IsVisible = false };
     readonly TextBlock _fuelViewLabel = new() { Text = "Show as", FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
     readonly TextBlock _injLabel = new() { Text = "injector cc/min", FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
     /// One Honda fuel unit in milliseconds: the ROM counts the pulse in 4.00839 us ticks and the map's value is the tick count divided by 4.
@@ -166,6 +167,14 @@ public sealed class CalibrationView : UserControl
             new Toolbar.Entry(Toolbar.Scale, "MAP sensor size\u2026",
                 "Pick the MAP sensor fitted (or type what it reads at 0 V and 5 V) and move every load breakpoint to the count that means the same real pressure.",
                 () => OpenMapSensor()),
+            new Toolbar.Entry(Toolbar.Scale, "Scale for boost\u2026",
+                "Going from natural aspiration to a turbo or supercharger: the load axis given boost columns, and the fuel and timing written into them " +
+                "from the maps you have - fuel rising with the pressure, timing out a set amount a psi. A base map to start tuning from.",
+                () => OpenBaseMap(new BoostScaleWindow(_host), "scaled for boost")),
+            new Toolbar.Entry(Toolbar.Scale, "Scale for alpha-N\u2026",
+                "Individual throttle bodies or big cams: the throttle as the load at wider throttle, MAP below a crossover - the load axis split, " +
+                "the throttle table and the crossovers set, the maps resampled to start where they were. Needs Maps indexing (alpha-N) built in.",
+                () => OpenBaseMap(new AlphaNScaleWindow(_host), "scaled for alpha-N")),
             new Toolbar.Entry(Toolbar.Scale, "Scale\u2026",
                 "Scale whole sections at once: this table by a percentage, or rescale a fuel map that has run to the top of its scale.",
                 () => ScaleTools(Selected)),
@@ -348,7 +357,8 @@ public sealed class CalibrationView : UserControl
             }
             else Adjust(op);
         };
-        // the menu opens on the table itself: a cell, the chart, the surface - not the empty space round it, and not at the end of a right-drag that turned the 3D view
+        // the menu opens on the table itself: a cell, the chart, the surface - not the empty space round it, and not at the
+        // end of a right-drag that turned the 3D view
         foreach (var v in new Control[] { _grid, _graph, _surface })
             v.ContextRequested += (_, e) =>
             {
@@ -382,6 +392,17 @@ public sealed class CalibrationView : UserControl
         var gridBar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(0, 0, 0, 2) };
         gridBar.Children.Add(_stretchBtn);
         gridBar.Children.Add(_fuelViewLabel); gridBar.Children.Add(_fuelView); gridBar.Children.Add(_injLabel); gridBar.Children.Add(_injCc);
+        // with an overlay on the map: which of the two numbers in a cell is the big one
+        _overlaySwap.Click += (_, _) =>
+        {
+            TableModel.OverlayLarge = !TableModel.OverlayLarge;
+            _overlaySwap.Content = TableModel.OverlayLarge ? "⇅ Logged large" : "⇅ Map large";
+            _grid.InvalidateVisual();
+            _status.Text = TableModel.OverlayLarge ? "the overlay's logged values are the large numbers, the map's values small under them"
+                                                   : "the map's values are the large numbers, the overlay's logged values small under them";
+        };
+        ToolTip.SetTip(_overlaySwap, "With an overlay on the map (Tools > Overlay): swap which number is large in each cell - the map's own value, or the logged one.");
+        gridBar.Children.Add(_overlaySwap);
         ToolTip.SetTip(_fuelView, "How a fuel map's numbers are shown. Honda units are what the ROM stores (and what the tuning software shows). Pulse is the injector open time in ms. " +
                                   "Duty is that pulse as a share of the time between injections at each row's rpm (the ROM injects once per two turns): 100 % means the injector never closes. " +
                                   "Fuel per cycle is what the injector delivers in one pulse, from its size. The other views are for reading; edit in Honda units.");
@@ -533,7 +554,8 @@ public sealed class CalibrationView : UserControl
         var shown = f.Length == 0 ? listed : [.. listed.Where(i =>
             i.Name.Contains(f, StringComparison.OrdinalIgnoreCase) || i.Category.Contains(f, StringComparison.OrdinalIgnoreCase) ||
             i.Address.ToString("X4").Contains(f, StringComparison.OrdinalIgnoreCase))];
-        // going to a table the filter hides (a header double-clicked, a button for another table): the filter is cleared so the table can be shown, instead of landing on the first one the filter lets through
+        // going to a table the filter hides (a header double-clicked, a button for another table): the filter is
+        // cleared so the table can be shown, instead of landing on the first one the filter lets through
         if (jump && f.Length > 0 && !shown.Any(i => i.Name == select) && listed.Any(i => i.Name == select))
         {
             _clearingFilter = true;
@@ -607,7 +629,8 @@ public sealed class CalibrationView : UserControl
                 var romPages = CalPage.ForRom(defs);
                 // the page on screen, as this ROM's list now has it (a binding may have added settings to it)
                 if (_pageOpen is { } was && romPages.FirstOrDefault(p => p.Key == was.Key) is { } now) _pageOpen = now;
-                // a ROM built from a skeleton: a page that belongs to modules it was built without is not valid, whatever a guess (or a binding kept from an earlier build) has put on it - unless the skeleton's own stock code fills a row of it
+                // a ROM built from a skeleton: a page that belongs to modules it was built without is not valid, whatever a guess
+                // (or a binding kept from an earlier build) has put on it - unless the skeleton's own stock code fills a row of it
                 if (!ReferenceEquals(_leftOutFor, _host.Assembly)) { _leftOutFor = _host.Assembly; _leftOut = _host.Assembly is { } asmNow ? Skeleton.PagesLeftOut(asmNow) : null; }
                 var leftOut = _leftOut;
                 var skeletonFile = _host.Assembly?.Files.FirstOrDefault(x => x.EndsWith("-skeleton.asm", StringComparison.OrdinalIgnoreCase)) is { } sf ? Path.GetFileName(sf) : null;
@@ -815,16 +838,16 @@ public sealed class CalibrationView : UserControl
     public bool FollowVtec { get; set; } = true;
     bool? _lastVtec;
 
-    /// Where the car is now (from a datalog frame): marks that cell of the table on screen. One reading shown on the maps whatever the live trace is set to (the dyno's double-click): the table for its cam, the engine's place on it lit and the view locked there.
+    /// Where the car is now (from a datalog frame): marks that cell of the table on screen.
+    /// One reading shown on the maps whatever the live trace is set to (the dyno's double-click): the table for its cam, the engine's
+    /// place on it lit and the view locked there.
     public void ShowPoint(LogFrame f)
     {
         bool live = _live.IsChecked == true;
         _live.IsChecked = true;
-        _pointOnly = true;
-        try { SetEngineState(f); } finally { _pointOnly = false; }
+        SetEngineState(f);
         if (!live) _status.Text = "the reading picked on the dyno is lit on the map (Live trace was off: it stays on until you untick it)";
     }
-    bool _pointOnly;
 
     public void SetEngineState(LogFrame? f)
     {
@@ -842,7 +865,8 @@ public sealed class CalibrationView : UserControl
                        _model.Cols == 1 || _item.ColAxis == null ? 0 : LogOverlay.Position(_model.ColAxis, Units.Show(cget(f)!.Value, _colUnit)));
         }
         if (pos == _model.ExternalTrace) return;
-        // the trail: where the engine has been, over the trail time (a jump back in the log, or a long way forward - the slider moved, another log - starts it again)
+        // the trail: where the engine has been, over the trail time (a jump back in the log, or a long way forward - the
+        // slider moved, another log - starts it again)
         if (pos is { } p && _tuner)
         {
             double t = f?.T ?? double.NaN;
@@ -936,6 +960,7 @@ public sealed class CalibrationView : UserControl
         if (throttle && (DateTime.UtcNow - _lastOverlay).TotalMilliseconds < Perf.OverlayMs) return;
         _lastOverlay = DateTime.UtcNow;
         var ch = _overlayChannel;
+        _overlaySwap.IsVisible = ch != "none" && OverlayFrames != null;
         if (ch == "none" || OverlayFrames == null) { if (_model.Overlay != null) { _model.Overlay = null; Redraw(); } return; }
         // averaging a channel over every frame of a long log: on another core, the map keeps drawing meanwhile
         if (_overlayBusy) return;
@@ -1454,6 +1479,10 @@ public sealed class CalibrationView : UserControl
     CalPage? _pageOpen;
 
     /// Show a feature page (GPO 1, ...) instead of a single definition. The first time a page is opened on a ROM its rows are guessed from the definition names; after that the bindings are the user's, and travel with the definitions.
+    /// The layout check: show a feature page as a click in the list would.
+    internal void ShowPageForCheck(CalPage page) => ShowPage(page);
+    internal void ValidOnlyForCheck(bool on) => _validBox.IsChecked = on;
+
     void ShowPage(CalPage page)
     {
         _pageOpen = page;
@@ -2230,6 +2259,15 @@ public sealed class CalibrationView : UserControl
         if (cells.Count == 0) { _status.Text = "no selected cell has enough samples to correct"; return; }
         Write(cells, i => _model.Values[i] * (1 + (fix.Percent(i) / 100)), false, fix.What);
         _status.Text = $"{cells.Count} cell(s) corrected: {fix.What}";
+    }
+
+    /// A base map tool (scale for boost / alpha-N): redraw if it applied anything.
+    async void OpenBaseMap(Window w, string what)
+    {
+        if (_top() is not Window owner) return;
+        await Dialogs.ShowModal(w, owner);
+        if (w is BoostScaleWindow { Applied: true } or AlphaNScaleWindow { Applied: true })
+        { Refresh(Selected?.Name); _status.Text = what + " - Undo puts it all back in one step"; }
     }
 
     /// Open the scaling tools on the table on screen, and redraw if anything was applied.

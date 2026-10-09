@@ -22,7 +22,11 @@ public sealed class LangFile
     public Dictionary<string, string> Strings { get; set; } = [];
 }
 
-/// The app in other languages. English is built in; every other language is a JSON file in the lang folder beside the program (or in the settings folder's lang, for your own), read when the app starts - add a file there and it is offered in Settings > General. Text is translated as it is put on screen: every piece of text whose English is in the file is shown in the other language, and anything not in it stays English (so a file can be partly done, and grows as you go). With a language picked, the English text seen that has no translation yet is gathered, and Settings > General can write it out as a starting point for the translator.
+/// The app in other languages. English is built in; every other language is a JSON file in the lang folder beside the program (or in
+/// the settings folder's lang, for your own), read when the app starts - add a file there and it is offered in Settings > General.
+/// Text is translated as it is put on screen: every piece of text whose English is in the file is shown in the other language, and
+/// anything not in it stays English (so a file can be partly done, and grows as you go). With a language picked, the English text seen
+/// that has no translation yet is gathered, and Settings > General can write it out as a starting point for the translator.
 public static class Lang
 {
     static readonly JsonSerializerOptions Json = new()
@@ -103,7 +107,8 @@ public static class Lang
         if (Current == "en" || english.Length == 0) return english;
         if (_values.Contains(english)) return english;          // already in this language (the same text set again)
         if (Find(english) is { } t) return t;
-        // the words inside what is round them: an icon in front ("▶ Run"), a hotkey, unit or note behind ("Run (F5)", "Coolant (°C)", "Fuel map value (every-channel module)"), a menu arrow ("File ▾")
+        // the words inside what is round them: an icon in front ("▶ Run"), a hotkey, unit or note behind ("Run (F5)",
+        // "Coolant  (°C)", "Fuel map value  (every-channel module)"), a menu arrow ("File  ▾")
         string pre = "", core = english, post = "";
         int sp = core.IndexOf(' ');
         if (sp is > 0 and <= 3 && !char.IsLetterOrDigit(core[0]) && core[0] != '(' && core[0] != '+')

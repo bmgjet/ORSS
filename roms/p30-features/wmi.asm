@@ -24,13 +24,10 @@ endif
 
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_WMI
-                JNE     wmi_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_WMI == TICK_SLOT
                 CAL     wmi_tick
-wmi_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
@@ -38,7 +35,7 @@ if XP == XP_CAL
 wmi_enable:             DB  000h
 ;@ WmiOutput type=u8 formula=raw category="Water/methanol" slot=wmi.output desc="The output the pump is on: 0 none, 1 P0.0 (A/C clutch, A15), 2 P0.1 (EVAP purge), 3 P0.4 (A/T lock-up, automatic ECUs), 4 P1.2 (O2 heater), 5 P1.4 (check-engine lamp, A13), 6 P1.5 (ECU LED), 7 P0.2 (alternator control, A16) high, 8 P0.2 low, 9 P0.0 held off (A/C clutch disengaged), 10 P0.3 (radiator fan), 11 P4.3 (pin A17; boost control uses it too)."
 wmi_out:                DB  002h
-;@ WmiRpm type=u16 formula=rpm_period_word category="Water/methanol" slot=wmi.rpm desc="Only at or above this rpm."
+;@ WmiRpm type=u16 formula=rpm_period_word category="Water/methanol" slot=wmi.rpm desc="Water / methanol injection only at or above this rpm."
 wmi_rpm:                DW  0036eh
 ;@ WmiThrottle type=u8 formula=tps_pct category="Water/methanol" slot=wmi.tps desc="Only with the throttle at least this."
 wmi_tps:                DB  07fh

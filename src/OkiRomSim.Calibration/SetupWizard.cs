@@ -22,6 +22,62 @@ public sealed record GearboxPreset(string Name, int[] Bounds)
     public override string ToString() => Name;
 }
 
+/// The gearbox the ECU works the gear out from: the boundaries between gears, in the units the established software uses
+/// (its "raw ratio": 7324 x km/h / rpm, rising with each gear), written the way each ROM keeps them.
+public static class Gearboxes
+{
+    /// rpm per km/h -> the raw ratio, and back.
+    public const double RawPerKmhPerRpm = 29297.0 / 4;
+    public static double RawOf(double rpm, double kmh) => rpm <= 0 ? 0 : RawPerKmhPerRpm * kmh / rpm;
+
+    /// The ROM keeps a gearbox: HTS's custom ratio words, or the skeleton's gear detection bounds.
+    public static bool Has(DefinitionSet defs) => CalPage.Bound(defs, "transmission.ratio") != null || CalPage.Bound(defs, "transmission.bounds") != null;
+
+    /// Write the four boundaries (between gears 1-2, 2-3, 3-4 and 4-5, raw ratio) and, on HTS, which preset it was
+    /// (index, or 255 for custom). False: the ROM has no gearbox setting.
+    public static bool Apply(DefinitionSet defs, byte[] work, int[] bounds, int preset)
+    {
+        if (CalPage.Bound(defs, "transmission.ratio") is { } it)
+        {
+            for (int i = 0; i < Math.Min(it.Count, bounds.Length); i++) RomData.WriteRawCell(work, it, i, bounds[i]);
+            if (CalPage.Bound(defs, "transmission.preset") is { } pi) RomData.WriteRawCell(work, pi, 0, preset < 0 ? 255 : preset);
+            return true;
+        }
+        if (CalPage.Bound(defs, "transmission.bounds") is { } sk)
+        {
+            // the skeleton's gear detection keeps 29297 / (rpm per km/h): four times the established software's numbers,
+            // and a fifth bound past the last gear
+            for (int i = 0; i < Math.Min(4, Math.Min(sk.Count, bounds.Length)); i++) RomData.WriteRawCell(work, sk, i, bounds[i] * 4);
+            if (sk.Count > 4 && bounds.Length >= 4) RomData.WriteRawCell(work, sk, 4, Math.Round(bounds[3] * 4 * 1.5));
+            return true;
+        }
+        return false;
+    }
+
+    /// The boundaries now, in raw ratio (null when the ROM keeps none).
+    public static int[]? Read(DefinitionSet defs, byte[] rom)
+    {
+        if (CalPage.Bound(defs, "transmission.ratio") is { } it) return [.. RomData.Read(defs, rom, it).Take(4).Select(c => (int)c.Raw)];
+        if (CalPage.Bound(defs, "transmission.bounds") is { } sk) return [.. RomData.Read(defs, rom, sk).Take(4).Select(c => (int)Math.Round(c.Raw / 4))];
+        return null;
+    }
+
+    /// The boundaries from the raw ratio measured in each gear (1 to 4 or 5): half way between one gear and the next, and
+    /// past the last one measured as far again as the gap below it.
+    public static int[] FromLearned(IReadOnlyList<double> perGear)
+    {
+        var g = perGear.Where(v => v > 0).ToList();
+        var bounds = new int[4];
+        for (int i = 0; i < 4; i++)
+        {
+            double lo = i < g.Count ? g[i] : (g.Count >= 2 ? g[^1] + (g[^1] - g[^2]) * (i - g.Count + 1) : 50 * (i + 1));
+            double hi = i + 1 < g.Count ? g[i + 1] : lo + (g.Count >= 2 ? g[^1] - g[^2] : 40);
+            bounds[i] = (int)Math.Round((lo + hi) / 2);
+        }
+        return bounds;
+    }
+}
+
 /// The presets the set-up wizard offers, from Templates/Presets/presets.json: the stock ECUs whose maps a ROM can start from (their maps in the .stock files beside it), injector lag curves and gearboxes.
 public sealed class PresetLibrary
 {
@@ -100,7 +156,14 @@ public static class SetupPlanner
         if (c.BaseMap is { } bm && lib != null)
         {
             var block = lib.StockBlock(bm);
-            if (hts) done.Add(StockIntoHts(defs, work, block, bm));
+            if (hts)
+            {
+                var before = (byte[])work.Clone();
+                string what = StockIntoHts(defs, work, block, bm);
+                // a ROM can already be that ECU's calibration (HTS 1.15 is the P08-237 D15B VTEC JDM's): say so, not "done"
+                if (before.AsSpan().SequenceEqual(work)) notHere.Add($"base maps: this ROM already has the stock {bm} calibration - nothing to change");
+                else done.Add(what);
+            }
             else if (htsTemplate != null && File.Exists(htsTemplate)) done.Add(StockByImport(defs, work, block, bm, htsTemplate));
             else notHere.Add("base maps: the HTS120 template is needed to bring a stock ECU's maps into this ROM");
         }
@@ -203,7 +266,8 @@ public static class SetupPlanner
             var os = c.OldSensor ?? MapSensorScale.Of(defs, work) ?? MapSensorScale.Stock;
             if (Math.Abs(os.Zero - ns.Zero) > 0.5 || Math.Abs(os.Full - ns.Full) > 0.5)
             {
-                // every pressure moved to the same real pressure on the sensor fitted, and the ROM told which sensor that is (so the boost below is worked out in true pressures)
+                // every pressure moved to the same real pressure on the sensor fitted, and the ROM told which sensor that is
+                // (so the boost below is worked out in true pressures)
                 done.Add(MapSensorScale.Swap(defs, work, os, ns));
                 if (!MapSensorScale.CanKeep(defs, work)) notHere.Add("MAP sensor: this ROM has nowhere to say which sensor is fitted, so the app still shows its pressures on the stock scale");
             }
@@ -211,21 +275,7 @@ public static class SetupPlanner
         if (c.Gearbox is int g && lib != null && g >= 0 && g < lib.Gearboxes.Count)
         {
             var gb = lib.Gearboxes[g];
-            if (Has(defs, "transmission.ratio"))
-            {
-                var it = CalPage.Bound(defs, "transmission.ratio")!;
-                for (int i = 0; i < Math.Min(it.Count, gb.Bounds.Length); i++) RomData.WriteRawCell(work, it, i, gb.Bounds[i]);
-                if (CalPage.Bound(defs, "transmission.preset") is { } pi) RomData.WriteRawCell(work, pi, 0, g);
-                done.Add($"gearbox: {gb.Name}");
-            }
-            else if (Has(defs, "transmission.bounds"))
-            {
-                // the skeleton's gear detection keeps 29297 / (rpm per km/h): four times the established software's numbers
-                var it = CalPage.Bound(defs, "transmission.bounds")!;
-                for (int i = 0; i < Math.Min(4, it.Count); i++) RomData.WriteRawCell(work, it, i, gb.Bounds[i] * 4);
-                if (it.Count > 4) RomData.WriteRawCell(work, it, 4, Math.Round(gb.Bounds[3] * 4 * 1.5));
-                done.Add($"gearbox: {gb.Name}");
-            }
+            if (Gearboxes.Apply(defs, work, gb.Bounds, g)) done.Add($"gearbox: {gb.Name}");
             else notHere.Add("gearbox: this ROM does not work out the gear (build in Gear detection: File > Change functions)");
         }
 
@@ -373,7 +423,8 @@ public static class SetupPlanner
                         want2[r * cols + k] = v;
                     }
                 }
-                // a Honda fuel map stores a byte times its column's multiplier: each column gets the smallest multiplier its biggest value fits under, so the fuel past the air outside is not cut off at 255 counts
+                // a Honda fuel map stores a byte times its column's multiplier: each column gets the smallest multiplier its
+                // biggest value fits under, so the fuel past the air outside is not cut off at 255 counts
                 if (map.ColumnScaleAddress is int ms)
                 {
                     var mf = defs.Formula(map.Formula);

@@ -1,7 +1,10 @@
 // Copyright (c) bmgjet. All rights reserved.
 namespace OkiRomSim.Calibration;
 
-/// The functions' own state, logged (the "every channel" module's channels 132-187: every byte of module RAM). Which function keeps what where is decided when the ROM is built, so the names come from the build open: each variable a function keeps there is a channel of its own, named as in its source (rollidle_drops, tc_trim...), with what it means and, for the ones known here, its value in real units as well (rollidle_injectors: the injectors left out last). Bytes no function uses are not logged.
+/// The functions' own state, logged (the "every channel" module's channels 132-187: every byte of module RAM). Which function keeps
+/// what where is decided when the ROM is built, so the names come from the build open: each variable a function keeps there is a
+/// channel of its own, named as in its source (rollidle_drops, tc_trim...), with what it means and, for the ones known here, its
+/// value in real units as well (rollidle_injectors: the injectors left out last). Bytes no function uses are not logged.
 public static class ModuleDebug
 {
     public const int Bytes = 56;
@@ -40,6 +43,12 @@ public static class ModuleDebug
         ["tc_trim"] = "Traction control: the timing it is taking out", ["tc_prev"] = "Traction control: the rpm rise before",
         ["tc_now"] = "Traction control: the rpm rise now", ["wbcl_trim"] = "Wideband closed loop: the fuel trim it is giving",
         ["wbcl_afr"] = "Wideband closed loop: the AFR it read",
+        ["MOD_REVCAP"] = "Rev cap: the lowest rev limit a function holds now (crank period / 4), cut at once past it",
+        ["MOD_REVNEXT"] = "Rev cap: the lowest rev limit asked for this tick cycle", ["bc_point"] = "Boost cut: the cut point now (MAP sensor counts)",
+        ["rc_flags"] = "Remote control: its state (fan, popcorn, unlocked, valet mode)", ["rc_rev"] = "Remote control: the rev limit set (x 50 rpm)",
+        ["rc_speed"] = "Remote control: the speed limit set (km/h)", ["rc_boost"] = "Remote control: the boost cut set (MAP sensor counts, 0 the tune's)",
+        ["rc_vtec"] = "Remote control: the VTEC point set (rpm byte, 0 the tune's)", ["rc_tmp"] = "Remote control: the password as it comes in",
+        ["rc_fuel"] = "Remote control: popcorn mode's fuel trim", ["rc_ign"] = "Remote control: valet mode's and popcorn's timing trim",
     };
 
     static readonly HashSet<string> NotVariables = new(StringComparer.OrdinalIgnoreCase) { "MOD_RAM_BASE", "MOD_RAM_END", "MODRAM_NEXT" };
@@ -88,7 +97,8 @@ public static class ModuleDebug
         ? $"{v.Name}{(v.Size > 1 ? $" byte {offset - v.Offset + 1} of {v.Size}" : "")} - {v.About}"
         : "not used by a function in this build";
 
-    /// One byte of module RAM into the frame: under its variable's name (a word's bytes as _lo and _hi, and the word itself once both have come), and the known ones in real units too.
+    /// One byte of module RAM into the frame: under its variable's name (a word's bytes as _lo and _hi, and the word itself once
+    /// both have come), and the known ones in real units too.
     public static void Decode(LogFrame f, int offset, byte b)
     {
         // a byte no function in this build uses has nothing to say: not logged

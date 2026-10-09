@@ -24,7 +24,10 @@ public interface IOkiPlugin
     void Stop();
 }
 
-/// What a plugin is given: the whole app (the window, the simulator and ROM, the calibration editor, the datalog, the settings) and a few ways in that keep what it adds tidy - its own menu entries, buttons, tabs, pages, settings and a folder and settings of its own. Everything here is used on the UI thread; from another thread, go through Ui(). An emulator a plugin drives in place of the app's own (TakeOverEmulator): while it is in charge, the Emulator menu (connect, download, upload, validate, real-time update), the Datalogging menu's and the datalog page's Connect, and both status dots go to it. Called on the UI thread; long work belongs on the plugin's own threads.
+/// What a plugin is given: the whole app (the window, the simulator and ROM, the calibration editor, the datalog, the settings) and a few ways in that keep what it adds tidy - its own menu entries, buttons, tabs, pages, settings and a folder and settings of its own. Everything here is used on the UI thread; from another thread, go through Ui().
+/// An emulator a plugin drives in place of the app's own (TakeOverEmulator): while it is in charge, the Emulator menu
+/// (connect, download, upload, validate, real-time update), the Datalogging menu's and the datalog page's Connect, and
+/// both status dots go to it. Called on the UI thread; long work belongs on the plugin's own threads.
 public interface IEmulatorTakeover
 {
     /// What it is ("ALPHAemu"), for the menus and the tooltips.
@@ -140,7 +143,8 @@ public sealed class PluginContext
         _undo.Add(() => _manager.SettingsPages.Remove((title, build)));
     }
 
-    /// Drive the emulator and its datalog from this plugin: the app's Emulator and Datalogging controls go to it (and the app's own emulator link is closed) until the plugin is switched off or calls ReleaseEmulator.
+    /// Drive the emulator and its datalog from this plugin: the app's Emulator and Datalogging controls go to it (and the
+    /// app's own emulator link is closed) until the plugin is switched off or calls ReleaseEmulator.
     public void TakeOverEmulator(IEmulatorTakeover takeover)
     {
         _manager.SetEmulator(takeover);

@@ -210,4 +210,11 @@ public sealed class AppMcpSession : IMcpSession
     }
 
     public void Notify(string message) => _notify(message);
+
+    /// The app's editor copy of a source file of the open ROM, and new text for them (MainWindow sets these).
+    public Func<string, string?>? SourceTextFn { get; init; }
+    public Func<IReadOnlyList<(string Path, string Text)>, string, string?>? SetSourcesFn { get; init; }
+    public string? SourceText(string path) => SourceTextFn?.Invoke(path);
+    public string? SetSource(string path, string text, string what) => SetSourcesFn?.Invoke([(path, text)], what);
+    public string? SetSources(IReadOnlyList<(string Path, string Text)> files, string what) => SetSourcesFn?.Invoke(files, what);
 }

@@ -1,7 +1,8 @@
 // Copyright (c) bmgjet. All rights reserved.
 namespace OkiRomSim.Desktop;
 
-/// Where the app keeps what is yours in Documents: Documents\Rom Sim Studio\Dyno (profiles and runs) and the rest. A folder from before the name changed is moved over the first time it is asked for, so nothing made with the older version goes missing.
+/// Where the app keeps what is yours in Documents: Documents\Rom Sim Studio\Dyno (profiles and runs) and the rest. A folder from before the
+/// name changed is moved over the first time it is asked for, so nothing made with the older version goes missing.
 public static class AppPaths
 {
     public static string Documents => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Rom Sim Studio");

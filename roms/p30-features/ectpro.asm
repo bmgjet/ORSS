@@ -4,7 +4,7 @@
 ;> name: Coolant temperature protection
 ;> category: Protection
 ;> pages: ectpro
-;> ram: 1F2h-1F5h (shared cut requests)
+;> ram: 1F2h-1F5h (shared cut requests), the rev cap: 2 bytes of module RAM shared by every rev limit (lib.asm)
 ;> about: Once the coolant is hotter than a set temperature the engine is held to a lower rev limit, so
 ;>        an overheating engine limps home instead of being driven hard. Fuel cut, ignition cut or both.
 ;>        Off until enabled.
@@ -12,18 +12,18 @@
 ifdef FEAT_ECTPRO
 
 if XP == XP_DEFS
+ifndef NEED_REVCAP
+define NEED_REVCAP                             ; (its rev limit is a hard limit for the crank interrupt too: lib.asm)
+endif
 ifndef NEED_MODLIB
 define NEED_MODLIB
 endif
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_ECTPRO
-                JNE     ectpro_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_ECTPRO == TICK_SLOT
                 CAL     ectpro_tick
-ectpro_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
@@ -31,9 +31,9 @@ if XP == XP_CAL
 ectpro_block:           DB  000h
 ;@ ECTProCut type=u8 category="ECT protection" slot=ectpro.cut desc="0 = fuel cut, 1 = ignition cut, 2 = both."
 ectpro_cut:             DB  000h
-;@ ECTProRPM type=u16 formula=rpm_period_word category="ECT protection" slot=ectpro.rpm desc="Rev limit while too hot."
+;@ ECTProRPM type=u16 formula=rpm_period_word category="ECT protection" slot=ectpro.rpm desc="While the coolant is too hot, the rev limit drops to this."
 ectpro_set:             DW  00177h               ; 5000 rpm
-;@ ECTProRPMReset type=u16 formula=rpm_period_word category="ECT protection" slot=ectpro.rpm.reset desc="Back in below this rpm."
+;@ ECTProRPMReset type=u16 formula=rpm_period_word category="ECT protection" slot=ectpro.rpm.reset desc="Fuel / spark come back once the rpm falls under this."
 ectpro_reset:           DW  00181h               ; 4870 rpm
 ;@ ECTProTemp type=u8 formula=honda_temp_c category="ECT protection" slot=ectpro.ect desc="Too hot above this coolant temperature."
 ectpro_ect:             DB  010h                 ; 110 C

@@ -33,17 +33,14 @@ undef MODRAM_NEXT
 define MODRAM_NEXT (mapsw_rpm + 1)
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_MAPSWITCH
-                JNE     mapsw_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_MAPSWITCH == TICK_SLOT
                 CAL     mapsw_tick
-mapsw_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
-;@ DualMapEnable type=u8 flag=1 on=1 off=0 category="Secondary tune" slot=dualmap.enable desc="Secondary tune on."
+;@ DualMapEnable type=u8 flag=1 on=1 off=0 category="Secondary tune" slot=dualmap.enable desc="A second tune on a switch: fuel and timing changes against rpm, used while the chosen input is on."
 mapsw_enable:           DB  000h
 ;@ DualMapInput type=u8 category="Secondary tune" slot=dualmap.input desc="The switch that selects it: 01h power steering, 02h service connector, 04h start, 08h VTEC pressure, 10h A/C, 20h brake, 40h park/neutral, 80h always."
 mapsw_input:            DB  010h

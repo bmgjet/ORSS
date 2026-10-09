@@ -22,21 +22,18 @@ endif
 
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_EBC
-                JNE     boostman_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_EBC == TICK_SLOT
                 CAL     boostman_tick
-boostman_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
-;@ BoostManualEnable type=u8 flag=1 on=1 off=0 category="Manual boost controller" slot=boostmanual.enable desc="Manual boost controller on."
+;@ BoostManualEnable type=u8 flag=1 on=1 off=0 category="Manual boost controller" slot=boostmanual.enable desc="Run the boost solenoid at one fixed duty above a set rpm: a simple boost controller with no closed loop."
 boostman_enable:        DB  000h
-;@ BoostManualDuty type=u8 formula=x unit=% decimals=0 category="Manual boost controller" slot=boostmanual.duty desc="Solenoid duty."
+;@ BoostManualDuty type=u8 formula=x unit=% decimals=0 category="Manual boost controller" slot=boostmanual.duty desc="The duty the solenoid is driven at (more duty = more boost)."
 boostman_duty:          DB  032h                 ; 50 %
-;@ BoostManualRPM type=u16 formula=rpm_period_word category="Manual boost controller" slot=boostmanual.rpm desc="Only above this rpm."
+;@ BoostManualRPM type=u16 formula=rpm_period_word category="Manual boost controller" slot=boostmanual.rpm desc="The solenoid is only driven above this rpm (below it the wastegate alone decides)."
 boostman_rpm:           DW  0020dh               ; 3570 rpm
 ;@ BoostManualTPS type=u8 formula=tps_pct category="Manual boost controller" slot=boostmanual.tps desc="Only above this throttle opening."
 boostman_tps:           DB  07dh                 ; 50 %

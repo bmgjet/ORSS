@@ -1,7 +1,11 @@
 // Copyright (c) bmgjet. All rights reserved.
 using OkiRomSim.Mcp;
 
-// romsim-mcp: MCP server for OKI MSM66207 ROM development. romsim-mcp [--root DIR]... stdio (for local client launchers) romsim-mcp --http [--port 8765] [--remote] [--password PW] [--cert file.pfx --cert-password PW] [--root DIR]... romsim-mcp --read-only ... refuse every write. The password can also come from the OKIROMSIM_MCP_PASSWORD environment variable (keeps it out of process listings). --remote listens on all interfaces and requires a password.
+// romsim-mcp: MCP server for OKI MSM66207 ROM development.
+//
+// romsim-mcp [--root DIR]... stdio (for local client launchers) romsim-mcp --http [--port 8765] [--remote] [--password PW] [--cert file.pfx --cert-password PW] [--root DIR]... romsim-mcp --read-only ... refuse every write
+//
+// The password can also come from the OKIROMSIM_MCP_PASSWORD environment variable (keeps it out of process listings). --remote listens on all interfaces and requires a password.
 var roots = new List<string>();
 bool http = false, remote = false, readOnly = false;
 int port = 8765;

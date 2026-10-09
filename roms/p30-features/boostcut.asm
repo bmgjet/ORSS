@@ -4,7 +4,7 @@
 ;> name: Boost cut
 ;> category: Boost
 ;> pages: boostcut
-;> ram: 1F2h-1F5h (shared cut requests)
+;> ram: 1F2h-1F5h (shared cut requests), module RAM (1 byte)
 ;> about: Cuts fuel (or spark) the moment manifold pressure reaches the cut point - a lower one while
 ;>        the engine is cold - and lets it back in once the pressure has dropped a little under it. The
 ;>        safety net for a wastegate that sticks or a boost controller that runs away. Needs a MAP
@@ -17,19 +17,27 @@ if XP == XP_DEFS
 ifndef NEED_MODLIB
 define NEED_MODLIB
 endif
+bc_point            EQU     MODRAM_NEXT         ; the cut point now (hot or cold, moved over the cable), 0 when off:
+undef MODRAM_NEXT                               ; the every-tick look compares the MAP with it alone
+define MODRAM_NEXT (bc_point + 1)
 endif
 
+if XP == XP_TICKSLOT
+if SLOT_BOOSTCUT == TICK_SLOT
+                CAL     boostcut_tick          ; its slot: cut, hold or let go
+endif
+endif
 if XP == XP_TICK
                 LB      A, 0feh
                 ANDB    A, #00fh
                 CMPB    A, #SLOT_BOOSTCUT
-                JNE     boostcut_tick_skip
-                CAL     boostcut_tick
-boostcut_tick_skip:
+                JEQ     boostcut_tick_skip
+                CAL     boostcut_fast          ; every other tick (2 ms): a quick look for boost past the cut point -
+boostcut_tick_skip:                            ; on its slot alone (33 ms) boost can climb 20 kPa past it first
 endif
 
 if XP == XP_CAL
-;@ BoostCutEnable type=u8 flag=1 on=1 off=0 category="Boost cut" slot=boostcut.enable desc="Boost cut on."
+;@ BoostCutEnable type=u8 flag=1 on=1 off=0 category="Boost cut" slot=boostcut.enable desc="Cut fuel (or spark) when the boost goes over the limit below - a burst hose or a stuck wastegate cannot hurt the engine. Checked every tick, so it never goes past."
 boostcut_block:         DB  000h
 ;@ BoostCutCut type=u8 category="Boost cut" slot=boostcut.cut desc="0 = fuel cut, 1 = ignition cut, 2 = both."
 boostcut_cut:           DB  000h
@@ -42,6 +50,31 @@ boostcut_ect:           DB  045h                 ; 60 C
 endif
 
 if XP == XP_CODE
+; Every tick but its slot: not cutting yet, and the MAP at or past the cut point its slot worked out - the full tick,
+; at once. (Kept short: it runs every 2 ms.)
+; The tick runs on the timer interrupt's register page (LRB 19h, page 0): off() would reach page 0, not the want words
+; at 1F2h-1F5h, so they are read through DP.
+boostcut_fast:  L       A, DP                  ; (no registers here: these are the timer interrupt's, kept between ticks)
+                PUSHS   A
+                MOV     DP, #MOD_FUELWANT
+                L       A, [DP]
+                MOV     DP, #MOD_SPARKWANT
+                OR      A, [DP]
+                AND     A, #MB_BOOSTCUT
+                JNE     boostcut_fast_pop      ; cutting already: its slot lets go
+                MOV     DP, #bc_point
+                LB      A, [DP]
+                JEQ     boostcut_fast_pop      ; off
+                CMPB    0a3h, A                ; MAP - cut point: no borrow once at or above it
+                JLT     boostcut_fast_pop
+                POPS    A
+                MOV     DP, A
+                J       boostcut_tick
+boostcut_fast_pop:
+                POPS    A
+                MOV     DP, A
+                RT
+
 boostcut_tick:
                 PUSHS   LRB
                 MOV     LRB, #0003fh
@@ -54,13 +87,19 @@ boostcut_tick:
                 CLRB    A
                 LCB     A, boostcut_block
                 CMPB    A, #000h
-                JEQ     boostcut_off
+                JEQ     boostcut_disabled
                 LCB     A, boostcut_ect
                 CMPB    0c1h, A                ; coolant byte - threshold borrows (C) while warmer than it
                 LCB     A, boostcut_hot
                 JLT     boostcut_have
                 LCB     A, boostcut_cold
-boostcut_have:  STB     A, r4                  ; the cut point
+boostcut_have:
+if defined(FEAT_REMOTE)
+                CAL     rc_boost_point         ; set over the datalog cable (remote.asm), never above the tune's own
+endif
+                STB     A, r4                  ; the cut point
+                MOV     DP, #bc_point          ; (for the every-tick look)
+                STB     A, [DP]
                 L       A, off(MOD_FUELWANT)   ; cutting now?
                 OR      A, off(MOD_SPARKWANT)
                 AND     A, #MB_BOOSTCUT
@@ -81,6 +120,9 @@ boostcut_on:    MOV     X1, #boostcut_block
                 SC
                 CAL     mod_cut
                 J       mod_tick_exit
+boostcut_disabled:
+                MOV     DP, #bc_point
+                MOVB    [DP], #000h
 boostcut_off:   MOV     X1, #boostcut_block
                 L       A, #MB_BOOSTCUT
                 RC

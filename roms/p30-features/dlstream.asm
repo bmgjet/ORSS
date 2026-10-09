@@ -10,12 +10,13 @@
 ;>        Channels… picks them). Fast channels go in every frame; slow ones (temperatures, battery, codes)
 ;>        take turns, one a frame, so a frame stays short. Word values (rpm, injector time) are read in one
 ;>        go, never half old and half new. The app's own protocol, and the fastest; the HTS frame still
-;>        answers alongside it.
+;>        answers alongside it. Paced by the spark calculation (datalog.asm's byte budget): it can never take
+;>        the engine code's time, whatever the rpm or the line speed.
 ;
 ; Channel stream protocol
 ;   7Eh                          identify: 7Eh, version 04h, channels in the table, what else is built in (bit 0
 ;                                fast and slow channels (74h), 1 serial inputs, 2 memory read, 3 service
-;                                commands), checksum (the five bytes sum to 00h)
+;                                commands, 4 slow ranges, 5 remote control commands), checksum (the five bytes sum to 00h)
 ;   75h N F c1 .. c(N-1) chk     (version 4) the channels as a list: N its length (F's byte counted, 16 at most),
 ;                                F how many of them are fast, then the fast channel numbers, then the slow ones. chk
 ;                                makes N, the list and it sum to 00h. Answer 75h or 7Fh. The least work a byte: the
@@ -65,6 +66,11 @@ if defined(FEAT_DLSERVICE)
 DL_CAP_SVC      EQU     008h
 else
 DL_CAP_SVC      EQU     000h
+endif
+if defined(FEAT_REMOTE)
+DL_CAP_RC       EQU     020h
+else
+DL_CAP_RC       EQU     000h
 endif
 endif
 
@@ -500,6 +506,82 @@ dl4_lsb:
                 DB      005h, 000h, 001h, 000h, 002h, 000h, 001h, 000h, 003h, 000h, 001h, 000h, 002h, 000h, 001h, 000h
                 DB      004h, 000h, 001h, 000h, 002h, 000h, 001h, 000h, 003h, 000h, 001h, 000h, 002h, 000h, 001h, 000h
 
+; ------------------------------------------------------------------ the transmit interrupt's short way (datalog.asm)
+; Streaming (r2 = 2) a version 4 list (75h): a fast channel's byte (r3 = 3 + i, i under F) without going through
+; dl_next. Anything else (A5h, the tick, the slow channel, the checksum, the other kinds of list) goes the long way.
+dl5_tx:         MOV     DP, #DL_NEWN
+                MB      C, [DP].5              ; the version 4 list?
+                JGE     dl5_tx_long
+                CLR     A
+                LB      A, r3
+                CMPB    A, #003h
+                JGE     dl5_tx_ch
+                MOV     DP, #DL_TICK           ; 0: A5h, the tick latched; 1-2: the tick
+                CMPB    A, #001h
+                JEQ     dl5_tx_tlo
+                JGE     dl5_tx_thi
+                L       A, 0feh
+                ST      A, [DP]
+                LB      A, #0a5h
+                SJ      dl5_tx_put
+dl5_tx_tlo:     LB      A, [DP]
+                SJ      dl5_tx_put
+dl5_tx_thi:     INC     DP
+                LB      A, [DP]
+                MOV     DP, #DL_TICK           ; from now 376h says which word 377h holds (FFh none)
+                MOVB    [DP], #0ffh
+                SJ      dl5_tx_put
+dl5_tx_ch:      CMPB    A, #043h
+                JGE     dl5_tx_slow            ; the slow channel or the checksum
+                SUBB    A, #003h               ; i
+                STB     A, r6
+                MOV     DP, #DL_LIST
+                LB      A, [DP]                ; F, less its range flag (bit 7)
+                ANDB    A, #07fh
+                CMPB    A, r6
+                JLE     dl5_tx_past            ; past the fast ones
+                LB      A, r6
+                L       A, ACC                 ; (ACCH clear)
+                ADD     DP, A
+                INC     DP
+                LB      A, [DP]                ; the channel
+                CMPB    A, #DL_NCHANNELS
+                JGE     dl5_tx_zero
+                L       A, ACC                 ; (ACCH clear)
+                SLL     A
+                MOV     DP, A
+                LC      A, dl_channels[DP]
+                CMP     A, #01000h             ; a RAM or SFR address: read here
+                JGE     dl5_tx_fetch
+                CMP     A, #00000h
+                JEQ     dl5_tx_zero
+                MOV     DP, A
+                LB      A, [DP]
+dl5_tx_put:     STB     A, STBUF
+                ADDB    r4, A
+                INCB    r3
+                J       dl_rx_ret
+dl5_tx_fetch:   CAL     dl_fetch               ; a word's byte, a status byte, a constant
+                SJ      dl5_tx_put
+dl5_tx_zero:    CLRB    A
+                SJ      dl5_tx_put
+; past the fast ones: with no slow ones (the list's length is F + 1; a range makes it F + 3) the checksum, and the
+; next frame follows
+dl5_tx_past:    ADDB    A, #001h
+                CMPB    A, r5
+                JNE     dl5_tx_toslow          ; slow ones
+                CLRB    A
+                SUBB    A, r4
+                MOVB    r3, #000h
+                MOVB    r4, #000h
+                STB     A, STBUF
+                J       dl_rx_ret
+dl5_tx_toslow:  MOVB    r3, #043h              ; the slow channel's number next
+                LB      A, #043h
+dl5_tx_slow:    CAL     dl5_slow               ; (as dl_next would: A = r3, ACCH clear)
+                J       dl_rx_ret
+dl5_tx_long:    J       dl_tx_any
+
 ; ------------------------------------------------------------------ version 4 frames from the list (75h)
 ; The list (DL_LIST): how many fast channels (F), then the fast ones, then the slow ones; r5 its length (F's byte
 ; counted). r3: 0 A5h, 1-2 the tick, 3 + i fast channel i, 43h the slow channel's number, 44h its byte, 45h the
@@ -619,7 +701,7 @@ dl4_chan_ok:    L       A, ACC
                 J       dl_fetch               ; (its RT is this one's)
 
 ;@ DatalogIdent type=u8 count=4 formula=raw category="Internal" desc="Datalog: the answer to the channel-stream identify command (not a tuning value)."
-dl_ident:       DB      07eh, 004h, DL_NCHANNELS, 001h | DL_CAP_IN | DL_CAP_MEM | DL_CAP_SVC | 010h
+dl_ident:       DB      07eh, 004h, DL_NCHANNELS, 001h | DL_CAP_IN | DL_CAP_MEM | DL_CAP_SVC | DL_CAP_RC | 010h
 if defined(FEAT_DLEXTRA)
 ;@ DatalogChannels type=u16 count=188 formula=raw category="Internal" desc="Datalog: what each channel number of the stream sends (the app has the same list; not a tuning value). An address, or as the 20h frame's table: 4000h + a word's low byte, 2000h + its high byte."
 else

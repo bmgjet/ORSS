@@ -23,17 +23,14 @@ undef MODRAM_NEXT
 define MODRAM_NEXT (gearfuel_value + 2)
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_GEARFUEL
-                JNE     gearfuel_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_GEARFUEL == TICK_SLOT
                 CAL     gearfuel_tick
-gearfuel_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
-;@ FuelbygearEnable type=u8 flag=1 on=1 off=0 category="Fuel by gear" slot=gearfuel.enable desc="On."
+;@ FuelbygearEnable type=u8 flag=1 on=1 off=0 category="Fuel by gear" slot=gearfuel.enable desc="Fuel by gear: correct the fuel in each gear with the table below (needs gear detection)."
 gearfuel_enable:        DB  000h
 ;@ Fuelbygear type=u8 count=6 formula=(x-128)*100/256 unit=% decimals=1 category="Fuel by gear" slot=gearfuel.table colvalues=0,1,2,3,4,5 colunit=gear desc="The fuel change in each gear (0 = not known)."
 gearfuel_table:         DB  080h, 080h, 080h, 080h, 080h, 080h

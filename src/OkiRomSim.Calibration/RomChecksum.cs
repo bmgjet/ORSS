@@ -26,12 +26,28 @@ public static class RomChecksum
             run = free ? run + 1 : 0;
             if (run >= 16) return a + 15;
         }
-        // a stock image written out as source (or disassembled from a .bin) has its fill as DB bytes, so nothing is "free": a long run of FFh fill (32 or more) is still fill, and its last byte balances the sum without touching anything the code reads (a P72, say, which checks its sum while it runs)
+        // a stock image written out as source (or disassembled from a .bin) has its fill as DB bytes, so nothing is
+        // "free": a long run of FFh fill (32 or more) is still fill, and its last byte balances the sum without touching
+        // anything the code reads (a P72, say, which checks its sum while it runs)
         run = 0;
         for (int a = rom.Length - 2; a >= rom.Length / 2; a--)
         {
             run = rom[a] == 0xFF ? run + 1 : 0;
             if (run >= 32) return a + 31;
+        }
+        return null;
+    }
+
+    /// A byte that can balance the sum on an image that does not keep it yet (an HTS ROM with its checksum check switched
+    /// on): the last byte of a run of 16 or more FFh the code does not use, at the top of the ROM. Null when there is none.
+    public static int? FreeByte(byte[] rom, AssemblyResult? asm = null)
+    {
+        int run = 0;
+        for (int a = rom.Length - 2; a >= rom.Length / 2; a--)
+        {
+            bool free = rom[a] == 0xFF && (asm == null || a >= asm.Used.Length || !asm.Used[a]);
+            run = free ? run + 1 : 0;
+            if (run >= 16) return a + 15;
         }
         return null;
     }

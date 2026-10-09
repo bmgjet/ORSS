@@ -14,6 +14,8 @@ public static class Program
         // `RomSimStudio --mcp [--root DIR]... [--read-only]` runs the MCP server over stdio for a local MCP client instead of opening the window (same tools as romsim-mcp).
         if (args.Contains("--mcp")) return RunMcp(args);
         if (Array.IndexOf(args, "--selftest-live") is int st and >= 0 && st + 1 < args.Length) return SelfTest.Live(args[st + 1]);
+        // --update-check [folder]: what the start-up check would offer, for the install in that folder (default: this one)
+        if (Array.IndexOf(args, "--update-check") is int uc and >= 0) return Updater.CheckFromCommandLine(uc + 1 < args.Length ? args[uc + 1] : null);
         if (Array.IndexOf(args, "--selftest-smooth") >= 0) return SelfTest.Smooth();
         if (Array.IndexOf(args, "--selftest-project") is int sp and >= 0 && sp + 1 < args.Length) return SelfTest.Project(args[sp + 1]);
         // Errors on background threads are logged (Debug page and %TEMP%) rather than lost.

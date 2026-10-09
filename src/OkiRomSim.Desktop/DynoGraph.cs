@@ -8,7 +8,11 @@ using OkiRomSim.Calibration;
 
 namespace OkiRomSim.Desktop;
 
-/// The virtual dyno's graph: power (solid) and torque (dashed) of every run shown, against rpm, time or road speed, with the channels picked drawn in strips under it on the same axis. A run being replayed is drawn as far as its clock has got, so two runs played together race each other. Hovering reads every run off at the pointer; the wheel zooms in and out round it, dragging moves along, and a double-click picks the reading there (where it was in the maps). A right-click on a line is that run's own menu. Dark on screen, black on white for the printed sheet.
+/// The virtual dyno's graph: power (solid) and torque (dashed) of every run shown, against rpm, time or road speed, with the channels
+/// picked drawn in strips under it on the same axis. A run being replayed is drawn as far as its clock has got, so two runs played
+/// together race each other. Hovering reads every run off at the pointer; the wheel zooms in and out round it, dragging moves along, and
+/// a double-click picks the reading there (where it was in the maps). A right-click on a line is that run's own menu. Dark on screen,
+/// black on white for the printed sheet.
 public sealed class DynoGraph : Control
 {
     /// A run on the graph: its name, colour, the worked-out result, how far a replay has got, the run itself (for its menu) and its look.

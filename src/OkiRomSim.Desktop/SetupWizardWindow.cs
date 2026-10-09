@@ -64,6 +64,13 @@ public sealed class SetupWizardWindow : Window
     public SetupWizardWindow(SimHost host)
     {
         _host = host;
+        // boost and the base maps work on the ROM's fuel and ignition maps: a ROM opened without Detect has none defined,
+        // so Detect runs first (what the Calibration page's Detect does, into the same definitions)
+        if (!HasMaps(host.Defs()))
+        {
+            try { _detected = host.DetectDefinitions(); }
+            catch (Exception ex) { AppLog.Error("wizard", "Detect failed", ex); }
+        }
         _defs = host.Defs();
         _rom = host.RomCopy();
         var templates = NewRomWindow.Templates();
@@ -355,6 +362,11 @@ public sealed class SetupWizardWindow : Window
     }
 
     SetupPlanner.Plan? _plan;
+    /// Detect's summary when the wizard ran it on opening (the ROM had no maps defined).
+    readonly string? _detected;
+
+    static bool HasMaps(DefinitionSet defs) =>
+        defs.Items.Any(i => i.IsTable && i.Rows > 1 && i.Cols > 1 && MapImport.RoleOf(i).Kind is "fuel" or "ignition");
 
     void ShowSummary()
     {
@@ -365,15 +377,25 @@ public sealed class SetupWizardWindow : Window
             var lines = new List<string>();
             lines.AddRange(_plan.Done.Select(d => "✔  " + d));
             lines.AddRange(_plan.NotHere.Select(d => "–  " + d));
-            _summary.Text = lines.Count == 0 ? "Nothing to change: every page is as the ROM has it now." : string.Join("\n", lines) + $"\n\n{bytes} byte(s) will change.";
-            _next.IsEnabled = bytes > 0;
+            if (_detected != null) lines.Insert(0, "•  Detect was run first, so the maps could be found: " + _detected);
+            _summary.Text = (lines.Count == 0 ? "Nothing to change: every page is as the ROM has it now." : string.Join("\n", lines))
+                + (bytes > 0 ? $"\n\n{bytes} byte(s) will change."
+                             : "\n\nNothing to write: the ROM already is what these pages ask for. Close leaves it as it is, or go Back and change a page.");
+            // never a dead end: with nothing to write the button closes the wizard
+            _next.Content = bytes > 0 ? "Apply" : "Close";
+            _next.IsEnabled = true;
         }
         catch (Exception ex) { _summary.Text = "Could not work that out: " + ex.Message; _next.IsEnabled = false; AppLog.Error("wizard", "plan failed", ex); }
     }
 
     void Apply()
     {
-        if (_plan == null) return;
+        if (_plan == null || MapImport.Diff(_host.RomCopy(), _plan.Image).Count == 0)
+        {
+            Result = "set-up wizard: nothing to change";
+            Close();
+            return;
+        }
         try
         {
             var patches = MapImport.Diff(_host.RomCopy(), _plan.Image);

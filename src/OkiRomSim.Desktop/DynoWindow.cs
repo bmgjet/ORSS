@@ -15,7 +15,12 @@ using OkiRomSim.Core;
 
 namespace OkiRomSim.Desktop;
 
-/// Datalogging > Virtual dyno: power and torque from the ECU's own datalog. Inertia mode reads a roller of known inertia being spun by the car; strip mode uses the car's own weight on a straight, flat stretch, with its air drag and rolling resistance added back. A run starts and stops on the profile's triggers (the hotkey, throttle, MAP, boost, speed, rpm, gear - all of them or any one), once by default (one shot), is drawn as it happens, kept in the runs folder, and can be replayed, overlaid on others, raced head to head against another and printed. Runs can also be found in logs already made. How results are worked out and shown (units, correction, AFR, the hotkey) is in Settings > Dyno and Settings > Units; this window keeps the car, the roller, the air on the day and the triggers.
+/// Datalogging > Virtual dyno: power and torque from the ECU's own datalog. Inertia mode reads a roller of known inertia being spun by the
+/// car; strip mode uses the car's own weight on a straight, flat stretch, with its air drag and rolling resistance added back. A run starts
+/// and stops on the profile's triggers (the hotkey, throttle, MAP, boost, speed, rpm, gear - all of them or any one), once by default
+/// (one shot), is drawn as it happens, kept in the runs folder, and can be replayed, overlaid on others, raced head to head against another
+/// and printed. Runs can also be found in logs already made. How results are worked out and shown (units, correction, AFR, the hotkey) is
+/// in Settings > Dyno and Settings > Units; this window keeps the car, the roller, the air on the day and the triggers.
 public sealed class DynoWindow : Window
 {
     readonly DatalogEngine _engine;
@@ -142,7 +147,8 @@ public sealed class DynoWindow : Window
         StartOrEnd();
     }
 
-    /// The Start button and the hotkey: end a run that is going; else, when a start condition is "Hotkey pressed", get it ready (the run starts as soon as the other start conditions hold too); else start a run now.
+    /// The Start button and the hotkey: end a run that is going; else, when a start condition is "Hotkey pressed", get it ready
+    /// (the run starts as soon as the other start conditions hold too); else start a run now.
     void StartOrEnd()
     {
         if (_play != null) { _play = null; Redraw(); }
@@ -265,7 +271,8 @@ public sealed class DynoWindow : Window
 
     // ------------------------------------------------------------------ the sums, as the settings say
 
-    /// A profile to work out with: its own car, roller and air, with Settings > Dyno's results, correction and AFR, and a run's own changes (its correction, smoothing, loss) on top.
+    /// A profile to work out with: its own car, roller and air, with Settings > Dyno's results, correction and AFR, and a run's own
+    /// changes (its correction, smoothing, loss) on top.
     DynoProfile Work(DynoProfile p, DynoStyle? style = null)
     {
         var w = p.Clone();
@@ -917,7 +924,8 @@ public sealed class DynoWindow : Window
 
     static readonly string[] LogPatterns = ["*.rlog", "*.csv", "*.hdl", "*.hml", "*.dlf", "*.bml", "*.log"];
 
-    /// Runs from logs: the one on the datalog page, picked files, or every log in a folder (and the folders in it), each searched with this profile's triggers in the background; every run found is kept.
+    /// Runs from logs: the one on the datalog page, picked files, or every log in a folder (and the folders in it), each searched with
+    /// this profile's triggers in the background; every run found is kept.
     async Task Scrape()
     {
         if (_p.Start.Count == 0 || _p.Start.All(t => t.Channel == "key"))
@@ -1014,7 +1022,8 @@ public sealed class DynoWindow : Window
 
     // ------------------------------------------------------------------ the layout check
 
-    /// The layout check's test of a run, through the window as a user drives it: readings fed in as the datalog would, a run by the Start button, one by the hotkey pressed while another button has the focus, and one by auto start on the throttle. The runs it makes are deleted.
+    /// The layout check's test of a run, through the window as a user drives it: readings fed in as the datalog would, a run by the Start
+    /// button, one by the hotkey pressed while another button has the focus, and one by auto start on the throttle. The runs it makes are deleted.
     internal async Task<string> SelfTest()
     {
         var said = new List<string>();

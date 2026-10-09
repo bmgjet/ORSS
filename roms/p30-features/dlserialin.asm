@@ -44,13 +44,10 @@ if XP == XP_BOOT
                 CAL     serin_boot
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_DLSERIALIN
-                JNE     serin_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_DLSERIALIN == TICK_SLOT
                 CAL     serin_tick
-serin_tick_skip:
+endif
 endif
 
 if XP == XP_CAL

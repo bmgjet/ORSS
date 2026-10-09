@@ -252,7 +252,8 @@ public sealed class Skeleton
     {
         var nl = text.Contains("\r\n") ? "\r\n" : "\n";
         var lines = text.Replace("\r\n", "\n").Split('\n').ToList();
-        // what the block holds now, kept where not given (a file kept by a build from before the name changed has the old markers: they are found too, and written anew)
+        // what the block holds now, kept where not given
+        // (a file kept by a build from before the name changed has the old markers: they are found too, and written anew)
         int s = lines.FindIndex(l => l.StartsWith(KeptStart) || l.StartsWith("; ---- kept by OkiRomSim:")), e = lines.FindIndex(l => l.StartsWith(KeptEnd) || l.StartsWith("; ---- end of what OkiRomSim keeps"));
         var old = s >= 0 && e > s ? lines.GetRange(s + 1, e - s - 1) : [];
         if (s >= 0 && e > s) lines.RemoveRange(s, e - s + 1);

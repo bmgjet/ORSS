@@ -19,17 +19,14 @@ endif
 
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_GEARLIMIT
-                JNE     gearlim_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_GEARLIMIT == TICK_SLOT
                 CAL     gearlim_tick
-gearlim_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
-;@ LimitByGearEnable type=u8 flag=1 on=1 off=0 category="Rev limit by gear" slot=revlimit.ceiling.gear.enable desc="Rev limit by gear on."
+;@ LimitByGearEnable type=u8 flag=1 on=1 off=0 category="Rev limit by gear" slot=revlimit.ceiling.gear.enable desc="A rev limit for each gear (needs gear detection); 12500 rpm = no limit of its own in that gear."
 gearlim_block:          DB  000h
 ;@ LimitByGearCut type=u8 category="Rev limit by gear" slot=revlimit.ceiling.gear.cut desc="0 = fuel cut, 1 = ignition cut, 2 = both."
 gearlim_cut:            DB  000h

@@ -29,7 +29,8 @@ public static class UiCheck
         var report = new List<string>();
         try
         {
-            // OKIROM_UICHECK_HC=1: everything in high contrast OKIROM_UICHECK_THEME=light / contrast: everything in that theme
+            // OKIROM_UICHECK_HC=1: everything in high contrast
+            // OKIROM_UICHECK_THEME=light / contrast: everything in that theme
             AppTheme.Set(AppTheme.Parse(Environment.GetEnvironmentVariable("OKIROM_UICHECK_THEME") ?? (Environment.GetEnvironmentVariable("OKIROM_UICHECK_HC") == "1" ? "contrast" : "dark")));
             await Settle();
             // OKIROM_UICHECK_OPEN=rom.asm: open that ROM first (the windows then show its settings)
@@ -38,6 +39,113 @@ public static class UiCheck
                 main.OpenFileForCheck(open);
                 for (int i = 0; i < 120 && !string.Equals(main.Host.LoadedPath, Path.GetFullPath(open), StringComparison.OrdinalIgnoreCase); i++) await Task.Delay(250);
                 await Task.Delay(1500);
+            }
+            // OKIROM_UICHECK_MCP=1 (with OKIROM_UICHECK_OPEN): an MCP client annotating the ROM open - the todo list, a rename, a
+            // comment - through the app's own session, then the editor and Lookup & breakpoints screenshotted to show the new name
+            if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_MCP") == "1" && main.Host.LoadedPath is { } loaded)
+            {
+                var server = main.McpServerForCheck(Path.GetDirectoryName(loaded)!);
+                int id = 0;
+                async Task<string> Call(string tool, System.Text.Json.Nodes.JsonObject args)
+                {
+                    var req = new System.Text.Json.Nodes.JsonObject { ["jsonrpc"] = "2.0", ["id"] = ++id, ["method"] = "tools/call",
+                        ["params"] = new System.Text.Json.Nodes.JsonObject { ["name"] = tool, ["arguments"] = args } };
+                    var json = await Task.Run(() => server.Handle(req.ToJsonString(), "uicheck"));
+                    var text = System.Text.Json.Nodes.JsonNode.Parse(json!)?["result"]?["content"]?[0]?["text"]?.ToString() ?? json ?? "";
+                    report.Add($"-- {tool}: {text}");
+                    return text;
+                }
+                var todo = await Call("annotate_todo", new() { ["kind"] = "code", ["max"] = 3 });
+                var first = System.Text.RegularExpressions.Regex.Match(todo, @"^code\s+\w+h\s+\d+\s+(\S+)", System.Text.RegularExpressions.RegexOptions.Multiline).Groups[1].Value;
+                if (first.Length > 0)
+                {
+                    await Call("rename", new() { ["old"] = first, ["new"] = "util_mcp_check_renamed" });
+                    await Call("comment", new() { ["target"] = "util_mcp_check_renamed", ["text"] = "util_mcp_check_renamed: named by the MCP UI check." });
+                    await Settle(); await Task.Delay(800); await Settle();
+                    main.TunerMode(false); await Settle();
+                    main.GoToLabelForCheck("util_mcp_check_renamed");
+                    await Settle();
+                    Check(main, "mcp rename editor", dir, report);
+                    main.ShowTab("Lookup & breakpoints"); main.LookupForCheck("util_mcp_check_renamed");
+                    await Settle();
+                    Check(main, "mcp rename lookup", dir, report);
+                    report.Add($"-- the host's label at the address now: {main.Host.Assembly?.Symbols.GetValueOrDefault("util_mcp_check_renamed")?.Value:X4}h");
+                }
+                File.WriteAllLines(Path.Combine(dir, "report.txt"), report);
+                (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.Shutdown();
+                return;
+            }
+            // OKIROM_UICHECK_SVCLIVE=1 (with OKIROM_UICHECK_OPEN, a ROM with the remote control commands): the commands switched on,
+            // the simulator logged over the channel stream, a few commands sent, then Codes and service opened (it reads all) and shot
+            if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_SVCLIVE") == "1" && main.Host.LoadedPath != null)
+            {
+                var h = main.Host;
+                if (h.Defs().Find("RemoteEnable") is { } en) h.WriteCells(en, new[] { (0, 1.0) }, true, "ui check");
+                h.Control("reset"); h.Control("run");
+                var eng = main.DatalogPanel.Engine;
+                _ = Task.Run(() => { try { eng.Start("simulator", "auto", 38400); } catch (Exception ex) { report.Add("start: " + ex.Message); } });
+                for (int i = 0; i < 100 && eng.Good < 10; i++) await Task.Delay(250);
+                foreach (var cmd in new byte[][] { [0x31], [0x3D], [0x51], [0x33, 120], [0x37, 0xC0], [0x39, 0xD0] })
+                    report.Add($"-- {string.Join(" ", cmd.Select(x => x.ToString("X2")))}: {(await eng.Command(cmd)).Answer:X2}");
+                var w = new ServiceWindow(eng, h) { WindowStartupLocation = WindowStartupLocation.CenterScreen, Height = 1000 };
+                w.Show(main);
+                for (int i = 0; i < 12; i++) { await Task.Delay(500); await Settle(); }
+                Check(w, "codes and service live", dir, report);
+                w.Close();
+                await Task.Run(eng.Stop);
+                File.WriteAllLines(Path.Combine(dir, "report.txt"), report);
+                (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.Shutdown();
+                return;
+            }
+            // OKIROM_UICHECK_MENUS=label (with OKIROM_UICHECK_OPEN): the source editor's right-click menu on a label and the
+            // disassembly's menu (twice: one stays open), reported and shot
+            if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_MENUS") is { Length: > 0 } menuLabel)
+            {
+                main.TunerMode(false); await Settle();
+                main.ShowTab("Disassembly"); await Settle(); await Task.Delay(500); await Settle();
+                report.Add("-- " + main.MenusForCheck(menuLabel));
+                await Settle(); await Task.Delay(300); await Settle();
+                Check(main, "menus", dir, report);
+                File.WriteAllLines(Path.Combine(dir, "report.txt"), report);
+                (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.Shutdown();
+                return;
+            }
+            // OKIROM_UICHECK_HOVER=1: the top bar's drop-down buttons (File, Tools...) as first shown, then each with the pointer over
+            // it: their size must not change
+            if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_HOVER") == "1")
+            {
+                await Settle();
+                foreach (var b in main.GetVisualDescendants().OfType<Button>().Where(b => b.Flyout != null && b.IsVisible).Take(8).ToList())
+                {
+                    string name = b.Content is StackPanel sp ? string.Join("", sp.Children.OfType<TextBlock>().Select(t => t.Text)) : b.Content?.ToString() ?? "?";
+                    var before = b.Bounds;
+                    var parts0 = b.Content is Panel p0 ? string.Join(" ", p0.Children.Select(c => $"{c.Bounds.Width:0.#}x{c.Bounds.Height:0.#}")) : "";
+                    ((Avalonia.Controls.IPseudoClasses)b.Classes).Set(":pointerover", true);
+                    await Settle(); await Task.Delay(300); await Settle();
+                    var after = b.Bounds;
+                    var parts1 = b.Content is Panel p1 ? string.Join(" ", p1.Children.Select(c => $"{c.Bounds.Width:0.#}x{c.Bounds.Height:0.#}")) : "";
+                    var pad = b.Padding; var bt = b.BorderThickness;
+                    ((Avalonia.Controls.IPseudoClasses)b.Classes).Set(":pointerover", false);
+                    await Settle();
+                    report.Add($"{name}: {before.Width:0.##}x{before.Height:0.##} -> {after.Width:0.##}x{after.Height:0.##} (content {parts0} -> {parts1}; padding {pad}, border {bt})");
+                }
+                File.WriteAllLines(Path.Combine(dir, "report.txt"), report);
+                (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.Shutdown();
+                return;
+            }
+            // OKIROM_UICHECK_BASEMAPS=1 (with OKIROM_UICHECK_OPEN): the scale for boost and alpha-N windows, shot as they open
+            if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_BASEMAPS") == "1")
+            {
+                foreach (var w in new Window[] { new BoostScaleWindow(main.Host), new AlphaNScaleWindow(main.Host) })
+                {
+                    w.Show(main);
+                    await Task.Delay(800); await Settle();
+                    Check(w, w.Title ?? "window", dir, report);
+                    w.Close();
+                }
+                File.WriteAllLines(Path.Combine(dir, "report.txt"), report);
+                (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.Shutdown();
+                return;
             }
             // OKIROM_UICHECK_INJPICK=550: the injector window with that injector picked, and what it would write
             if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_INJPICK") is { Length: > 0 } pick)
@@ -48,7 +156,8 @@ public static class UiCheck
                 (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.Shutdown();
                 return;
             }
-            // OKIROM_UICHECK_PLUGIN=plugin.dll: load it, open everything it adds (its tab, every menu line, its settings page), and report every error it logs or throws on the way
+            // OKIROM_UICHECK_PLUGIN=plugin.dll: load it, open everything it adds (its tab, every menu line, its settings page),
+            // and report every error it logs or throws on the way
             if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_PLUGIN") is { Length: > 0 } pluginPath && main.PluginsForCheck is { } pm)
             {
                 var errors = new List<string>();
@@ -121,6 +230,101 @@ public static class UiCheck
                 lifetime?.Shutdown();
                 return;
             }
+            // OKIROM_UICHECK_NEWROM_ALL=1: New ROM with every module, the module RAM fixes it offers, and the first one taken
+            if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_NEWROM_ALL") == "1")
+            {
+                var nw = new NewRomWindow();
+                nw.ShowCreate();
+                nw.Show();
+                await Settle();
+                nw.PickAllForCheck();
+                for (int k = 0; k < 40 && !nw.RamForCheck().Contains("bytes"); k++) await Task.Delay(500);
+                await Task.Delay(1500); await Settle();
+                report.Add("all modules: RAM " + nw.RamForCheck());
+                report.Add("  offered: " + nw.RamFixForCheck());
+                Check(nw, "new rom all modules", dir, report);
+                nw.ApplyFirstRamFixForCheck();
+                for (int k = 0; k < 40; k++) { await Task.Delay(500); if (!nw.RamForCheck().Contains("full")) break; }
+                await Task.Delay(1000); await Settle();
+                for (int k = 0; k < 120 && (nw.TickForCheck().Length == 0 || nw.TickForCheck().Contains("measuring")); k++) await Task.Delay(500);
+                await Settle();
+                report.Add("after the first fix: RAM " + nw.RamForCheck() + " | offered now: '" + nw.RamFixForCheck() + "'");
+                report.Add("interrupt time: " + nw.TickForCheck());
+                Check(nw, "new rom all modules fixed", dir, report);
+                // the Default pick, built and timed: the three meters as most people see them
+                nw.DefaultForCheck();
+                for (int k = 0; k < 20 && !nw.TickForCheck().Contains("measuring"); k++) await Task.Delay(250);
+                for (int k = 0; k < 120 && (nw.TickForCheck().Contains("measuring") || nw.TickForCheck().StartsWith(" ")); k++) await Task.Delay(500);
+                await Task.Delay(500); await Settle();
+                report.Add("default: interrupt time " + nw.TickForCheck() + " | RAM " + nw.RamForCheck());
+                Check(nw, "new rom default", dir, report);
+                nw.SearchForCheck("boost");
+                await Task.Delay(300); await Settle();
+                Check(nw, "new rom search boost", dir, report);
+                nw.SearchForCheck("");
+                // too big for the ROM: what to take out goes in the bar's tooltip
+                nw.StockPlusForCheck();
+                for (int k = 0; k < 120 && !nw.SpaceTipForCheck().Contains("Taking out") && !nw.SpaceTipForCheck().Contains("together") && !nw.SpaceTipForCheck().Contains("Leave something"); k++) await Task.Delay(500);
+                await Settle();
+                report.Add("too big: tooltip " + nw.SpaceTipForCheck().Replace("\n", " | "));
+                Check(nw, "new rom too big", dir, report);
+                nw.Close();
+                File.WriteAllLines(Path.Combine(dir, "report.txt"), report);
+                (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.Shutdown();
+                return;
+            }
+            // OKIROM_UICHECK_PAGES=1: every feature page the ROM open has something for, in Tuner mode, one picture each
+            // (OKIROM_UICHECK_PAGES=gear,rev: only pages whose name has one of those in it)
+            if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_PAGES") is { Length: > 0 } pagesWanted)
+            {
+                // OKIROM_UICHECK_PAGES_ALL=1: first a skeleton ROM with every module that fits (all but rolling idle), so every page has rows
+                if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_PAGES_ALL") == "1")
+                {
+                    var skA = Skeleton.Find(NewRomWindow.Templates()).First();
+                    var pickA = new List<string>();
+                    foreach (var f in skA.Features.Where(f => !f.Stock && f.Define is not "FEAT_ROLLIDLE" and not "FEAT_REMOTE" and not "FEAT_TPSRETARD"))
+                        if (skA.Problems([.. pickA, f.Define]).Count == 0) pickA.Add(f.Define);
+                    var dirA = Path.Combine(Path.GetTempPath(), "romsim-pagescheck");
+                    Directory.CreateDirectory(dirA);
+                    var romA = Path.Combine(dirA, "allpages.asm");
+                    File.WriteAllText(romA, skA.BuildSource(pickA, skA.Path, "allpages"));
+                    var bA = skA.Build(pickA);
+                    report.Add($"skeleton build of the pick: {(bA.Success ? "ok" : string.Join(" | ", bA.Errors.Take(3)))}");
+                    // the app reopens the last file as it starts: let that finish first, or it lands on top of this one
+                    for (int k = 0; k < 80 && main.Host.LoadedPath == null; k++) await Task.Delay(250);
+                    await Task.Delay(3000);
+                    // opened (again, if something opened over it) until the build with the modules is the one in place
+                    for (int attempt = 0; attempt < 4 && main.Host.Assembly?.Symbols.ContainsKey("fueltrim_tick") != true; attempt++)
+                    {
+                        main.OpenFileForCheck(romA);
+                        for (int k = 0; k < 60 && main.Host.Assembly?.Symbols.ContainsKey("fueltrim_tick") != true; k++) await Task.Delay(250);
+                    }
+                    await Task.Delay(2500);
+                    report.Add($"open: {main.Host.LoadedPath}, {main.Host.Defs().Items.Count} definitions, built with fuel trim module: {main.Host.Assembly?.Symbols.ContainsKey("fueltrim_tick")}, symbols {main.Host.Assembly?.Symbols.Count}; detect: {main.Host.DetectDefinitions()}");
+                    main.CalibrationForCheck.Refresh();
+                    report.Add($"built {pickA.Count} functions: {(main.Host.Assembly?.Success == true ? "ok" : "FAILED")}");
+                }
+                main.TunerMode(true);
+                main.WindowState = WindowState.Maximized;
+                // every row, bound by Detect or not
+                main.CalibrationForCheck.ValidOnlyForCheck(Environment.GetEnvironmentVariable("OKIROM_UICHECK_PAGES_VALID") == "1");
+                await Settle();
+                var filter = pagesWanted == "1" ? null : pagesWanted.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                var defsP = main.Host.Defs();
+                var forRom = OkiRomSim.Calibration.CalPage.ForRom(defsP);
+                report.Add($"pages for this ROM: {forRom.Count}");
+                foreach (var pg in forRom.Concat(OkiRomSim.Calibration.CalPage.All()).DistinctBy(pg => pg.Key))
+                {
+                    if (filter != null && !filter.Any(f => pg.Name.Contains(f, StringComparison.OrdinalIgnoreCase))) continue;
+                    if (filter == null && !forRom.Any(f => f.Key == pg.Key) && !pg.Slots().Any(sl => OkiRomSim.Calibration.CalPage.Bound(defsP, sl) != null)) continue;
+                    main.CalibrationForCheck.ShowPageForCheck(pg);
+                    await Settle(); await Settle();
+                    Check(main, "page " + pg.Name, dir, report);
+                }
+                File.WriteAllLines(Path.Combine(dir, "report.txt"), report);
+                (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.Shutdown();
+                return;
+            }
             // OKIROM_UICHECK_ONLY="import maps,main": just those (a quicker look at one window while working on it)
             var only = Environment.GetEnvironmentVariable("OKIROM_UICHECK_ONLY") is { Length: > 0 } o
                 ? o.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries) : null;
@@ -161,7 +365,8 @@ public static class UiCheck
                 (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.Shutdown();
                 return;
             }
-            // OKIROM_UICHECK_STREAM=1: a Default skeleton ROM logged from the simulator by the channel stream; channels picked and unpicked while logging must show up (and go) in the frames, the values list and the channel lists
+            // OKIROM_UICHECK_STREAM=1: a Default skeleton ROM logged from the simulator by the channel stream; channels picked and
+            // unpicked while logging must show up (and go) in the frames, the values list and the channel lists
             if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_STREAM") == "1")
             {
                 var sk = Skeleton.Find(NewRomWindow.Templates()).First(s => s.Name.Contains("p30", StringComparison.OrdinalIgnoreCase) || true);
@@ -232,7 +437,8 @@ public static class UiCheck
                 (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.Shutdown();
                 return;
             }
-            // OKIROM_UICHECK_PERF=seconds: what the app costs - CPU, memory, garbage collections and how late the UI thread answers - sitting in Tuner mode, replaying a log there, and with the simulator running
+            // OKIROM_UICHECK_PERF=seconds: what the app costs - CPU, memory, garbage collections and how late the UI
+            // thread answers - sitting in Tuner mode, replaying a log there, and with the simulator running
             if (int.TryParse(Environment.GetEnvironmentVariable("OKIROM_UICHECK_PERF"), out var secs) && secs > 0)
             {
                 main.WindowState = WindowState.Maximized;
@@ -288,7 +494,8 @@ public static class UiCheck
                 main.Host.Control("pause");
                 await Measure("simulator paused");
             }
-            // OKIROM_UICHECK_PROJECT=1: what is on screen saved to a project, everything cleared away, the project opened: it all comes back
+            // OKIROM_UICHECK_PROJECT=1: what is on screen saved to a project, everything cleared away, the project opened:
+            // it all comes back
             if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_PROJECT") == "1")
             {
                 main.Host.SetInput("rpm", 3000);
@@ -324,7 +531,8 @@ public static class UiCheck
                 Is(logFrames.Count == 300 && logPos == 123 && logName == "check log" && logFrames[200].Rpm == 3000 && logFrames[7].Raw?[0] == 7, $"the datalog: {logFrames.Count} frames, at {logPos}, '{logName}'");
                 main.TunerMode(false);
             }
-            // OKIROM_UICHECK_WIDGETS=1: a widget parented to the main window must still be there after the window is minimized and brought back maximized (it used to go off the screen, or behind the window)
+            // OKIROM_UICHECK_WIDGETS=1: a widget parented to the main window must still be there after the window is
+            // minimized and brought back maximized (it used to go off the screen, or behind the window)
             if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_WIDGETS") == "1")
             {
                 var gauges = main.DatalogPanel.Gauges;

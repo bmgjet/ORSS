@@ -1,4 +1,5 @@
-// Copyright (c) bmgjet. All rights reserved. Human-readable descriptions of each mnemonic Exec.cs implements, plus a search helper over FullOpcodes.Table -- for the App's "Insert Instruction" dialog and any future hover-help/tooltip feature. Descriptions are keyed by the *base* mnemonic (byte-width "B" suffix stripped the same way OperandParser.IsByteVariant does): ADD and ADDB share one description, annotated with "(byte form: ...)" where the distinction matters.
+// Copyright (c) bmgjet. All rights reserved.
+// Human-readable descriptions of each mnemonic Exec.cs implements, plus a search helper over FullOpcodes.Table -- for the App's "Insert Instruction" dialog and any future hover-help/tooltip feature. Descriptions are keyed by the *base* mnemonic (byte-width "B" suffix stripped the same way OperandParser.IsByteVariant does): ADD and ADDB share one description, annotated with "(byte form: ...)" where the distinction matters.
 
 namespace OkiRomSim.Core;
 

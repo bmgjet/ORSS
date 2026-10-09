@@ -1,4 +1,5 @@
-// Copyright (c) bmgjet. All rights reserved. Parses FullOpcodes' display-text operands once into a tree that Exec evaluates generically. Addressing notes that are easy to get wrong: * N8 is an absolute low-RAM/SFR address (0x00..0xFF). * off N8 is LRB-paged: ((LRB >> 5) << 8) | N8. * rN / erN live in the local register bank at base ((LRB >> 5) << 8) | ((LRB & 0x1F) << 3). * LC/CMPC address code space; every other form addresses data space.
+// Copyright (c) bmgjet. All rights reserved.
+// Parses FullOpcodes' display-text operands once into a tree that Exec evaluates generically. Addressing notes that are easy to get wrong: * N8 is an absolute low-RAM/SFR address (0x00..0xFF). * off N8 is LRB-paged: ((LRB >> 5) << 8) | N8. * rN / erN live in the local register bank at base ((LRB >> 5) << 8) | ((LRB & 0x1F) << 3). * LC/CMPC address code space; every other form addresses data space.
 
 namespace OkiRomSim.Core;
 

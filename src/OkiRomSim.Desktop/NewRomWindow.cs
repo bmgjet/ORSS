@@ -29,17 +29,23 @@ public sealed class NewRomWindow : Window
     // Create
     readonly List<Skeleton> _skeletons;
     readonly ComboBox _base = new() { MinWidth = 220 };
-    readonly TextBlock _baseAbout = new() { TextWrapping = TextWrapping.Wrap, FontSize = 11, Opacity = 0.75, MaxLines = 3, TextTrimming = TextTrimming.CharacterEllipsis };
+    readonly TextBlock _baseAbout = new() { TextWrapping = TextWrapping.Wrap, FontSize = 11, Opacity = 0.75, MaxLines = 2, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
     readonly StackPanel _featureList = new() { Spacing = 1 };
     readonly TextBlock _detail = new() { TextWrapping = TextWrapping.Wrap, FontSize = 12 };
     readonly ProgressBar _space = new() { Minimum = 0, Maximum = 32768, Height = 14, MinWidth = 60 };
-    readonly TextBlock _spaceText = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+    // each meter: a short figure beside its bar, and what it means on a line of its own under it (a long warning wraps
+    // there instead of squeezing the bar)
+    readonly TextBlock _spaceText = new() { FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Opacity = 0.9 };
+    readonly TextBlock _spaceFig = Fig(), _ramFig = Fig(), _tickFig = Fig();
+    static TextBlock Fig() => new() { FontSize = 12.5, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Right, Margin = new Thickness(10, 0, 0, 0), MinWidth = 130 };
     readonly TextBlock _problems = new() { FontSize = 12, Foreground = Brushes.OrangeRed, TextWrapping = TextWrapping.Wrap };
     readonly RamBar _ramBar = new();
-    readonly TextBlock _ramText = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+    /// Module RAM over: the ways to bring it back under, each a button that leaves those functions out.
+    readonly WrapPanel _ramFix = new() { Orientation = Orientation.Horizontal, ItemSpacing = 6, LineSpacing = 4, Margin = new Thickness(0, 0, 0, 8), HorizontalAlignment = HorizontalAlignment.Left, IsVisible = false };
+    readonly TextBlock _ramText = new() { FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Opacity = 0.9 };
     /// The worst tick interrupt, measured in the simulator (us; the bar goes to 600).
     readonly ProgressBar _tickBar = new() { Minimum = 0, Maximum = 600, Height = 14, MinWidth = 60 };
-    readonly TextBlock _tickText = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+    readonly TextBlock _tickText = new() { FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Opacity = 0.9 };
     /// Measurements by pick (they take a few seconds each), and the one under way.
     static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (IsrTiming.Result Built, IsrTiming.Result? AllOn)> Timings = new(StringComparer.OrdinalIgnoreCase);
     CancellationTokenSource? _timing;
@@ -81,7 +87,7 @@ public sealed class NewRomWindow : Window
     {
         _change = change;
         Title = change == null ? "New ROM" : "Change functions - " + change.RomLabel;
-        Width = 860; Height = 640; MinWidth = 560; MinHeight = 440;
+        Width = 1000; Height = 720; MinWidth = 640; MinHeight = 520;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
         var folder = Templates();
@@ -124,7 +130,8 @@ public sealed class NewRomWindow : Window
         buttons.Children.Add(_ok);
         buttons.Children.Add(cancel);
 
-        // where the new ROM goes, typed or picked here: no file dialog is needed (a system one can open taller than a laptop's screen), Browse… opens one for those who want it
+        // where the new ROM goes, typed or picked here: no file dialog is needed (a system one can open taller than a
+        // laptop's screen), Browse… opens one for those who want it
         var browse = new Button { Content = "Browse…" };
         ToolTip.SetTip(browse, "Pick the folder and name with the system's file dialog.");
         browse.Click += async (_, _) => { if (await AskWhere(Path.GetFileName(_saveAs.Text ?? "")) is { } picked) _saveAs.Text = picked; };
@@ -372,6 +379,12 @@ public sealed class NewRomWindow : Window
         tools.Children.Add(Small("All modules", "Every module that can be built with the others (the first of any pair that cannot).", () => SetAll(f => !f.Stock)));
 
         var listScroll = new ScrollViewer { Content = _featureList, HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled };
+        _search.TextChanged += (_, _) => Filter();
+        ToolTip.SetTip(_search, "Type part of a name or of what it does - \"boost\", \"limit\", \"rpm sw\": only the functions that have every word stay in the list. Esc clears it.");
+        _search.KeyDown += (_, e) => { if (e.Key == Avalonia.Input.Key.Escape) _search.Text = ""; };
+        var listPane = new DockPanel();
+        DockPanel.SetDock(_search, Dock.Top); listPane.Children.Add(_search);
+        listPane.Children.Add(listScroll);
         var detailBox = new Border
         {
             Child = new ScrollViewer { Content = _detail, HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled },
@@ -396,48 +409,49 @@ public sealed class NewRomWindow : Window
         Grid.SetRow(detailBox, 0); right.Children.Add(detailBox);
         Grid.SetRow(checksBox, 1); right.Children.Add(checksBox);
         var lists = new Grid { ColumnDefinitions = new ColumnDefinitions("3*,2*") };
-        Grid.SetColumn(listScroll, 0); lists.Children.Add(listScroll);
+        Grid.SetColumn(listPane, 0); lists.Children.Add(listPane);
         Grid.SetColumn(right, 1); lists.Children.Add(right);
 
-        var spaceRow = new DockPanel { Margin = new Thickness(0, 8, 0, 0) };
-        var spaceLabel = new TextBlock { Text = "ROM space", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
-        DockPanel.SetDock(spaceLabel, Dock.Left); spaceRow.Children.Add(spaceLabel);
-        _spaceText.Margin = new Thickness(8, 0, 0, 0);
-        DockPanel.SetDock(_spaceText, Dock.Right); spaceRow.Children.Add(_spaceText);
-        spaceRow.Children.Add(_space);
-        ToolTip.SetTip(spaceRow, "What the ROM with these functions takes of the 32,768 bytes. When a function does not fit, the build says so and Create stays off until something else is left out.");
-
-        // module RAM: few bytes, and every module that keeps a value between calls takes some of them
-        var ramRow = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
-        var ramLabel = new TextBlock { Text = "Module RAM", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
-        DockPanel.SetDock(ramLabel, Dock.Left); ramRow.Children.Add(ramLabel);
-        _ramText.Margin = new Thickness(8, 0, 0, 0);
-        DockPanel.SetDock(_ramText, Dock.Right); ramRow.Children.Add(_ramText);
-        ramRow.Children.Add(_ramBar);
-        ToolTip.SetTip(ramLabel, "The RAM modules keep their values in between runs. Each colour is one module (point at the bar for who has what); when they want more than there is, the build stops and Create stays off.");
-        // the labels line up, so the bars start at the same place
-        spaceLabel.MinWidth = ramLabel.MinWidth = 84;
-
-        // the tick interrupt's time: what stopped ROMs with many modules starting on the car
-        var tickRow = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
-        var tickLabel = new TextBlock { Text = "Interrupt time", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
-        DockPanel.SetDock(tickLabel, Dock.Left); tickRow.Children.Add(tickLabel);
-        _tickText.Margin = new Thickness(8, 0, 0, 0);
-        DockPanel.SetDock(_tickText, Dock.Right); tickRow.Children.Add(_tickText);
-        tickRow.Children.Add(_tickBar);
-        ToolTip.SetTip(tickRow,
+        // the three meters in one grid: the labels in one column, the bars all starting and ending at the same place, the
+        // figures in one column at the right; what each one means goes on the line under its bar and wraps there
+        var meters = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), Margin = new Thickness(0, 8, 0, 0) };
+        int mrow = 0;
+        void Meter(string name, Control bar, TextBlock fig, TextBlock detail, string tip)
+        {
+            meters.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+            meters.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+            var label = new TextBlock { Text = name, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0), FontWeight = FontWeight.SemiBold };
+            bar.VerticalAlignment = VerticalAlignment.Center;
+            bar.Height = 14;
+            Grid.SetRow(label, mrow); meters.Children.Add(label);
+            Grid.SetRow(bar, mrow); Grid.SetColumn(bar, 1); meters.Children.Add(bar);
+            Grid.SetRow(fig, mrow); Grid.SetColumn(fig, 2); meters.Children.Add(fig);
+            detail.Margin = new Thickness(0, 2, 0, 8);
+            Grid.SetRow(detail, mrow + 1); Grid.SetColumn(detail, 1); Grid.SetColumnSpan(detail, 2); meters.Children.Add(detail);
+            var parts = new Control[] { label, bar, fig, detail };
+            foreach (var c in parts) ToolTip.SetTip(c, tip);
+            _meterTips[name] = (parts, tip);
+            mrow += 2;
+        }
+        Meter("ROM space", _space, _spaceFig, _spaceText,
+            "What the ROM with these functions takes of the 32,768 bytes. When a function does not fit, the build says so and Create stays off until something else is left out.");
+        Meter("Module RAM", _ramBar, _ramFig, _ramText,
+            "The RAM modules keep their values in between runs. Each colour is one module (point at the bar for who has what); when they want more than there is, the build stops and Create stays off.");
+        // what can come out to make the RAM fit, under the RAM meter
+        meters.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+        Grid.SetRow(_ramFix, mrow); Grid.SetColumn(_ramFix, 1); Grid.SetColumnSpan(_ramFix, 2); meters.Children.Add(_ramFix);
+        mrow++;
+        Meter("Interrupt time", _tickBar, _tickFig, _tickText,
             "The longest the 2.048 ms tick interrupt runs, where the modules do their work: the pick is built and run in the simulator from idle " +
             "to 7000 rpm. The bar is the ROM as it is built (its modules off until you switch them on); the text also gives it with every module " +
             "switched on, the most it can come to. While it runs every other interrupt waits, the crank and spark ones among them.\n" +
             $"Green up to {IsrTiming.GoodUs:0} us. Past {IsrTiming.CautionUs:0} us the crank interrupts are held up long enough to matter at high rpm " +
             "(a tooth every few hundred us), and a tick that long is what once stopped ROMs with many modules starting on the car.\n" +
-            "The share is how much of the CPU all the interrupts take: what is left runs the main loop (idle, the maps' slower work).");
-        spaceLabel.MinWidth = tickLabel.MinWidth = 84;
+            "The share is how much of the CPU all the interrupts take: what is left runs the main loop (idle, the maps' slower work). " +
+            "If the rpm reading failed at 7000 rpm in the run, the pick is too much for the CPU there: leave something out.");
 
         var bottom = new StackPanel();
-        bottom.Children.Add(spaceRow);
-        bottom.Children.Add(ramRow);
-        bottom.Children.Add(tickRow);
+        bottom.Children.Add(meters);
         bottom.Children.Add(_problems);
 
         var p = new DockPanel { Margin = new Thickness(22, 0, 0, 0) };
@@ -451,6 +465,9 @@ public sealed class NewRomWindow : Window
 
     Skeleton? Current => _base.SelectedItem as Skeleton;
 
+    /// An assembler message with its file's folders left off: "lib.asm(69,1): error: ..." rather than the whole template path.
+    static string Short(string error) => System.Text.RegularExpressions.Regex.Replace(error, @"[A-Za-z]:[\\/][^()]*[\\/]([^\\/()]+\.(asm|inc))", "$1");
+
     void FillFeatures()
     {
         _featureList.Children.Clear();
@@ -463,7 +480,8 @@ public sealed class NewRomWindow : Window
         // modules first (what people come here for), then the stock functions
         foreach (var group in sk.Features.GroupBy(f => f.Category).OrderBy(g => g.First().Stock).ThenBy(g => g.Key))
         {
-            _featureList.Children.Add(new TextBlock { Text = group.Key, FontWeight = FontWeight.Bold, FontSize = 12.5, Margin = new Thickness(0, 8, 0, 2) });
+            var head = new TextBlock { Text = group.Key, FontWeight = FontWeight.Bold, FontSize = 12.5, Margin = new Thickness(0, 8, 0, 2), Tag = "group" };
+            _featureList.Children.Add(head);
             foreach (var f in group.OrderBy(f => f.Name))
             {
                 var cost = new TextBlock { FontSize = 11, Opacity = 0.75, Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
@@ -481,7 +499,8 @@ public sealed class NewRomWindow : Window
                 _featureList.Children.Add(box);
             }
         }
-        // on to start with, the safe starting point: the fail-safes, the self-tests, a way to log it and an overheat limit - or, changing a ROM's functions, what it has now
+        // on to start with, the safe starting point: the fail-safes, the self-tests, a way to log it and an overheat limit -
+        // or, changing a ROM's functions, what it has now
         _changing = true;
         if (_change != null)
             foreach (var d in _change.Current)
@@ -495,7 +514,29 @@ public sealed class NewRomWindow : Window
             if (_boxes.TryGetValue(d, out var b) && sk.Problems([.. Chosen(), d]).Count == 0)
             { b.IsChecked = true; ToolTip.SetTip(b, (sk.Feature(d)?.About ?? "") + "\nTicked to start with: " + why); }
         _changing = false;
+        Filter();
         Rebuild();
+    }
+
+    readonly TextBox _search = new() { Watermark = "Search functions...", Margin = new Thickness(0, 0, 8, 4), FontSize = 12.5 };
+
+    /// The list cut to the functions with every word typed in their name, what they do, their category or their define;
+    /// a heading stays while any of its functions does.
+    void Filter()
+    {
+        var words = (_search.Text ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        static string Squash(string t) => new([.. t.ToLowerInvariant().Where(char.IsLetterOrDigit)]);
+        TextBlock? head = null; bool any = false;
+        void CloseHead() { if (head != null) head.IsVisible = any; }
+        foreach (var c in _featureList.Children)
+        {
+            if (c is TextBlock { Tag: "group" } h) { CloseHead(); head = h; any = false; continue; }
+            if (c is not CheckBox { Tag: SkeletonFeature f } box) continue;
+            string hay = Squash($"{f.Name} {f.About} {f.Category} {f.Define}");
+            box.IsVisible = words.All(w => hay.Contains(Squash(w)));
+            any |= box.IsVisible;
+        }
+        CloseHead();
     }
 
     void ShowDetail(SkeletonFeature f)
@@ -513,6 +554,15 @@ public sealed class NewRomWindow : Window
     /// What each function costs with the others ticked now: adding it (with what it needs, less what it cannot be built with) or taking it out (with what needs it). Worked out after every change, in the background.
     readonly Dictionary<string, TextBlock> _costText = new(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string, (string Short, string Detail)> _costs = new(StringComparer.OrdinalIgnoreCase);
+
+    /// Each meter's parts and its usual tooltip; on an error the tooltip says what to do about it instead (null: the usual one).
+    readonly Dictionary<string, (Control[] Parts, string Default)> _meterTips = [];
+    void MeterTip(string meter, string? error)
+    {
+        if (!_meterTips.TryGetValue(meter, out var m)) return;
+        foreach (var c in m.Parts)
+            if (c is not RamBar || error != null) ToolTip.SetTip(c, error ?? m.Default);   // the RAM bar keeps its own list of who has what
+    }
 
     void Toggled(SkeletonFeature f, bool on)
     {
@@ -555,6 +605,18 @@ public sealed class NewRomWindow : Window
         Rebuild();
     }
 
+    /// The layout check: every module (as the All modules button does).
+    internal void PickAllForCheck() => SetAll(f => !f.Stock);
+    /// The layout check: the module RAM fixes offered, and pressing the first.
+    internal string RamFixForCheck() => string.Join(" | ", _ramFix.Children.Select(c => c is Button b ? b.Content?.ToString() : (c as TextBlock)?.Text));
+    internal void ApplyFirstRamFixForCheck() { if (_ramFix.Children.OfType<Button>().FirstOrDefault() is { } b) b.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent)); }
+    internal void SearchForCheck(string text) => _search.Text = text;
+    internal string SpaceTipForCheck() => _meterTips.TryGetValue("ROM space", out var m) ? ToolTip.GetTip(m.Parts[1])?.ToString() ?? "" : "";
+    internal void StockPlusForCheck() => SetAll(f => (f.Stock && f.Define != "FEAT_STOCK_SERIAL") || f.Define is "FEAT_DATALOG" or "FEAT_DLSTREAM" or "FEAT_DLEXTRA" or "FEAT_FLEX" or "FEAT_WBCL" or "FEAT_TRACTION" or "FEAT_GEAR" or "FEAT_LAUNCH" or "FEAT_FTS");
+    internal void DefaultForCheck() => SetPreset(SkeletonPresets.Default);
+    internal string TickForCheck() => $"{_tickFig.Text} · {_tickText.Text}";
+    internal string RamForCheck() => $"{_ramFig.Text} · {_ramText.Text}";
+
     /// The layout check's picture of Default.
     internal void PickDefault() { _saveAs.Text = _suggested = @"D:\Tunes\p30-custom.asm"; SetPreset(SkeletonPresets.Default); }
 
@@ -594,7 +656,7 @@ public sealed class NewRomWindow : Window
         if (problems.Count > 0 || TryCached(sk, chosen, out _)) Show();
         else
         {
-            _spaceText.Text = "building…";
+            _spaceFig.Text = "building…";
             new Thread(() =>
             {
                 try { BuildCached(sk, chosen); } catch (Exception ex) { AppLog.Error("new rom", "skeleton build failed", ex); }
@@ -610,23 +672,32 @@ public sealed class NewRomWindow : Window
                 _last = r;
                 if (r == null)
                 {
-                    _spaceText.Text = "";
+                    _spaceText.Text = _spaceFig.Text = "";
                     _problems.Text = string.Join("\n", problems);
                 }
                 else
                 {
                     // a build that does not fit: the bar full and red, and by how much it is over
-                    _space.Value = r.Success ? r.UsedBytes : _space.Maximum;
+                    // only the module RAM over: the ROM space is not the problem - say so, and leave the bar grey
+                    bool ramOnly = !r.Success && r.Over <= 0 && r.Errors.Count > 0 && r.Errors.All(e => e.Contains("module RAM is full"));
+                    _space.Value = r.Success ? r.UsedBytes : ramOnly ? 0 : _space.Maximum;
                     _space.Foreground = !r.Success || r.FreeBytes < 512 ? Brushes.OrangeRed : r.FreeBytes < 2048 ? Brushes.Goldenrod : AppTheme.Brush(Color.FromRgb(0x4e, 0xa1, 0xff));
-                    _spaceText.Text = r.Success ? $"{r.UsedBytes:N0} of 32,768 bytes used · {r.FreeBytes:N0} free · {chosen.Count} function(s)"
-                                    : r.Over > 0 ? $"over the limit by {r.Over:N0} bytes · {chosen.Count} function(s)" : "does not build";
+                    _spaceFig.Text = r.Success ? $"{r.UsedBytes:N0} / 32,768 B" : r.Over > 0 ? $"{r.Over:N0} B over" : ramOnly ? "-" : "does not build";
+                    _spaceFig.Foreground = r.Success || ramOnly ? DataList.Text : DataList.Error;
+                    _spaceText.Text = r.Success ? $"{r.FreeBytes:N0} bytes free · {chosen.Count} function(s)"
+                                    : r.Over > 0 ? $"Too big: over the limit by {r.Over:N0} bytes. Point at the bar for what to take out."
+                                    : ramOnly ? $"measured once the module RAM fits · {chosen.Count} function(s)" : "does not build";
+                    _spaceText.Foreground = ramOnly ? DataList.Dim : r.Over > 0 ? DataList.Error : DataList.Text;
+                    MeterTip("ROM space", r.Over > 0 ? $"Over the limit by {r.Over:N0} bytes. Working out what to take out..." : null);
                     var note = _note.Length > 0 ? _note + "\n" : "";
                     _problems.Text = r.Success ? _note
-                                   : r.Over > 0 ? note + $"Too big: over the limit by {r.Over:N0} bytes. Working out what to take out…"
-                                   : note + "Does not build:\n" + string.Join("\n", r.Errors.Take(4));
+                                   : r.Over > 0 ? _note
+                                   : r.Errors.All(e => e.Contains("module RAM is full")) ? _note       // the RAM meter says it, with what to leave out
+                                   : note + "Does not build:\n" + string.Join("\n", r.Errors.Where(e => !e.Contains("module RAM is full")).Take(4).Select(Short));
                     _problems.Foreground = r.Success ? AppTheme.Brush(Color.FromRgb(0xb0, 0xb6, 0xc0)) : Brushes.OrangeRed;
                 }
                 ShowRam(r?.Ram);
+                ShowRamFix(sk, chosen, r?.Ram);
                 MeasureTick(sk, chosen, r?.Success == true);
                 ShowAdvice(SkeletonAdvice.Check(sk, chosen, r));
                 UpdateOk();
@@ -643,8 +714,9 @@ public sealed class NewRomWindow : Window
         var key = Key(sk, chosen);
         if (Timings.TryGetValue(key, out var known)) { ShowTick(known, null); return; }
         var cts = _timing = new CancellationTokenSource();
-        _tickText.Text = "measuring…";
-        _tickText.Foreground = DataList.Dim;
+        _tickFig.Text = "measuring…";
+        _tickFig.Foreground = _tickText.Foreground = DataList.Dim;
+        _tickText.Text = "";
         Task.Run(async () =>
         {
             try
@@ -665,21 +737,93 @@ public sealed class NewRomWindow : Window
     /// The bar: the tick as the ROM ships (its modules off until switched on); the text adds what it is with every module switched on.
     void ShowTick((IsrTiming.Result Built, IsrTiming.Result? AllOn)? m, string? why)
     {
-        if (m is not { } t) { _tickBar.Value = 0; _tickText.Text = why ?? ""; _tickText.Foreground = DataList.Dim; return; }
+        if (m is not { } t) { _tickBar.Value = 0; _tickFig.Text = ""; _tickText.Text = why ?? ""; _tickText.Foreground = DataList.Dim; return; }
         var r = t.Built;
         _tickBar.Value = Math.Min(_tickBar.Maximum, r.TickWorstUs);
         _tickBar.Foreground = r.TickWorstUs > IsrTiming.CautionUs ? Brushes.OrangeRed : r.TickWorstUs > IsrTiming.GoodUs ? Brushes.Goldenrod : AppTheme.Brush(Color.FromRgb(0x4e, 0xa1, 0xff));
-        _tickText.Text = $"tick {r.TickWorstUs:0} us at worst as built" + (t.AllOn is { } on ? $" · {on.TickWorstUs:0} us with every module on" : "") +
-                         $" · interrupts {r.CpuPercent:0} % of the CPU";
+        int lost = Math.Max(r.LostTeeth, t.AllOn?.LostTeeth ?? 0);
+        _tickFig.Text = $"{r.TickWorstUs:0} us";
+        _tickText.Text = "worst tick as built" + (t.AllOn is { } on ? $" · {on.TickWorstUs:0} us with every module on" : "") +
+                         $" · interrupts {r.CpuPercent:0} % of the CPU" +
+                         (lost > 0 ? $"\nThe rpm reading failed {lost} time(s) at 7000 rpm{(r.LostTeeth == 0 ? " with every module on" : "")}: too much for the CPU at high rpm - leave something out." : "");
         double worst = t.AllOn?.TickWorstUs ?? r.TickWorstUs;
-        _tickText.Foreground = r.TickWorstUs > IsrTiming.CautionUs ? DataList.Error : worst > IsrTiming.CautionUs || r.TickWorstUs > IsrTiming.GoodUs ? DataList.Warning : DataList.Text;
+        _tickText.Foreground = r.TickWorstUs > IsrTiming.CautionUs || r.LostTeeth > 0 ? DataList.Error
+                             : worst > IsrTiming.CautionUs || r.TickWorstUs > IsrTiming.GoodUs || lost > 0 ? DataList.Warning : DataList.Text;
+        _tickFig.Foreground = r.TickWorstUs > IsrTiming.CautionUs ? DataList.Error : r.TickWorstUs > IsrTiming.GoodUs ? DataList.Warning : DataList.Text;
+    }
+
+    /// Module RAM wanted past what there is: what can come out to make the ROM valid. Each function that, left out on its
+    /// own (with anything that needs it), frees enough - the cheapest first - or, when none does, the cheapest pairs.
+    /// A click leaves them out and builds again.
+    void ShowRamFix(Skeleton sk, List<string> chosen, ModuleRam? ram)
+    {
+        _ramFix.Children.Clear();
+        _ramFix.IsVisible = ram is { Full: true };
+        MeterTip("Module RAM", null);
+        if (ram is not { Full: true }) return;
+        int over = ram.Used - ram.Size;
+        // the bytes each function has (lib's shared bytes go only when nothing needs them: never counted here)
+        var bytesOf = ram.Uses.GroupBy(u => u.Owner).ToDictionary(g => g.Key, g => g.Sum(u => u.Bytes), StringComparer.OrdinalIgnoreCase);
+        int Freed(IEnumerable<string> leftOut) => leftOut.Sum(d => sk.Feature(d) is { } f && bytesOf.TryGetValue(f.Name, out var b) ? b : 0);
+        var users = chosen.Where(d => sk.Feature(d) is { } f && !f.Stock && bytesOf.ContainsKey(f.Name)).ToList();
+        // a function out, and whatever needs it with it (as unticking it would)
+        List<string> Without(params string[] out_)
+        {
+            var set = new List<string>(chosen);
+            foreach (var d in out_)
+                set = Switched(sk, set, sk.Feature(d)!, out _);
+            return set;
+        }
+        var options = new List<(string Label, List<string> Set, int Freed)>();
+        foreach (var d in users)
+        {
+            var set = Without(d);
+            var gone = chosen.Except(set, StringComparer.OrdinalIgnoreCase).ToList();
+            int freed = Freed(gone);
+            if (freed >= over) options.Add((string.Join(" + ", gone.Select(g => sk.Feature(g)?.Name ?? g)), set, freed));
+        }
+        if (options.Count == 0)
+            for (int i = 0; i < users.Count; i++)
+                for (int j = i + 1; j < users.Count; j++)
+                {
+                    var set = Without(users[i], users[j]);
+                    var gone = chosen.Except(set, StringComparer.OrdinalIgnoreCase).ToList();
+                    int freed = Freed(gone);
+                    if (freed >= over) options.Add((string.Join(" + ", gone.Select(g => sk.Feature(g)?.Name ?? g)), set, freed));
+                }
+        options = [.. options.GroupBy(o => o.Label).Select(g => g.First()).OrderBy(o => o.Freed).ThenBy(o => o.Label).Take(10)];
+        _ramFix.Children.Add(new TextBlock
+        {
+            Text = options.Count == 0 ? $"{over} bytes too many: leave out functions that keep values in module RAM. Point at the bar to see what each one uses."
+                                      : $"{over} bytes too many. Leaving out one of these makes it fit:",
+            Foreground = DataList.Error, VerticalAlignment = VerticalAlignment.Center, FontSize = 12,
+        });
+        MeterTip("Module RAM", $"{ram.Used} bytes wanted, {ram.Size} there: {over} too many.\n\n" +
+            (options.Count > 0 ? "Leaving out one of these makes it fit:\n" + string.Join("\n", options.Select(o => $"  {o.Label} (frees {o.Freed})"))
+                               : "What each function keeps:\n" + string.Join("\n", ram.Uses.GroupBy(u => u.Owner).Select(g => $"  {g.Key}: {g.Sum(u => u.Bytes)} bytes"))));
+        foreach (var (label, set, freed) in options)
+        {
+            var b = new Button { Content = $"{label}  (frees {freed})", FontSize = 11.5, Padding = new Thickness(8, 2) };
+            ToolTip.SetTip(b, $"Untick {label}: module RAM goes from {ram.Used} to {ram.Used - freed} of {ram.Size} bytes.");
+            b.Click += (_, _) =>
+            {
+                _changing = true;
+                foreach (var (d, box) in _boxes) box.IsChecked = set.Contains(d, StringComparer.OrdinalIgnoreCase);
+                _changing = false;
+                _note = $"{label} left out to fit module RAM";
+                AppLog.Action("new rom", _note);
+                Rebuild();
+            };
+            _ramFix.Children.Add(b);
+        }
     }
 
     void ShowRam(ModuleRam? ram)
     {
         _ramBar.Ram = ram;
-        _ramText.Text = ram == null ? "" : ram.Full ? $"full: {ram.Used} of {ram.Size} bytes wanted" : $"{ram.Used} of {ram.Size} bytes used · {ram.Free} free · {ram.Base:X3}h-{ram.End - 1:X3}h";
-        _ramText.Foreground = ram is { Full: true } ? DataList.Error : ram != null && ram.Used > ram.Size * 0.85 ? DataList.Warning : DataList.Text;
+        _ramFig.Text = ram == null ? "" : $"{ram.Used} / {ram.Size} B";
+        _ramText.Text = ram == null ? "" : ram.Full ? $"full: {ram.Used} of {ram.Size} bytes wanted" : $"{ram.Free} bytes free · {ram.Base:X3}h-{ram.End - 1:X3}h";
+        _ramText.Foreground = _ramFig.Foreground = ram is { Full: true } ? DataList.Error : ram != null && ram.Used > ram.Size * 0.85 ? DataList.Warning : DataList.Text;
     }
 
     /// The checklist as ticks and crosses, then everything said about the pick, the worst first.
@@ -742,7 +886,8 @@ public sealed class NewRomWindow : Window
             int bytes = on ? b.FreeBytes - now.FreeBytes : now.FreeBytes - b.FreeBytes;     // what it takes up
             return (on, bytes, b.FreeBytes, alsoOut.Count > 0 ? string.Join(", ", alsoOut) : "", ok);
         }
-        // at once: the sets already built exactly, the rest estimated from what they took up last time (sizes barely move with the other functions), marked ≈ until the exact ones are in
+        // at once: the sets already built exactly, the rest estimated from what they took up last time (sizes barely move
+        // with the other functions), marked ≈ until the exact ones are in
         var quick = new Dictionary<string, (bool On, int Bytes, int FreeAfter, string Replaces, bool Ok)>(StringComparer.OrdinalIgnoreCase);
         var estimated = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var f in sk.Features)
@@ -771,7 +916,8 @@ public sealed class NewRomWindow : Window
                 results[f.Define] = Cost(f, BuildCached(sk, set), alsoOut);
             });
             if (serial != _buildSerial) return;
-            // over the limit: what to take out. Every one that is enough on its own; if none is, the fewest (largest first) that together are, checked by building it
+            // over the limit: what to take out. Every one that is enough on its own; if none is, the fewest (largest first)
+            // that together are, checked by building it
             var fixes = new List<string>();
             string? together = null;
             if (now.Over > 0)
@@ -816,8 +962,10 @@ public sealed class NewRomWindow : Window
             if (!est) LastBytes[sk.Path + "|" + d] = r.Bytes;
             bool under = r.FreeAfter >= 0;
             string replaces = r.Replaces.Length > 0 ? $", instead of {r.Replaces}" : "";
+            // beside the name only the short of it (a long "instead of" ran off the list); the whole is in the details
+            string replacesShort = r.Replaces.Length > 0 ? $" (replaces {r.Replaces.Split(", ").Length})" : "";
             string size = r.On ? $"{r.Bytes:N0} B" : r.Bytes < 0 ? $"frees {-r.Bytes:N0} B" : $"+{r.Bytes:N0} B";
-            t.Text = (est ? "≈ " : "") + size + replaces + (under ? "" : $" · {-r.FreeAfter:N0} over");
+            t.Text = (est ? "≈ " : "") + size + replacesShort + (under ? "" : $" · {-r.FreeAfter:N0} over");
             t.Foreground = under ? Brushes.LimeGreen : Brushes.OrangeRed;
             t.Opacity = est ? 0.7 : 1;
             _costs[d] = (t.Text, (est ? "(An estimate from the last time; the exact size is being worked out.) " : "") +
@@ -829,10 +977,10 @@ public sealed class NewRomWindow : Window
             var note = _note.Length > 0 ? _note + "\n" : "";
             if (fixes.Count == 0 && together == null)
                 fixes = [.. results.Where(kv => kv.Value.On && kv.Value.Ok && kv.Value.FreeAfter >= 0).OrderBy(kv => kv.Value.Bytes).Select(kv => kv.Key)];
-            _problems.Text = note + $"Too big: over the limit by {now.Over:N0} bytes. " + (fixes.Count > 0
-                ? $"Taking out any one of these makes it fit: {string.Join(", ", fixes.Select(d => $"{sk.Feature(d)?.Name ?? d} (frees {results[d].Bytes:N0})"))}."
-                : together != null ? $"No single function is enough; taking out these together makes it fit: {together}."
-                : "Leave something out (the sizes beside each function say what it frees).");
+            MeterTip("ROM space", $"Over the limit by {now.Over:N0} bytes.\n\n" + (fixes.Count > 0
+                ? "Taking out any one of these makes it fit:\n" + string.Join("\n", fixes.Select(d => $"  {sk.Feature(d)?.Name ?? d} (frees {results[d].Bytes:N0} bytes)"))
+                : together != null ? $"No single function is enough. Taking out these together makes it fit:\n  {together}"
+                : "Leave something out: the size beside each function is what it frees."));
         }
     }
 
@@ -882,7 +1030,9 @@ public sealed class NewRomWindow : Window
         try
         {
             var dir = Path.GetDirectoryName(path)!;
-            // the skeleton and its modules go beside the new file. A copy already there that is not exactly the app's (an older one, or one edited by hand for another ROM) is left for the ROMs that use it, and this ROM gets a folder of its own - so a new ROM always starts from the newest skeleton and is never offered an update
+            // the skeleton and its modules go beside the new file. A copy already there that is not exactly the app's (an
+            // older one, or one edited by hand for another ROM) is left for the ROMs that use it, and this ROM gets a
+            // folder of its own - so a new ROM always starts from the newest skeleton and is never offered an update
             string skName = Path.GetFileName(sk.Path);
             string Target(string d) => Path.Combine(d, skName);
             bool IsApps(string d) => Path.GetFullPath(Target(d)).Equals(Path.GetFullPath(sk.Path), StringComparison.OrdinalIgnoreCase);

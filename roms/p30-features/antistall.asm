@@ -33,25 +33,22 @@ undef MODRAM_NEXT
 define MODRAM_NEXT (antistall_timer + 1)
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_ANTISTALL
-                JNE     antistall_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_ANTISTALL == TICK_SLOT
                 CAL     antistall_tick
-antistall_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
-;@ AntiStallEnable type=u8 flag=1 on=1 off=0 category="Anti-stall" slot=antistall.enable desc="Anti-stall on."
+;@ AntiStallEnable type=u8 flag=1 on=1 off=0 category="Anti-stall" slot=antistall.enable desc="Hold the engine up when the rpm drops too low (a clutch let out too fast, a sudden load): more idle air and timing (and the A/C and alternator load off, if set) until it recovers."
 antistall_enable:       DB  000h
-;@ AntiStallRpm type=u16 formula=rpm_period_word category="Anti-stall" slot=antistall.rpm desc="Acts below this rpm."
+;@ AntiStallRpm type=u16 formula=rpm_period_word category="Anti-stall" slot=antistall.rpm desc="It acts while the rpm is below this."
 antistall_rpm:          DW  00c35h
 ;@ AntiStallRecover type=u16 formula=rpm_period_word category="Anti-stall" slot=antistall.recover desc="Back to normal above this rpm."
 antistall_recover:      DW  00b16h
 ;@ AntiStallRunning type=u16 formula=rpm_period_word category="Anti-stall" slot=antistall.running desc="Only with the engine above this rpm (not while cranking or stopped)."
 antistall_running:      DW  01869h
-;@ AntiStallAdvance type=u8 formula=x/4 unit=deg decimals=2 category="Anti-stall" slot=antistall.advance desc="Timing added."
+;@ AntiStallAdvance type=u8 formula=x/4 unit=deg decimals=2 category="Anti-stall" slot=antistall.advance desc="Timing added while it acts, to pick the rpm back up."
 antistall_advance:      DB  014h
 ;@ AntiStallIdleDuty type=u16 formula=raw category="Anti-stall" slot=antistall.iacv desc="The idle valve duty word used at least (the stock top of its range is 091Fh)."
 antistall_iacv:         DW  0091fh

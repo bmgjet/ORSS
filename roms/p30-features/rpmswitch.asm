@@ -21,19 +21,16 @@ define NEED_OUTPORT
 endif
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_RPMSWITCH
-                JNE     rpmsw_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_RPMSWITCH == TICK_SLOT
                 CAL     rpmsw_tick
-rpmsw_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
-;@ RpmSwitchEnable type=u8 flag=1 on=1 off=0 category="Outputs" slot=rpmswitch.enable desc="On."
+;@ RpmSwitchEnable type=u8 flag=1 on=1 off=0 category="Outputs" slot=rpmswitch.enable desc="Switch an output on above an rpm (and throttle): a shift light, a second fuel pump, a water spray."
 rpmsw_enable:         DB  000h
-;@ RpmSwitchOn type=u16 formula=rpm_period_word category="Outputs" slot=rpmswitch.engage desc="Switch on above this rpm."
+;@ RpmSwitchOn type=u16 formula=rpm_period_word category="Outputs" slot=rpmswitch.engage desc="The output is switched on above this rpm."
 rpmsw_engage:         DW  0017ah                 ; 4970 rpm
 ;@ RpmSwitchOff type=u16 formula=rpm_period_word category="Outputs" slot=rpmswitch.disengage desc="Switch off again below this rpm."
 rpmsw_disengage:      DW  00187h                 ; 4800 rpm

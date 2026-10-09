@@ -1,4 +1,5 @@
-// Copyright (c) bmgjet. All rights reserved. OKI 66207 executor: evaluates the Arg tree that Decoder + OperandParser produce, so each mnemonic is implemented once. Conventions taken from the ISA: * Word ops use the full 16-bit accumulator; byte ops (mnemonic ending in B) use its low half. * CF is set on borrow by SUB/SBC/CMP: JLT = CF, JGE = !CF, JGT = !CF && !ZF, JLE = CF || ZF. * LC/CMPC read code space; everything else reads data space.
+// Copyright (c) bmgjet. All rights reserved.
+// OKI 66207 executor: evaluates the Arg tree that Decoder + OperandParser produce, so each mnemonic is implemented once. Conventions taken from the ISA: * Word ops use the full 16-bit accumulator; byte ops (mnemonic ending in B) use its low half. * CF is set on borrow by SUB/SBC/CMP: JLT = CF, JGE = !CF, JGT = !CF && !ZF, JLE = CF || ZF. * LC/CMPC read code space; everything else reads data space.
 namespace OkiRomSim.Core;
 
 public sealed class ExecException : Exception

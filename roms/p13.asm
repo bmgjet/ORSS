@@ -1,10 +1,6 @@
 ;==================================================================================================
 ; p13.asm -- fully annotated listing (labels/comments only; firmware bytes unchanged)
-; Built in two passes:
-;  1) reference pass: label names + [H]/[CG]/[C1]/[C2]/[P30]/[P08]/[HTS120] comments transferred
-;     from HTS115.asm / CromeGold / custom1 / custom2 / p30 / p08-911-243 / HTS.120 onto matched code;
-;     unmatched labels got structural <context>_<action> names.
-;  2) manual pass (this header, and comments tagged [flow]/[info]): p13 itself was followed from the
+;  1) manual pass (this header, and comments tagged [flow]/[info]): p13 itself was followed from the
 ;     vectors through the supervisor, background tasks and map engines. Untagged/[flow] comments are
 ;     verified against THIS ROM; claims taken from p13info.txt are quoted with their [info] tags and
 ;     marked (p13info ...) -- two of them needed corrections (652E vs 642E; 2EAC is an immediate).

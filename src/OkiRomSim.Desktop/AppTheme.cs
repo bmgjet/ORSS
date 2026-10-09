@@ -12,7 +12,13 @@ using Avalonia.VisualTree;
 
 namespace OkiRomSim.Desktop;
 
-/// The app's colours: Dark (the default), Light, or High contrast for a laptop out in the sun (Settings > Colours; Ctrl+Shift+H goes round them). The app is drawn in dark colours; the other two are worked out from them, every colour on its own: Light turns the backgrounds near white and the text near black and keeps each colour's hue, dark enough to read on white; High contrast makes the backgrounds pure black, the text and lines pure white, the colours that mean something (on / off, warnings, the graphs' traces) fully saturated and bright, and brings faded text up nearly to full. It works on every window at once, live: the app's brushes are all made through Brush() and remember their own colour, the theme's controls take Fluent's light variant or a high contrast palette, and anything set from a fixed brush is swapped for one of ours as it is set.
+/// The app's colours: Dark (the default), Light, or High contrast for a laptop out in the sun (Settings > Colours; Ctrl+Shift+H
+/// goes round them). The app is drawn in dark colours; the other two are worked out from them, every colour on its own:
+/// Light turns the backgrounds near white and the text near black and keeps each colour's hue, dark enough to read on white;
+/// High contrast makes the backgrounds pure black, the text and lines pure white, the colours that mean something (on / off,
+/// warnings, the graphs' traces) fully saturated and bright, and brings faded text up nearly to full. It works on every window
+/// at once, live: the app's brushes are all made through Brush() and remember their own colour, the theme's controls take
+/// Fluent's light variant or a high contrast palette, and anything set from a fixed brush is swapped for one of ours as it is set.
 public static class AppTheme
 {
     public enum Mode { Dark, Light, Contrast }
@@ -34,7 +40,8 @@ public static class AppTheme
     static FluentTheme? _fluent;
     static ColorPaletteResources? _contrastPalette;
 
-    /// A colour as the dark theme has it; a tile's (a table cell, its text and marks: a palette of its own that reads on any background) stays as it is in Light, and only changes for High contrast.
+    /// A colour as the dark theme has it; a tile's (a table cell, its text and marks: a palette of its own that reads on any
+    /// background) stays as it is in Light, and only changes for High contrast.
     sealed class Orig(Color c, bool tile = false) { public Color Color = c; public readonly bool Tile = tile; }
     sealed class OrigOpacity(double o) { public double Opacity = o; }
     static readonly ConditionalWeakTable<SolidColorBrush, Orig> _brushes = new();
@@ -103,7 +110,8 @@ public static class AppTheme
         return Color.FromArgb(c.A, o.R, o.G, o.B);
     }
 
-    // a dark theme grey's lightness -> the light theme's: the backgrounds near white, the panels a shade under, the lines a clear grey, the text near black and the faded text a mid grey
+    // a dark theme grey's lightness -> the light theme's: the backgrounds near white, the panels a shade under, the lines a clear
+    // grey, the text near black and the faded text a mid grey
     static readonly (double In, double Out)[] LightGreys = [(0, 1), (0.12, 0.97), (0.16, 0.94), (0.25, 0.80), (0.45, 0.55), (0.65, 0.35), (0.86, 0.12), (1, 0)];
 
     static Color Light(Color c)
@@ -119,7 +127,8 @@ public static class AppTheme
             double t = b.In > a.In ? (l - a.In) / (b.In - a.In) : 0;
             return Grey(c.A, a.Out + ((b.Out - a.Out) * Math.Clamp(t, 0, 1)));
         }
-        // a dark colour (behind text: a selection, an output that is off) becomes a light tint of itself; a bright one (text, a trace, a lamp) becomes deep enough to read on white
+        // a dark colour (behind text: a selection, an output that is off) becomes a light tint of itself; a bright one (text, a
+        // trace, a lamp) becomes deep enough to read on white
         double nl = l < 0.35 ? 0.95 - (l * 0.4) : Math.Clamp(1.05 - l, 0.25, 0.42);
         var o = HslColor.ToRgb(h.H, Math.Max(s, 0.55), nl, 1);
         return Color.FromArgb(c.A, o.R, o.G, o.B);

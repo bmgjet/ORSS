@@ -28,7 +28,8 @@
 ; share back out.
 ;
 ; Module RAM: MOD_RAM_BASE to MOD_RAM_END (features.inc: 31Ah-351h, clear of the stack, unless the stock
-; trouble-code function is built in). lib.asm has its first 10 bytes; each module takes what it needs from
+; trouble-code function is built in). lib.asm has its first 10 bytes - the last two must stay unused: with the stock
+; trouble codes built in they are 400h-401h, which the stock self-test checks is 0 - each module takes what it needs from
 ; MODRAM_NEXT in its XP_DEFS part (see README.md).
 ; Bank 7Eh (3F0h-3F7h) is scratch for the fuel hook.
 ;> library
@@ -42,7 +43,7 @@ endif
 MOD_OUTSTATE    EQU     001f1h          ; bits: 0 IAB, 1 rpm switch, 2 warning lamp, 3 tach, 4-6 GIO 1-3, 7 spare
 MOD_FUELWANT    EQU     001f2h          ; word: a bit per limiter that wants fuel cut
 MOD_SPARKWANT   EQU     001f4h          ; word: a bit per limiter that wants spark cut
-MOD_FLAGS       EQU     001f6h          ; bits: 0 anti-start locked, 1 watermark failed, 2 watermark checked, 3-7 spare
+MOD_FLAGS       EQU     001f6h          ; bits: 0 anti-start locked, 1 anti-start checked, 3 smart alternator taken, 4 A/C cut taken, 5 anti-stall taken, 6 tach holds its pin; 2, 7 spare
 MOD_PAGE0       EQU     000fdh          ; bits: 0 secondary maps on, 1 decel pops on, 2 anti-stall on, 3 rolling idle on
 MOD_SPARE       EQU     001f7h          ; (the datalog service commands' flags, dlservice.asm)
 MOD_FUELSUM     EQU     MOD_RAM_BASE    ; word: the fuel trims added up, 1/256ths
@@ -51,6 +52,12 @@ MOD_IGNSUM      EQU     MOD_RAM_BASE + 4 ; word: the timing trims added up, 0.25
 MOD_PWMSTEP     EQU     MOD_RAM_BASE + 6 ; P4.3 PWM: the step of the 25-step cycle...
 MOD_PWMDUTY     EQU     MOD_RAM_BASE + 7 ; ...and how many of them are on (0-25)
 MOD_GEAR        EQU     002feh          ; the gear, 0 when not known (FEAT_GEAR); page 2, so main-loop code reads it with off()
+if defined(NEED_REVCAP)
+MOD_REVCAP      EQU     MODRAM_NEXT     ; the lowest rev limit a module holds now, as its crank period / 4 (0 none):
+MOD_REVNEXT     EQU     MODRAM_NEXT + 1 ; the crank interrupt cuts the fuel at once past it (mod_revcap); and the next
+undef MODRAM_NEXT
+define MODRAM_NEXT (MOD_REVCAP + 2)
+endif
 if defined(NEED_SWPWM)
 MOD_SWSTEP      EQU     MODRAM_NEXT     ; software PWM: the step of the 25-step cycle...
 MOD_SWDUTY      EQU     MODRAM_NEXT + 1 ; ...how many of them are on (0-25)...
@@ -80,11 +87,20 @@ MB_LEANPRO      EQU     00200h
 MB_TRACTION     EQU     00400h
 MB_GEARLIMIT    EQU     00800h
 MB_WATERMARK    EQU     01000h
+MB_REMOTE       EQU     02000h          ; remote.asm: its rev / speed limit, and the anti-start lock
+MB_POPCORN      EQU     04000h          ; remote.asm: popcorn mode's spark cut
 ; the tick slot each module runs on (tick mod 16): features.inc hands them out when the ROM is built, the heaviest
 ; modules a slot of their own
 endif
 
 if XP == XP_TICK
+                LB      A, 0feh                ; each tick cycle (slot 0) the rev cap becomes what the modules
+                ANDB    A, #00fh               ; asked for in the cycle before
+                JNE     mod_revcap_roll_skip
+if defined(NEED_REVCAP)
+                CAL     mod_revcap_roll
+endif
+mod_revcap_roll_skip:
 if defined(NEED_PWM43)
                 CAL     mod_pwm_tick           ; every tick: the P4.3 PWM
 endif
@@ -225,24 +241,42 @@ endif
 ;                                  +2 cut at (crank period word: at or below it = at or above the rpm)
 ;                                  +4 back in at (crank period word, above the cut rpm's: below that rpm)
 ; Cuts once the rpm reaches the cut point, and lets it back in below the resume point; off at once when
-; the condition goes away or the module is disabled. Uses r0-r3.
+; the condition goes away or the module is disabled. Uses r0-r7, DP. The cut point is checked against the period one
+; reading ahead while the rpm rises (mod_period_ahead), so a fast-rising engine is cut at the limit, not past it.
 mod_limit:      ST      A, er0                 ; the module's bit
                 CLRB    A
                 MB      ACC.0, C
                 STB     A, r2                  ; its condition
                 LCB     A, 00000h[X1]          ; enabled?
                 ANDB    A, r2
-                JEQ     mod_limit_release
+                JNE     mod_limit_held
+                J       mod_limit_off
+mod_limit_held:
+if defined(NEED_REVCAP)
+                LC      A, 00002h[X1]          ; held: its cut point is a hard limit for the crank interrupt too
+if defined(FEAT_REMOTE)
+                CAL     rc_limit_set           ; (launch control's moved over the cable: remote.asm)
+endif
+                CAL     mod_revcap
+endif
                 L       A, off(MOD_FUELWANT)   ; cutting already?
                 OR      A, off(MOD_SPARKWANT)
                 AND     A, er0
                 JNE     mod_limit_cutting
-                LC      A, 00002h[X1]          ; not yet: cut once the period is down to the cut point
-                CMP     0ach, A
+                LC      A, 00002h[X1]          ; not yet: cut once the period (looking ahead) is down to the cut point
+if defined(FEAT_REMOTE)
+                CAL     rc_limit_set
+endif
+                ST      A, er1
+                CAL     mod_period_ahead
+                CMP     A, er1
                 JGT     mod_limit_ret
                 SJ      mod_limit_cut
 mod_limit_cutting:
                 LC      A, 00004h[X1]          ; cutting: back in once the period is past the resume point
+if defined(FEAT_REMOTE)
+                CAL     rc_limit_reset
+endif
                 CMP     0ach, A
                 JGT     mod_limit_release
 mod_limit_cut:  L       A, er0                 ; word mode
@@ -250,6 +284,9 @@ mod_limit_cut:  L       A, er0                 ; word mode
                 ST      A, er2                 ; spark
                 CLRB    A                      ; byte mode for the cut type
                 LCB     A, 00001h[X1]
+if defined(FEAT_REMOTE)
+                CAL     rc_cut_type            ; (fuel or ignition chosen over the cable: remote.asm)
+endif
                 CMPB    A, #000h
                 JNE     mod_limit_nofuelonly
                 CLR     A                      ; word mode
@@ -260,13 +297,18 @@ mod_limit_nofuelonly:
                 JNE     mod_limit_set
                 CLR     A                      ; word mode
                 ST      A, er1                 ; 1: ignition only
-mod_limit_set:  L       A, off(MOD_FUELWANT)
+mod_limit_set:  L       A, er0                 ; this limiter's requests replaced, not added to: its cut type can
+                XOR     A, #0ffffh             ; change while it cuts (over the cable), and the old one must go
+                ST      A, er3
+                L       A, off(MOD_FUELWANT)
+                AND     A, er3
                 OR      A, er1
                 ST      A, off(MOD_FUELWANT)
                 L       A, off(MOD_SPARKWANT)
+                AND     A, er3
                 OR      A, er2
                 ST      A, off(MOD_SPARKWANT)
-                SJ      mod_fold
+                J       mod_fold
 mod_limit_release:
                 L       A, off(MOD_FUELWANT)   ; not cutting: nothing to let go (the usual case, kept short)
                 OR      A, off(MOD_SPARKWANT)
@@ -304,6 +346,104 @@ mod_fold_spark_off:
                 STB     A, 0fch
 mod_limit_ret:  RT
 
+; not held (off, or its condition gone): its cap goes at once, rather than at the end of the tick cycle
+mod_limit_off:
+if defined(NEED_REVCAP)
+                LC      A, 00002h[X1]
+if defined(FEAT_REMOTE)
+                CAL     rc_limit_set
+endif
+                CAL     mod_revcap_drop
+endif
+                J       mod_limit_release
+
+if defined(NEED_REVCAP)
+; ------------------------------------------------------------------ the rev cap
+; A rev limit a module holds now (In: A, word, its cut point as a crank period). The skeleton's crank interrupt looks
+; at the cap on every reading, a step ahead (as mod_period_ahead), and cuts the fuel at once if the engine is past it
+; by about 1.6 % - so however fast it climbs, it is never far over: the module's own cut, fuel or spark, every 33 ms,
+; normally gets there first. The cap is the lowest rpm held in this tick cycle or the last. Uses DP, er2 (r4-r5).
+mod_revcap:     CAL     mod_revcap_byte
+                MOV     DP, #MOD_REVNEXT
+                CMPB    A, [DP]
+                JLE     mod_revcap_now         ; (a lower rpm is already held: its period is bigger)
+                STB     A, [DP]
+mod_revcap_now: DEC     DP                     ; MOD_REVCAP
+                LB      A, r4
+                CMPB    A, [DP]
+                JLE     mod_revcap_ret
+                STB     A, [DP]
+mod_revcap_ret: RT
+; Its limit let go: the cap falls back to the others' (this cycle's so far), if it was this one. Same In, Uses.
+mod_revcap_drop:
+                CAL     mod_revcap_byte
+                MOV     DP, #MOD_REVCAP
+                CMPB    A, [DP]
+                JNE     mod_revcap_ret
+                INC     DP
+                LB      A, [DP]
+                DEC     DP
+                STB     A, [DP]
+                RT
+; A (word, a crank period) as the cap's byte: / 4, held to 1-FFh. Out: A (byte) and r4.
+mod_revcap_byte:
+                L       A, ACC                 ; word mode (an LC after byte work leaves it in byte mode)
+                SRL     A
+                SRL     A
+                CMP     A, #000ffh
+                JLE     mod_revcap_b1
+                L       A, #000ffh
+mod_revcap_b1:  CMP     A, #00000h
+                JNE     mod_revcap_b2
+                L       A, #00001h
+mod_revcap_b2:  ST      A, er2
+                LB      A, r4                  ; byte mode
+                RT
+; Slot 0: the cap becomes the cycle's, and the next cycle starts empty.
+mod_revcap_roll:
+                L       A, DP
+                PUSHS   A
+                MOV     DP, #MOD_REVNEXT
+                LB      A, [DP]
+                MOVB    [DP], #000h
+                DEC     DP
+                STB     A, [DP]
+                POPS    A
+                MOV     DP, A
+                RT
+
+endif
+
+; ------------------------------------------------------------------ the crank period one reading ahead
+; 0ACh only changes every few revolutions, and a module's tick looks at it every 33 ms: a limit checked against it
+; alone is reached a reading or two after the engine got there. While the rpm rises this gives the newest period less
+; the last change (36Ch, the reading before, - 0ACh), the period the next reading will about have - the change taken as
+; 1/4 of the period at most (starting, the rpm doubles from one reading to the next); otherwise 0ACh itself.
+; Out: A (word). Uses DP, er2 (r4-r5). Tick context.
+mod_period_ahead:
+                MOV     DP, #0036ch            ; the reading before 0ACh's
+                L       A, [DP]
+                SUB     A, 0ach                ; before - newest: the change while the rpm rises
+                JLT     mod_ahead_now
+                ST      A, er2
+                L       A, 0ach
+                SRL     A
+                SRL     A
+                CMP     A, er2
+                JGE     mod_ahead_step
+                ST      A, er2                 ; (held to 1/4)
+mod_ahead_step: L       A, er2                 ; one and a half readings ahead (0ACh is an average of several)
+                SRL     A
+                ADD     A, er2
+                ST      A, er2
+                L       A, 0ach
+                SUB     A, er2
+                JGE     mod_ahead_ret
+                CLR     A
+mod_ahead_ret:  RT
+mod_ahead_now:  L       A, 0ach
+                RT
+
 ; ------------------------------------------------------------------ cut or not, as the module decides
 ; In: A (word) = the module's bit; C = cut now; X1 = its block (+1 = cut: 0 fuel, 1 ignition, 2 both).
 mod_cut:        ST      A, er0                 ; (a store leaves C alone)
@@ -325,14 +465,14 @@ mod_cutboth:    ST      A, er0                 ; (a store leaves C alone)
                 L       A, off(MOD_SPARKWANT)
                 AND     A, er0
                 ST      A, off(MOD_SPARKWANT)
-                SJ      mod_fold
+                J       mod_fold
 mod_cutboth_on: L       A, off(MOD_FUELWANT)
                 OR      A, er0
                 ST      A, off(MOD_FUELWANT)
                 L       A, off(MOD_SPARKWANT)
                 OR      A, er0
                 ST      A, off(MOD_SPARKWANT)
-                SJ      mod_fold
+                J       mod_fold
 
 ; ------------------------------------------------------------------ fuel trims
 ; In: A (word) = the module's new trim, 1/256ths of the fuel (signed); DP = its trim word in module RAM.

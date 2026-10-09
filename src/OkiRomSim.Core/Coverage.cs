@@ -1,4 +1,5 @@
-// Copyright (c) bmgjet. All rights reserved. Execution coverage at two levels: address coverage (was a byte ever executed) and, the one that matters for "hit all branches", EDGE coverage (was each conditional branch seen both taken and not-taken). BranchesHalfCovered lists branches seen only one way, where untested paths hide.
+// Copyright (c) bmgjet. All rights reserved.
+// Execution coverage at two levels: address coverage (was a byte ever executed) and, the one that matters for "hit all branches", EDGE coverage (was each conditional branch seen both taken and not-taken). BranchesHalfCovered lists branches seen only one way, where untested paths hide.
 using System.Text;
 
 namespace OkiRomSim.Core;

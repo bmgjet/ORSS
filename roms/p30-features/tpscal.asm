@@ -19,7 +19,7 @@ endif
 endif
 
 if XP == XP_CAL
-;@ TPSCalEnable type=u8 flag=1 on=1 off=0 category="TPS sensor" slot=tpssensor.custom desc="Use these end points."
+;@ TPSCalEnable type=u8 flag=1 on=1 off=0 category="TPS sensor" slot=tpssensor.custom desc="Use the throttle sensor end points below (the voltages at closed and wide open) instead of the ROM's own."
 tpscal_enable:          DB  000h
 ;@ TPSCalMin type=u8 formula=volts_5v_byte category="TPS sensor" slot=tpssensor.min desc="Sensor volts at 0 % (closed)."
 tpscal_min:             DB  019h

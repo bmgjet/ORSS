@@ -1,4 +1,7 @@
-// Copyright (c) bmgjet. All rights reserved. The world outside the MCU: drives the external levels that Bus's pin logic reads. Signals in SignalMap are confirmed from the disassembly or schematic and never overwritten. Untraced input pins get a selectable behaviour and may be flipped by StallMonitor when a ROM provably waits on one; a mapped pin is never touched.
+// Copyright (c) bmgjet. All rights reserved.
+// The world outside the MCU: drives the external levels that Bus's pin logic reads.
+//
+// Signals in SignalMap are confirmed from the disassembly or schematic and never overwritten. Untraced input pins get a selectable behaviour and may be flipped by StallMonitor when a ROM provably waits on one; a mapped pin is never touched.
 
 namespace OkiRomSim.Core;
 

@@ -555,8 +555,11 @@ public static class HtsPages
         "The gearbox the ECU works gear out from, and the road-speed correction.",
         [
             G("Transmission",
-                V("transmission.preset", "Gearbox preset", "", "FFh = custom ratios below."),
-                T("transmission.ratio", "Custom ratios")),
+                T("transmission.ratio", "Custom ratios (gear boundaries)", "", "The raw ratio (7324 x km/h / rpm) between gears 1-2, 2-3, 3-4 and 4-5. The Gearbox box above writes them from a preset, or Gear learning from a drive."),
+                V("transmission.preset", "Preset number", "", "Which preset the boundaries came from (FFh: custom).")),
+            G("Gear detection (skeleton)",
+                V("transmission.minspeed", "Gear unknown below", "km/h", "Below this road speed the gear is 0 (not known)."),
+                T("transmission.bounds", "Gear boundaries", "rpm per km/h", "Between gears 1-2, 2-3, 3-4, 4-5 and past 5th. The Gearbox box above writes them from a preset, or Gear learning from a drive.")),
             G("Road speed (HTS120)",
                 V("vss.correction", "Speed correction", "%", "100% reads as measured.")),
         ]);

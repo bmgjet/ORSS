@@ -4,7 +4,7 @@
 ;> name: Full throttle shift (flat shift)
 ;> category: Limits
 ;> pages: fts
-;> ram: 1F2h-1F5h (shared cut requests)
+;> ram: 1F2h-1F5h (shared cut requests), the rev cap: 2 bytes of module RAM shared by every rev limit (lib.asm)
 ;> about: Change gear without lifting: with the throttle past a point and the car moving, pressing the
 ;>        shift input (the clutch switch, or any switch input) holds the revs at the shift rpm with an
 ;>        ignition cut, so the turbo stays spooled and the engine does not flare while the clutch is in.
@@ -13,28 +13,28 @@
 ifdef FEAT_FTS
 
 if XP == XP_DEFS
+ifndef NEED_REVCAP
+define NEED_REVCAP                             ; (its rev limit is a hard limit for the crank interrupt too: lib.asm)
+endif
 ifndef NEED_MODLIB
 define NEED_MODLIB
 endif
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_FTS
-                JNE     fts_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_FTS == TICK_SLOT
                 CAL     fts_tick
-fts_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
-;@ FTSEnable type=u8 flag=1 on=1 off=0 category="Full throttle shift" slot=fts.enable desc="Full throttle shift on."
+;@ FTSEnable type=u8 flag=1 on=1 off=0 category="Full throttle shift" slot=fts.enable desc="Full throttle shift (flat shift): with the shift input on (a clutch switch) and the throttle open, the revs are held at the point below while changing gear."
 fts_block:              DB  000h
 ;@ FTSCut type=u8 category="Full throttle shift" slot=fts.cut desc="0 = fuel cut, 1 = ignition cut, 2 = both."
 fts_cut:                DB  001h
 ;@ FTSRPM type=u16 formula=rpm_period_word category="Full throttle shift" slot=fts.rpm desc="Hold the revs here while the shift input is on."
 fts_set:                DW  0015eh               ; 5360 rpm
-;@ FTSRPMReset type=u16 formula=rpm_period_word category="Full throttle shift" slot=fts.rpm.reset desc="Back in below this rpm."
+;@ FTSRPMReset type=u16 formula=rpm_period_word category="Full throttle shift" slot=fts.rpm.reset desc="Fuel / spark come back once the rpm falls under this."
 fts_reset:              DW  00168h               ; 5210 rpm
 ;@ FTSInput type=u8 category="Full throttle shift" slot=fts.input desc="The shift input: 01h power steering, 02h service connector, 04h start, 08h VTEC pressure, 10h A/C, 20h brake, 40h park/neutral, 80h always."
 fts_input:              DB  020h

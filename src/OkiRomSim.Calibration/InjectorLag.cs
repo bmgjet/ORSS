@@ -4,7 +4,9 @@ using System.Text.RegularExpressions;
 
 namespace OkiRomSim.Calibration;
 
-/// An injector's dead time (lag) against battery voltage, as the ROM's lag table holds it (slot injector.lag: 7 points, highest voltage first, the lag in the injector timer's 3.2 us counts): read from a ROM, written to one, and the presets - the 138 injectors of Templates/Presets plus your own, kept in a file of their own (injectors.json beside the settings).
+/// An injector's dead time (lag) against battery voltage, as the ROM's lag table holds it (slot injector.lag: 7 points, highest
+/// voltage first, the lag in the injector timer's 3.2 us counts): read from a ROM, written to one, and the presets - the 138
+/// injectors of Templates/Presets plus your own, kept in a file of their own (injectors.json beside the settings).
 public static partial class InjectorLag
 {
     /// The ROM's lag table as a preset ("As in the ROM"), or null when this ROM has none bound.

@@ -36,6 +36,7 @@ public sealed class McpServer
         Session = session;
         foreach (var t in new OkiTools(workspace, this).All()) _tools[t.Name] = t;
         foreach (var t in new CalTools(workspace, this).All()) _tools[t.Name] = t;
+        foreach (var t in new AnnotateTools(workspace, this).All()) _tools[t.Name] = t;
     }
 
     public const string Instructions =
@@ -47,7 +48,11 @@ public sealed class McpServer
         "Calibration: cal_detect finds the maps, cal_list / cal_read / cal_write / cal_define edit them, cal_explain says which code " +
         "reads a table (so it can be named by what it does), cal_save writes .bin / definitions / TunerPro XDF, compare says what " +
         "changed between two ROMs. Inside the desktop app, leave `path` out to work on the ROM open there (the app shows every " +
-        "change as it happens), and use `datalog` + `emulator` to tune a car from its logs.";
+        "change as it happens), and use `datalog` + `emulator` to tune a car from its logs. " +
+        "ANNOTATING a ROM: read `naming_guide` first and follow it for every name; `annotate_todo` lists what is still unnamed, " +
+        "`explore` shows what a routine does, `rename` gives a label or EQU a new name everywhere (checked against the standard; " +
+        "the app's editor, Lookup and Calibration pages change at once), `comment` writes what it does above it, `cal_define` names " +
+        "a table or setting with its scaling. Name only what the code shows; leave a placeholder rather than guess.";
 
     /// Handle one JSON-RPC message (or batch). Returns the response JSON, or null for a notification.
     public string? Handle(string json, string client = "local")
@@ -224,7 +229,8 @@ public sealed class Workspace
                 $"'{path}' is outside the workspace ({string.Join(", ", Roots)}). " +
                 "The simulator may be on another machine, so a path you can see is not necessarily a path it can: " +
                 "send the file with file_upload (or rom_upload for a ROM to open), or call workspace_allow to ask the user to let this folder in.");
-        // refuse links that point out of the workspace: the file itself, or any folder on the way to it (a junction or symlink inside the workspace to somewhere else would otherwise be a way out)
+        // refuse links that point out of the workspace: the file itself, or any folder on the way to it (a junction or symlink
+        // inside the workspace to somewhere else would otherwise be a way out)
         for (var at = full; at != null && !Roots.Any(r => at.Equals(r, Cmp)); at = Path.GetDirectoryName(at))
         {
             FileSystemInfo entry = Directory.Exists(at) ? new DirectoryInfo(at) : new FileInfo(at);

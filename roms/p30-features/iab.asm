@@ -20,19 +20,16 @@ define NEED_OUTPORT
 endif
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_IAB
-                JNE     iab_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_IAB == TICK_SLOT
                 CAL     iab_tick
-iab_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
-;@ IABEnable type=u8 flag=1 on=1 off=0 category="Outputs" slot=iab.enable desc="On."
+;@ IABEnable type=u8 flag=1 on=1 off=0 category="Outputs" slot=iab.enable desc="Open the intake air bypass butterflies above the rpm below (the second runner set on IAB intakes)."
 iab_enable:         DB  000h
-;@ IABEngage type=u16 formula=rpm_period_word category="Outputs" slot=iab.engage desc="Switch on above this rpm."
+;@ IABEngage type=u16 formula=rpm_period_word category="Outputs" slot=iab.engage desc="The butterflies are opened above this rpm."
 iab_engage:         DW  000f6h                 ; 7620 rpm
 ;@ IABDisengage type=u16 formula=rpm_period_word category="Outputs" slot=iab.disengage desc="Switch off again below this rpm."
 iab_disengage:      DW  00100h                 ; 7320 rpm

@@ -1,6 +1,8 @@
 // Copyright (c) bmgjet. All rights reserved.
 using System.Xml;
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Media;
 using AvaloniaEdit;
 using AvaloniaEdit.Highlighting;
@@ -54,7 +56,68 @@ public sealed class CodeEditor : UserControl
             var word = _ed.SelectedText?.Trim() ?? "";
             if (word.Length > 0) WordDoubleClicked?.Invoke(word, CaretLine);
         };
+        // right-click: the caret goes where it was clicked (unless inside the selection), and one menu - built as it opens
+        _ed.TextArea.AddHandler(PointerPressedEvent, (_, e) =>
+        {
+            if (!e.GetCurrentPoint(_ed).Properties.IsRightButtonPressed) return;
+            if (_ed.GetPositionFromPoint(e.GetPosition(_ed)) is not { } pos) return;
+            int off = _ed.Document.GetOffset(pos.Location);
+            if (_ed.SelectionLength > 0 && off >= _ed.SelectionStart && off <= _ed.SelectionStart + _ed.SelectionLength) return;
+            _ed.TextArea.ClearSelection();
+            _ed.TextArea.Caret.Position = pos;
+        }, RoutingStrategies.Tunnel, true);
+        var menu = new ContextMenu();
+        menu.Opening += (_, _) => FillMenu(menu);
+        _ed.TextArea.ContextMenu = menu;
         Content = _ed;
+    }
+
+    /// The right-click menu's own entries for the word under the caret and its line (go to, find references, a breakpoint); "-" is a line.
+    public Func<string, int, IEnumerable<(string Text, Action Run)>>? WordMenu { get; set; }
+
+    /// The label, number or name the caret is on ("" when none).
+    public string WordAtCaret()
+    {
+        var doc = _ed.Document;
+        if (doc == null || doc.TextLength == 0) return "";
+        int at = Math.Clamp(_ed.CaretOffset, 0, doc.TextLength);
+        static bool W(char c) => char.IsLetterOrDigit(c) || c is '_' or '.' or '$' or '@';
+        int a = at, b = at;
+        while (a > 0 && W(doc.GetCharAt(a - 1))) a--;
+        while (b < doc.TextLength && W(doc.GetCharAt(b))) b++;
+        return b > a ? doc.GetText(a, b - a).TrimEnd('.') : "";
+    }
+
+    /// The UI check: the right-click menu built and opened as a right-click would.
+    internal int OpenMenuForCheck()
+    {
+        if (_ed.TextArea.ContextMenu is not { } m) return 0;
+        FillMenu(m);
+        m.Open(_ed.TextArea);
+        return m.Items.Count;
+    }
+
+    void FillMenu(ContextMenu menu)
+    {
+        menu.Items.Clear();
+        bool sel = _ed.SelectionLength > 0, ro = _ed.IsReadOnly;
+        MenuItem Item(string text, string? keys, bool on, Action run)
+        {
+            var mi = new MenuItem { Header = text, IsEnabled = on };
+            if (keys != null) mi.InputGesture = KeyGesture.Parse(keys);
+            mi.Click += (_, _) => { menu.Close(); run(); };
+            return mi;
+        }
+        menu.Items.Add(Item("Cut", "Ctrl+X", sel && !ro, () => _ed.Cut()));
+        menu.Items.Add(Item("Copy", "Ctrl+C", sel, () => _ed.Copy()));
+        menu.Items.Add(Item("Paste", "Ctrl+V", !ro, () => _ed.Paste()));
+        menu.Items.Add(Item("Select all", "Ctrl+A", true, () => _ed.SelectAll()));
+        var word = sel && !_ed.SelectedText.Contains('\n') ? _ed.SelectedText.Trim() : WordAtCaret();
+        var more = WordMenu?.Invoke(word, CaretLine)?.ToList() ?? [];
+        if (more.Count > 0) menu.Items.Add(new Separator());
+        foreach (var (text, run) in more)
+            if (text == "-") menu.Items.Add(new Separator());
+            else menu.Items.Add(Item(text, null, true, run));
     }
 
     /// Raised whenever the user (or code) changes the text.
@@ -125,6 +188,20 @@ public sealed class CodeEditor : UserControl
     }
 
     public int CaretLine => _ed.TextArea.Caret.Line;
+
+    /// New text from outside (an MCP client renaming or commenting) without losing the place: the caret and the scroll stay where
+    /// they were, and the change is one undo step.
+    public void ReplaceKeepingView(string text)
+    {
+        text ??= "";
+        if ((_ed.Text ?? "") == text) return;
+        if (_ed.Document == null) { _ed.Text = text; return; }
+        int caret = _ed.CaretOffset;
+        double top = _ed.VerticalOffset;
+        _ed.Document.Text = text;
+        _ed.CaretOffset = Math.Min(caret, _ed.Document.TextLength);
+        _ed.ScrollToVerticalOffset(top);
+    }
 
     public void SetReadOnly(bool ro) => _ed.IsReadOnly = ro;
 

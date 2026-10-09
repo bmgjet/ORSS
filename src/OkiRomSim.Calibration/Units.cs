@@ -6,7 +6,8 @@ namespace OkiRomSim.Calibration;
 /// What a number measures, for picking the unit it is shown in.
 public enum Quantity { Temperature, Pressure, Boost, Speed, Distance, Mass, Power, Torque, Length, Area, Inertia, Force, Mixture, FuelFlow, Volume }
 
-/// The unit each kind of measurement is shown in (Settings > Units). Any mix: °C with mph, kW with lb-ft... "as is" for pressure keeps what the ROM or the log has (kPa for MAP, mBar on a load axis).
+/// The unit each kind of measurement is shown in (Settings > Units). Any mix: °C with mph, kW with lb-ft... "as is" for pressure keeps
+/// what the ROM or the log has (kPa for MAP, mBar on a load axis).
 public sealed class UnitSettings
 {
     public string Temperature { get; set; } = "°C";
@@ -69,7 +70,8 @@ public sealed class UnitSettings
     };
 }
 
-/// Units: what a value is in, and what it is shown in. Every conversion here is a straight line (a scale and an offset), so a value shown in one unit goes back exactly into the unit it is kept in.
+/// Units: what a value is in, and what it is shown in. Every conversion here is a straight line (a scale and an offset), so a value
+/// shown in one unit goes back exactly into the unit it is kept in.
 public static class Units
 {
     /// The units in use (the app sets these from its settings).
@@ -105,7 +107,8 @@ public static class Units
         [Quantity.FuelFlow] = "Injector flow", [Quantity.Volume] = "Fuel volume",
     };
 
-    /// Each unit as (quantity, value of one of it in the base unit, offset): base = value x scale + offset. The base units are °C, kPa, psi above outside (boost), km/h, km, kg, kW, Nm, m, m², kg·m², N, AFR, cc/min, L.
+    /// Each unit as (quantity, value of one of it in the base unit, offset): base = value x scale + offset. The base units are °C, kPa,
+    /// psi above outside (boost), km/h, km, kg, kW, Nm, m, m², kg·m², N, AFR, cc/min, L.
     static readonly Dictionary<string, (Quantity Q, double Scale, double Offset)> Known = new(StringComparer.OrdinalIgnoreCase)
     {
         ["°C"] = (Quantity.Temperature, 1, 0), ["C"] = (Quantity.Temperature, 1, 0), ["degC"] = (Quantity.Temperature, 1, 0),

@@ -34,7 +34,9 @@ File > New ROM > Create reads it:
 | `XP_MAIN` | once per main-loop pass | main loop; only a few passes a second at high rpm |
 | `XP_FUEL` | each fuel calculation, final pulse width in word 146h | crank interrupt |
 | `XP_IGN` | each spark calculation, final advance in 246h/247h | main loop |
-| `XP_TICK` | every 2.048 ms | timer-1 interrupt; does not nest, so keep it short |
+| `XP_TICK` | every 2.048 ms | timer-1 interrupt; does not nest, so keep it short (most modules want `XP_TICKSLOT`) |
+| `XP_TICKSLOT` | one tick in 16, the module's slot (`TICK_SLOT` is the slot being built) | timer-1 interrupt; `tickslots.inc` jumps to the slot's list |
+| `XP_SPARK` | every spark interrupt (two a spark) | timer-3 interrupt; the timers may nest in: hold them off (`ANDB PSWH, #0feh`) around anything the tick also changes |
 | `XP_OUT` | after the output block | main loop |
 | `XP_CAL` | calibration tables | |
 | `XP_CODE` | module code | |
@@ -46,16 +48,16 @@ runs on one tick in 16, its slot (`SLOT_...`): the tick is the same whatever the
 to a few passes a second at high rpm. The slots are handed out when the ROM is built, in `features.inc`: the heaviest
 modules first, one slot each, then the lighter ones sharing (0..15, 15..0, 0..15). The tick is the timer 1 interrupt and
 keeps every other interrupt waiting while it runs, so keep a module's tick short and put a new module in the list in
-`features.inc` where its measured cost (`SkeletonTest --isrtime` on a build with it) puts it. A tick module looks like this:
+`features.inc` where its measured cost (`SkeletonTest --isrtime` / `--tickprofile` on a build with it) puts it (a module
+heavier than a slot's worth takes two, as the remote control commands do). The tick counter is looked at once per tick
+(`tickslots.inc`, four bit tests) and only the slot's own modules are called, so a module's tick code goes in
+`XP_TICKSLOT`, for its slot only; `XP_TICK` is for the little that must run every tick. A tick module looks like this:
 
 ```
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_LAUNCH
-                JNE     launch_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_LAUNCH == TICK_SLOT
                 CAL     launch_tick
-launch_tick_skip:
+endif
 endif
 ...
 launch_tick:    PUSHS   LRB                    ; bank 3Fh: r0-r7 (1F8h-1FFh) are scratch, off() reaches 100h-1FFh

@@ -107,7 +107,8 @@ public sealed class DynoProfile
     public bool StopAll { get; set; }
     /// A run shorter than this is thrown away (a stab of the throttle).
     public double MinRunS { get; set; } = 1.0;
-    /// One shot: after a run, auto start goes off - one pull is logged, then it stops and waits while the run is looked at (Auto start arms it again). Off: it waits for the next pull straight away.
+    /// One shot: after a run, auto start goes off - one pull is logged, then it stops and waits while the run is looked at (Auto start
+    /// arms it again). Off: it waits for the next pull straight away.
     public bool OneShot { get; set; } = true;
     /// Channels drawn under the curves against rpm.
     public List<string> Overlays { get; set; } = ["afr"];
@@ -163,7 +164,8 @@ public sealed class DynoRun
     public DynoStyle? Style { get; set; }
 }
 
-/// One run's own settings on the graph: its colour and line, which curves show, and the sums done differently for it alone (another correction, its own smoothing or drivetrain loss). Null fields follow the dyno's settings.
+/// One run's own settings on the graph: its colour and line, which curves show, and the sums done differently for it alone
+/// (another correction, its own smoothing or drivetrain loss). Null fields follow the dyno's settings.
 public sealed class DynoStyle
 {
     /// #RRGGBB, or empty for the next colour of the palette.
@@ -181,7 +183,8 @@ public sealed class DynoStyle
     public DynoStyle Clone() => (DynoStyle)MemberwiseClone();
 }
 
-/// The dyno's settings that are the same for every profile (Settings > Dyno): how results are shown and worked out, where the AFR comes from, the hotkey. A profile keeps the car, the roller, the air on the day and the triggers.
+/// The dyno's settings that are the same for every profile (Settings > Dyno): how results are shown and worked out, where the AFR comes
+/// from, the hotkey. A profile keeps the car, the roller, the air on the day and the triggers.
 public sealed class DynoSettings
 {
     public bool ShowCrank { get; set; }
@@ -380,7 +383,8 @@ public static class VirtualDyno
         ];
     }
 
-    /// Every run in a log, found with the profile's triggers as the logger would have found them live (a hotkey cannot fire in a recorded log: a "Hotkey pressed" condition counts as held). Each is the readings of one pull.
+    /// Every run in a log, found with the profile's triggers as the logger would have found them live (a hotkey cannot fire in a
+    /// recorded log: a "Hotkey pressed" condition counts as held). Each is the readings of one pull.
     public static List<List<DynoSample>> RunsIn(IEnumerable<LogFrame> frames, DynoProfile p)
     {
         var t = new DynoTriggers { Armed = true, ArmAgain = true, KeyDown = true };

@@ -1,4 +1,5 @@
-// Copyright (c) bmgjet. All rights reserved. Honda OBD1 ECU Complete Diagnostic Trouble Code (DTC / MIL) Subsystem. Covers all 30 official Honda OBD1 fault codes (Code 0 through Code 92).
+// Copyright (c) bmgjet. All rights reserved.
+// Honda OBD1 ECU Complete Diagnostic Trouble Code (DTC / MIL) Subsystem. Covers all 30 official Honda OBD1 fault codes (Code 0 through Code 92).
 namespace OkiRomSim.Core;
 
 public enum DtcCode

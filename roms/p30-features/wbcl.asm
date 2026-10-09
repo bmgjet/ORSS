@@ -28,31 +28,28 @@ undef MODRAM_NEXT
 define MODRAM_NEXT (wbcl_afr + 1)
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_WBCL
-                JNE     wbcl_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_WBCL == TICK_SLOT
                 CAL     wbcl_tick
-wbcl_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
-;@ CloseLoopEnable type=u8 flag=1 on=1 off=0 category="Closed loop (wideband)" slot=closeloop.enable desc="Wideband closed loop on."
+;@ CloseLoopEnable type=u8 flag=1 on=1 off=0 category="Closed loop (wideband)" slot=closeloop.enable desc="Closed loop on a wideband: trim the fuel so the AFR follows the target table, within the limits set."
 wbcl_enable:            DB  000h
 ;@ CloseLoopInput type=u8 category="Closed loop (wideband)" slot=closeloop.input desc="The wideband's analog output on: 0 O2 (D14), 1 ELD (D10), 2 EGR (D12), 3 B6, 4-11 serial input 1-8 (sent over the datalog cable: the serial inputs module)."
 wbcl_input:             DB  000h
 ;@ CloseLoopAFR0 type=u8 formula=x/10 unit=AFR decimals=1 category="Closed loop (wideband)" slot=closeloop.afr0 desc="The AFR the wideband reports at 0 V."
 wbcl_afr0:              DB  064h
-;@ CloseLoopAFR5 type=u8 formula=x/10 unit=AFR decimals=1 category="Closed loop (wideband)" slot=closeloop.afr5 desc="The AFR it reports at 5 V."
+;@ CloseLoopAFR5 type=u8 formula=x/10 unit=AFR decimals=1 category="Closed loop (wideband)" slot=closeloop.afr5 desc="The AFR the wideband controller reports at 5 V (its analogue output's top end; see its manual)."
 wbcl_afr5:              DB  0c8h
 ;@ CloseLoopTarget type=u8 count=9 formula=x/10 unit=AFR decimals=1 category="Closed loop (wideband)" slot=closeloop.target colvalues=-6,17,40,63,86,109,132,155,178 colunit=kPa desc="Target AFR against manifold pressure."
 wbcl_target:            DB  093h, 093h, 093h, 093h, 08ch, 082h, 07dh, 078h, 078h
 ;@ CloseLoopECT type=u8 formula=honda_temp_c category="Closed loop (wideband)" slot=closeloop.ect desc="Only with the coolant warmer than this."
 wbcl_ect:               DB  045h                 ; 60 C
-;@ CloseLoopRPMMin type=u16 formula=rpm_period_word category="Closed loop (wideband)" slot=closeloop.rpm.min desc="Only above this rpm."
+;@ CloseLoopRPMMin type=u16 formula=rpm_period_word category="Closed loop (wideband)" slot=closeloop.rpm.min desc="It only trims above this rpm."
 wbcl_rpmmin:            DW  00ea6h               ; 500 rpm
-;@ CloseLoopRPMMax type=u16 formula=rpm_period_word category="Closed loop (wideband)" slot=closeloop.rpm.max desc="Only below this rpm."
+;@ CloseLoopRPMMax type=u16 formula=rpm_period_word category="Closed loop (wideband)" slot=closeloop.rpm.max desc="It only trims below this rpm."
 wbcl_rpmmax:            DW  000fah               ; 7500 rpm
 ;@ CloseLoopTPSMax type=u8 formula=tps_pct category="Closed loop (wideband)" slot=closeloop.tps desc="Only below this throttle opening."
 wbcl_tps:               DB  0ffh

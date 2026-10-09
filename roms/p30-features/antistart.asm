@@ -19,17 +19,14 @@ define NEED_MODLIB
 endif
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_ANTISTART
-                JNE     antistart_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_ANTISTART == TICK_SLOT
                 CAL     antistart_tick
-antistart_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
-;@ AntiStartEnable type=u8 flag=1 on=1 off=0 category="Anti-start" slot=antistart.enable desc="Anti-start on."
+;@ AntiStartEnable type=u8 flag=1 on=1 off=0 category="Anti-start" slot=antistart.enable desc="The engine will not start until it is unlocked: the chosen switch on with the throttle opened at least as far as set below (a hidden start code)."
 antistart_enable:       DB  000h
 ;@ AntiStartTPS type=u8 formula=tps_pct category="Anti-start" slot=antistart.tps desc="Unlock with the switch on and the throttle at least this far open."
 antistart_tps:          DB  0d0h                 ; about 90 %

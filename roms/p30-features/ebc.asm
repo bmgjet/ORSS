@@ -28,25 +28,22 @@ undef MODRAM_NEXT
 define MODRAM_NEXT (ebc_base + 1)
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_EBC
-                JNE     ebc_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_EBC == TICK_SLOT
                 CAL     ebc_tick
-ebc_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
-;@ EBCEnable type=u8 flag=1 on=1 off=0 category="Electronic boost control" slot=ebc.enable desc="Boost control on."
+;@ EBCEnable type=u8 flag=1 on=1 off=0 category="Electronic boost control" slot=ebc.enable desc="Electronic boost control: the boost solenoid's duty from the table against rpm, with closed loop on the target boost when the gain is set."
 ebc_enable:             DB  000h
 ;@ EBCMinTPS type=u8 formula=tps_pct category="Electronic boost control" slot=ebc.tps desc="Solenoid off below this throttle opening."
 ebc_tps:                DB  07dh                 ; 50 %
 ;@ EBCGain type=u8 category="Electronic boost control" slot=ebc.gain formula=x/16 unit="% per count" decimals=2 desc="Closed loop: duty added for each MAP count under the target (0 = open loop)."
 ebc_gain:               DB  000h
-;@ EBCMaxDuty type=u8 category="Electronic boost control" slot=ebc.maxduty formula=x unit=% decimals=0 desc="Never more duty than this."
+;@ EBCMaxDuty type=u8 category="Electronic boost control" slot=ebc.maxduty formula=x unit=% decimals=0 desc="The duty is never more than this, whatever the tables say: a safety limit on boost."
 ebc_maxduty:            DB  05ah                 ; 90 %
-;@ EBCDuty type=u8 count=9 category="Electronic boost control" slot=ebc.duty formula=x unit=% decimals=0 colvalues=0,1024,2048,3072,4096,5120,6144,7168,8192 colunit=rpm desc="Base duty against rpm."
+;@ EBCDuty type=u8 count=9 category="Electronic boost control" slot=ebc.duty formula=x unit=% decimals=0 colvalues=0,1024,2048,3072,4096,5120,6144,7168,8192 colunit=rpm desc="The base solenoid duty against rpm (more duty = more boost)."
 ebc_duty:               DB  000h, 000h, 000h, 000h, 000h, 000h, 000h, 000h, 000h
 ;@ EBCTarget type=u8 count=9 formula=map_mbar category="Electronic boost control" slot=ebc.target colvalues=0,1024,2048,3072,4096,5120,6144,7168,8192 colunit=rpm desc="Target boost against rpm (closed loop)."
 ebc_target:             DB  0d8h, 0d8h, 0d8h, 0d8h, 0d8h, 0d8h, 0d8h, 0d8h, 0d8h

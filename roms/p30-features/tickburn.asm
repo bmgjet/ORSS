@@ -7,20 +7,14 @@
 ; ==================================================================================================
 ifdef TICKBURN_US
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #007h
-                JNE     tickburn_skip1
+if XP == XP_TICKSLOT
+if TICK_SLOT == 7
                 CAL     tickburn_run1
-tickburn_skip1:
+endif
 ifdef TICKBURN2_US
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #008h
-                JNE     tickburn_skip2
+if TICK_SLOT == 8
                 CAL     tickburn_run2
-tickburn_skip2:
+endif
 endif
 endif
 

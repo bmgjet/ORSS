@@ -193,7 +193,10 @@ public static class HondaDatalog
         };
     }
 
-    /// The HTS main table in full (request 20h, and the HTS logger files): Decode, then what the rest of its 51 bytes hold - where in the fuel and ignition maps it is (row and column), the status, input and output bits, the fuel and ignition corrections, the trouble code bytes, the HTS features' inputs and states, the boost controller, the analog inputs and the idle valve. `have` is how many of the bytes are real (an old logger file keeps only the first 26): nothing is made up from the rest.
+    /// The HTS main table in full (request 20h, and the HTS logger files): Decode, then what the rest of its 51 bytes hold - where in the
+    /// fuel and ignition maps it is (row and column), the status, input and output bits, the fuel and ignition corrections, the trouble
+    /// code bytes, the HTS features' inputs and states, the boost controller, the analog inputs and the idle valve. `have` is how many of
+    /// the bytes are real (an old logger file keeps only the first 26): nothing is made up from the rest.
     public static LogFrame DecodeHts(byte[] f, double t, int have = FrameLength)
     {
         var fr = Decode(f, t);
@@ -315,13 +318,23 @@ public abstract class DatalogProtocol
     public abstract bool Handshake(IByteLink link, out string note);
 
     /// One command byte between frames and its one-byte answer (TroubleCodes: 50h clears the stored codes, 51h switches the injectors off...), or null when nothing came back. A protocol that streams, or goes through an emulator, puts its own conversation back afterwards.
-    public virtual byte? Command(IByteLink link, byte command, out string note)
+    public byte? Command(IByteLink link, byte command, out string note) => Command(link, [command], out note);
+
+    /// A command with its value bytes (the remote control commands: 33h and the rev limit, 2Fh and a password...): each byte with a
+    /// pause after it (the ECU's one-byte receive buffer), and the one answer after the last.
+    public virtual byte? Command(IByteLink link, byte[] message, out string note)
     {
         using var hold = link.Hold();
         link.Discard();
-        Send(link, command);
-        var r = Receive(link, 1, $"command {command:X2}");
-        note = r.Length == 1 ? $"{command:X2} answered {r[0]:X2}" : $"no answer to {command:X2}";
+        if (message.Length == 1) Send(link, message[0]);
+        else
+        {
+            foreach (var b in message) { link.Write([b]); link.Wait(1); }
+            OnPacket?.Invoke(new Packet(DateTime.Now, PacketDir.Tx, message, ""));
+        }
+        string what = string.Join(" ", message.Select(b => b.ToString("X2")));
+        var r = Receive(link, 1, $"command {what}");
+        note = r.Length == 1 ? $"{what} answered {r[0]:X2}" : $"no answer to {what}";
         return r.Length == 1 ? r[0] : null;
     }
     /// One frame, or null (timeout / bad checksum; `note` says which).
@@ -389,12 +402,16 @@ public abstract class DatalogProtocol
 
     protected LogFrame? Framed(IByteLink link, byte request, int dataLength, Func<byte[], LogFrame> decode, double t, out string note)
     {
-        // Only the buffer is cleared, not the wire: the old code waited for the line to fall quiet before every single request, which cost more than the frame interval itself and, on a fast link, swallowed the beginning of the answer to the request just sent. The tuning software writes the request and reads the answer, and only discards the buffer after something has actually gone wrong. After something has gone wrong, though, the line is let go quiet first: an answer that came late (the ECU sends fewer bytes a second at high rpm, its crank task holding the serial interrupt off) is still arriving, and read as the start of the next answer it makes a frame of two halves - one the 8-bit checksum lets through 1 time in 256.
+        // Only the buffer is cleared, not the wire: the old code waited for the line to fall quiet before every single request, which cost more than the frame interval itself and, on a fast link, swallowed the beginning of the answer to the request just sent. The tuning software writes the request and reads the answer, and only discards the buffer after something has actually gone wrong.
+        // After something has gone wrong, though, the line is let go quiet first: an answer that came late (the ECU sends
+        // fewer bytes a second at high rpm, its crank task holding the serial interrupt off) is still arriving, and read as
+        // the start of the next answer it makes a frame of two halves - one the 8-bit checksum lets through 1 time in 256.
         if (_outOfStep) { Drain(link, 30); _outOfStep = false; }
         else link.Discard();
         Send(link, request);
-        // the ECU may send as few as ~250 bytes a second at the rev limit: room for that before calling it a timeout
-        var r = Receive(link, dataLength + 1, "frame", Math.Max(TimeoutMs, (dataLength + 1) * 8));
+        // the ECU may send as few as ~20 bytes a second at the rev limit (a ROM made here paces its bytes by the spark
+        // calculation, so logging never takes the engine code's time): room for that before calling it a timeout
+        var r = Receive(link, dataLength + 1, "frame", Math.Max(TimeoutMs, (dataLength + 1) * 60));
         if (r.Length < dataLength + 1) { note = "timeout"; _outOfStep = true; return null; }
         if (HondaDatalog.Checksum(r, dataLength) != r[dataLength]) { note = "bad checksum"; _outOfStep = true; return null; }
         // a byte straight after the answer: it was not this request's answer alone - not taken, and the line let go quiet
@@ -438,9 +455,10 @@ public abstract class DatalogProtocol
         {
             p.OnPacket = onPacket;
             if (quick) { p.Retries = 0; p.TimeoutMs = Math.Min(p.TimeoutMs, 150); }
-            // each at its own line speed (the stock tester link is 9600, the rest 38400), on a plain line
+            // each at its own line speed (the stock tester link is 9600, the rest 38400 - or 62500 when that is the one set, for a ROM
+            // made here with its fast line on), on a plain line
             link.SetEcho(false);
-            link.SetBaud(p.Baud);
+            link.SetBaud(p.Baud == 38400 && DatalogChannels.LineBaud == 62500 ? 62500 : p.Baud);
             try
             {
                 if (!p.Handshake(link, out var note)) { report.AppendLine($"{p.Name}: {note}"); continue; }
@@ -626,7 +644,11 @@ public sealed class Custom2Protocol : DatalogProtocol
     }
 }
 
-/// The skeleton ROM's channel stream (p30-features/dlstream.asm, FEAT_DLSTREAM): the logger picks the channels it wants and the ECU streams just those, back to back, each frame stamped with its own 2.048 ms tick. 7Eh -> 7Eh, version, channels in its table, what else is built in, checksum (the five sum to 00h). Version 4: 74h, the fast channels as a 64-bit mask, the slow ones as another, checksum -> 74h; frames are A5h, tick lo, tick hi, every fast channel in channel order, the slow channel's number and byte (one slow channel a frame, in turn), checksum. A word (rpm) is read by the ROM in one go. Versions 1-3: 73h N channel numbers (or 70h N addresses) -> 70h; frames are A5h, seq, tick lo, tick hi, the N bytes, checksum. 71h streams until any other byte arrives (FFh serial inputs excepted: they go to the ECU while it streams); 72h is one frame. The same ROM also answers the HTS 10h/20h frame, so older loggers work on it too; this one is faster.
+/// The skeleton ROM's channel stream (p30-features/dlstream.asm, FEAT_DLSTREAM): the logger picks the channels it wants and the ECU streams just those, back to back, each frame stamped with its own 2.048 ms tick.
+/// 7Eh -> 7Eh, version, channels in its table, what else is built in, checksum (the five sum to 00h).
+/// Version 4: 74h, the fast channels as a 64-bit mask, the slow ones as another, checksum -> 74h; frames are A5h, tick lo, tick hi, every fast channel in channel order, the slow channel's number and byte (one slow channel a frame, in turn), checksum. A word (rpm) is read by the ROM in one go.
+/// Versions 1-3: 73h N channel numbers (or 70h N addresses) -> 70h; frames are A5h, seq, tick lo, tick hi, the N bytes, checksum.
+/// 71h streams until any other byte arrives (FFh serial inputs excepted: they go to the ECU while it streams); 72h is one frame. The same ROM also answers the HTS 10h/20h frame, so older loggers work on it too; this one is faster.
 public sealed class ChannelStream : DatalogProtocol
 {
     public override string Name => "Channel stream";
@@ -652,6 +674,7 @@ public sealed class ChannelStream : DatalogProtocol
     public bool HasSerialInputs => (_caps & 2) != 0;
     public bool HasMemoryRead => (_caps & 4) != 0;
     public bool HasService => (_caps & 8) != 0;
+    public bool HasRemote => (_caps & 0x20) != 0;
     readonly List<byte> _buf = [];
     int _lastSeq = -1, _lastTick = -1;
     /// The last frame ended where the buffer now starts: the next is taken on its own checks.
@@ -667,7 +690,7 @@ public sealed class ChannelStream : DatalogProtocol
         {
             Drain(link);
             Send(link, 0x7E);
-            var id = Receive(link, 5, "Channel stream ident");
+            var id = Receive(link, 5, "Channel stream ident", Math.Max(TimeoutMs, 1000));   // (paced bytes at high rpm, as below)
             if (id.Length < 5 || id[0] != 0x7E || (id.Sum(b => b) & 0xFF) != 0)
             {
                 note = id.Length == 0 ? "no answer to 7E" : $"answer {string.Join(" ", id.Select(b => b.ToString("X2")))} is not the stream ident";
@@ -698,7 +721,9 @@ public sealed class ChannelStream : DatalogProtocol
                 }
                 else if (fastNums.Concat(slowNums).Any(n => n >= 56) && (id[3] & 0x10) != 0)
                 {
-                    // more than the masks reach (channels 56 and up: the "every channel" module): the list, with the slow ones as a range - every channel from the first slow one to the last comes round in turn. 13 fast bytes at most (the list is 16 with its count, F and the range): fast picks past that go slow - a two-byte value too, its bytes then a frame apart
+                    // more than the masks reach (channels 56 and up: the "every channel" module): the list, with the slow ones
+                    // as a range - every channel from the first slow one to the last comes round in turn. 13 fast bytes at most
+                    // (the list is 16 with its count, F and the range): fast picks past that go slow - a two-byte value too, its bytes then a frame apart
                     var fastPicks = new List<StreamPick>();
                     int bytes = 0;
                     foreach (var p in _picks.Where(p => !p.Slow))
@@ -747,7 +772,8 @@ public sealed class ChannelStream : DatalogProtocol
                 _caps = 0;
             }
             Drain(link, 20);
-            // a byte at a time with a pause after each: the ECU has a one-byte receive buffer, and a byte that lands while a crank interrupt holds it off overwrites the one before, leaving the ECU waiting for the rest
+            // a byte at a time with a pause after each: the ECU has a one-byte receive buffer, and a byte that
+            // lands while a crank interrupt holds it off overwrites the one before, leaving the ECU waiting for the rest
             foreach (var b in msg) { link.Write([b]); link.Wait(1); }
             OnPacket?.Invoke(new Packet(DateTime.Now, PacketDir.Tx, [.. msg], "channel list"));
             var ok = Receive(link, 1, "channel list answer");
@@ -767,11 +793,11 @@ public sealed class ChannelStream : DatalogProtocol
     }
 
     /// The stream stops at any byte from the logger: a byte the ROM ignores (00h) stops it, the line is let go quiet, then the command, then the stream again.
-    public override byte? Command(IByteLink link, byte command, out string note)
+    public override byte? Command(IByteLink link, byte[] message, out string note)
     {
         Send(link, 0x00);
         Drain(link, 30);
-        var answer = base.Command(link, command, out note);
+        var answer = base.Command(link, message, out note);
         _buf.Clear(); _lastTick = -1; _inStep = false;
         Send(link, 0x71);
         return answer;
@@ -788,7 +814,7 @@ public sealed class ChannelStream : DatalogProtocol
         msg[3] = (byte)-(msg[0] + msg[1] + msg[2]);
         foreach (var b in msg) { link.Write([b]); link.Wait(1); }
         OnPacket?.Invoke(new Packet(DateTime.Now, PacketDir.Tx, msg, $"memory read {address:X3}h"));
-        var r = Receive(link, 34, "memory read");
+        var r = Receive(link, 34, "memory read", Math.Max(TimeoutMs, 2500));        // (the ECU paces its bytes: ~20 a second at the rev limit)
         _buf.Clear(); _lastTick = -1; _inStep = false;
         Send(link, 0x71);
         if (r.Length >= 1 && r[0] == 0x7F) { note = $"refused: {address:X3}h is not a RAM address the ECU sends (80h-460h)"; return null; }
@@ -824,7 +850,11 @@ public sealed class ChannelStream : DatalogProtocol
         {
             int got = link.Read(chunk, 0, chunk.Length, 20);
             if (got > 0) _buf.AddRange(chunk.Take(got));
-            // every complete frame that has arrived, in order (so a gap in the sequence is a frame the line lost, not one skipped here, and every slow channel's byte is taken); the newest one is what this poll returns Frames come back to back. In step, each starts where the last ended. Out of step (the start, a spoilt byte), A5h and a checksum that comes out are not enough to go on - a run of data can look like that 1 time in 65,536 - so a frame is only taken there when the next one starts straight after it too; and the ECU's tick may only move on.
+            // every complete frame that has arrived, in order (so a gap in the sequence is a frame the line lost, not
+            // one skipped here, and every slow channel's byte is taken); the newest one is what this poll returns
+            // Frames come back to back. In step, each starts where the last ended. Out of step (the start, a spoilt byte), A5h
+            // and a checksum that comes out are not enough to go on - a run of data can look like that 1 time in 65,536 - so a
+            // frame is only taken there when the next one starts straight after it too; and the ECU's tick may only move on.
             int j = 0, used = 0;
             bool Valid(int at) => _buf[at] == 0xA5 && (_buf.Skip(at).Take(len).Sum(b => b) & 0xFF) == 0;
             while (j + len <= _buf.Count)
@@ -1031,7 +1061,7 @@ public sealed class IsrMultiByte : DatalogProtocol
     {
         link.Discard();
         Send(link, 0x40);
-        var r = Receive(link, 5, "HTS120 40h");
+        var r = Receive(link, 5, "HTS120 40h", Math.Max(TimeoutMs, 1000));
         if (r.Length == 5 && HondaDatalog.Checksum(r, 4) == r[4])
         {
             _hts120 = true;
@@ -1130,9 +1160,11 @@ public sealed class EmulatorRelay : DatalogProtocol
     }
 
     /// The Demon asks the ECU for the command instead of the frame, once, and is set back to the frame after (as the tuning software clears the check-engine lamp through a Demon). Its footer is 'T' when the ECU did not answer.
-    public override byte? Command(IByteLink link, byte command, out string note)
+    public override byte? Command(IByteLink link, byte[] message, out string note)
     {
         byte? answer = null;
+        if (message.Length != 1) { note = "the Demon passes one-byte commands only"; return null; }
+        byte command = message[0];
         note = $"the Demon did not take the command {command:X2}";
         var ok = Exchange(link, Setup(0, (1, command)), 1, $"Demon setup (command {command:X2})");
         if (ok is [(byte)'O'])
@@ -1261,7 +1293,8 @@ public sealed class RawFrame10 : DatalogProtocol
         var sw = System.Diagnostics.Stopwatch.StartNew();
         while (sw.ElapsedMilliseconds < TimeoutMs)
         {
-            // stay in step: drop bytes until a valid frame starts the buffer (summed in place: a copy of the whole buffer per dropped byte was up to 4 KB each time)
+            // stay in step: drop bytes until a valid frame starts the buffer
+            // (summed in place: a copy of the whole buffer per dropped byte was up to 4 KB each time)
             byte SumOfFrame(int from) { byte s = 0; for (int i = 0; i < _length - 1; i++) s += _buf[from + i]; return s; }
             int drop = 0;
             while (_buf.Count - drop >= _length && SumOfFrame(drop) != _buf[drop + _length - 1]) drop++;
@@ -1654,7 +1687,8 @@ public static class LogFile
                 f[19] = r.ReadByte(); f[20] = r.ReadByte();
                 f[21] = r.ReadByte(); f[22] = r.ReadByte(); f[23] = r.ReadByte(); f[24] = r.ReadByte(); f[25] = r.ReadByte();
                 long ms = r.ReadInt64();
-                // the rest of the record, as far as this file's records go (older ones stop here): the corrections, the HTS features, the analog inputs, the emulator's own inputs, the wideband and the EGT / pressure channels
+                // the rest of the record, as far as this file's records go (older ones stop here): the corrections, the HTS
+                // features, the analog inputs, the emulator's own inputs, the wideband and the EGT / pressure channels
                 int have = 26;
                 var extra = new Dictionary<string, double>();
                 try

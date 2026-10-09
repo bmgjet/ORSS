@@ -4,11 +4,14 @@
 ;> name: Datalogging: HTS / ISR frame
 ;> category: Diagnostics
 ;> conflicts: FEAT_STOCK_SERIAL, FEAT_DLQD3
-;> ram: 374h-37Eh (378h-37Eh is bank 6Fh)
-;> about: The HTS / ISR protocol on the datalog pins at 38400 baud (the HTS wiring): existing loggers work
+;> pages: datalog
+;> ram: 374h-37Eh (378h-37Eh is bank 6Fh), 0FDh bit 7 and module RAM (1 byte): the byte budget
+;> about: The HTS / ISR protocol on the datalog pins at 38400 baud (the HTS wiring; 62,500 with DatalogFast): existing loggers work
 ;>        unchanged. 10h (or ABh) -> CDh, then 20h (or 90h) -> the 51-byte frame and its checksum, C0h+n ->
 ;>        byte n of it, 40h -> the HTS120 extra packet. The QD3 frame is a different protocol on the same
-;>        pins: one or the other. The channel stream and the service commands go with either.
+;>        pins: one or the other. The channel stream and the service commands go with either. Whatever is
+;>        sent, the main loop's spark calculation sets how many bytes may go before the next one: fewer the
+;>        higher the rpm, so logging can never take the time the engine code needs.
 ;
 ; The serial link itself (the port set up, the interrupts, what is being sent) is built whenever any datalog part is
 ; (NEED_DATALOG, set in features.inc); the parts add their commands to it.
@@ -45,13 +48,26 @@ DL_SUM          EQU     0037ch          ; r4: running checksum
 DL_NCH          EQU     0037dh          ; r5: channels in the stream list
 DL_SEQ          EQU     0037eh          ; r6: stream frame counter
                                         ; (37Fh, r7 of this bank, is not free: a pointer register set lives there)
+DL_BUDGET       EQU     MODRAM_NEXT     ; module RAM: bytes that may still go before the next spark calculation
+undef MODRAM_NEXT
+define MODRAM_NEXT (DL_BUDGET + 1)
 endif
 
 if XP == XP_BOOT
                 CAL     dl_init
 endif
 
+if XP == XP_IGN
+                CAL     dl_budget              ; every spark calculation: the bytes that may go before the next
+endif
+
+if XP == XP_MAIN
+                CAL     dl_budget_stopped      ; the engine stopped: no spark calculations, the main loop's pass instead
+endif
+
 if XP == XP_CAL
+;@ DatalogFast type=u8 flag=1 on=1 off=0 category="Datalog" slot=datalog.fast desc="The datalog line at 62,500 baud instead of 38,400 (39,063 really): each frame comes in sooner, and more of them with the engine stopped. With the engine running, how many bytes go is set by the ECU's own pacing (a few each time it works out the spark), not the line. Only with a cable that can be set to 62,500 exactly (an FTDI one can; 57,600 will not do), with the same rate picked in Settings > Datalog. HTS and other loggers, and a Demon, want 38,400: leave this off for them. Takes effect at the next power-up."
+dl_fast:        DB  000h
 if defined(FEAT_DATALOG)
 ;@ DatalogTable type=u16 count=51 category="Datalog" desc="RAM address sent as each byte of the 51-byte 20h frame (FF0xh: a status byte, FExxh: the constant xx, 0: always 00h; 4000h + address: a word's low byte, read with its high byte, and 2000h + address: that high byte, so the two are one reading)."
 dl_frame_table:
@@ -71,8 +87,17 @@ endif
 
 if XP == XP_CODE
 ; ------------------------------------------------------------------ power-up
-dl_init:        MOVB    STTM, #0f8h            ; 38400 baud (the HTS setting)
-                MOVB    STTMR, #0f8h
+; The baud rate is the machine clock (2.5 MHz) / 8 / (256 - the reload): F8h 39,063 (the "38400" every logger uses,
+; 1.7 % off, well inside what a UART takes), FBh 62,500 exactly. FCh 78,125 and FDh 104,167 work too, but with the
+; byte budget (below) setting how much goes, a faster line only makes each byte arrive sooner.
+dl_init:        LCB     A, dl_fast
+                LB      A, ACC                 ; (byte mode: LCB leaves the mode as it was)
+                JEQ     dl_init_38k
+                LB      A, #0fbh               ; 62,500 baud (DatalogFast)
+                SJ      dl_init_baud
+dl_init_38k:    LB      A, #0f8h               ; 38400 baud (the HTS setting)
+dl_init_baud:   STB     A, STTM
+                STB     A, STTMR
                 MOVB    STTMC, #012h
                 MOVB    STCON, #01ch
                 MOVB    SRCON, #08ch
@@ -98,10 +123,10 @@ mod_serial_rx:  L       A, 0f4h
                 LB      A, SRBUF
                 CMPB    r0, #000h
                 JEQ     dl_rx_command
-if defined(FEAT_DLSERIALIN) || defined(FEAT_DLMEMREAD)
+if defined(FEAT_DLSERIALIN) || defined(FEAT_DLMEMREAD) || defined(FEAT_REMOTE)
                 CMPB    r0, #004h
                 JLT     dl_rx_inlist
-                J       dl_rx_more             ; states 4 and up: a serial input, a memory read
+                J       dl_rx_more             ; states 4 and up: a serial input, a memory read, a remote value
 dl_rx_inlist:
 endif
 if defined(FEAT_DLSTREAM)
@@ -162,6 +187,14 @@ if defined(FEAT_DLSTREAM)
                 J       dl_rx_streamcmd
 dl_rx_notstream:
 endif
+if defined(FEAT_REMOTE)
+                CMPB    A, #02bh               ; 2Bh-3Fh: the remote control commands (remote.asm)
+                JLT     dl_rx_notrc
+                CMPB    A, #040h
+                JGE     dl_rx_notrc
+                J       dl_rx_remote
+dl_rx_notrc:
+endif
 if defined(FEAT_DLSERVICE)
                 CMPB    A, #050h               ; 50h-5Fh: the service commands (dlservice.asm)
                 JLT     dl_rx_notsvc
@@ -196,13 +229,20 @@ dl_rx_frame:    MOVB    r2, #001h
 dl_rx_packet:   MOVB    r2, #004h
 endif
 ; start sending what r2 says, from its first byte (the other parts come here too)
-dl_rx_start:    MOVB    r3, #000h
+dl_rx_start:    RB      0fdh.7                 ; (the line is busy again: the spark calculation must not send)
+                MOVB    r3, #000h
                 MOVB    r4, #000h
                 CAL     dl_next
                 SJ      dl_rx_ret
-if defined(FEAT_DLSERIALIN) || defined(FEAT_DLMEMREAD)
+if defined(FEAT_DLSERIALIN) || defined(FEAT_DLMEMREAD) || defined(FEAT_REMOTE)
 ; receive states 4 and up
 dl_rx_more:
+if defined(FEAT_REMOTE)
+                CMPB    r0, #009h              ; 9-12 (remote.asm)
+                JLT     dl_rx_more_lo
+                J       dl_rx_rcarg
+dl_rx_more_lo:
+endif
 if defined(FEAT_DLSERIALIN)
                 CMPB    r0, #006h
                 JGE     dl_rx_more6
@@ -213,7 +253,7 @@ if defined(FEAT_DLMEMREAD)
                 J       dl_rx_memrd            ; 6-8 (dlmemread.asm)
 else
                 MOVB    r0, #000h
-                SJ      dl_rx_ret
+                J       dl_rx_ret
 endif
 endif
 
@@ -224,8 +264,83 @@ mod_serial_tx:  L       A, 0f4h
                 MOV     LRB, #0006fh
                 L       A, DP
                 PUSHS   A
-                CAL     dl_next
+                MOV     DP, #DL_BUDGET         ; the byte budget (below): spent, and the line rests until the next
+                LB      A, [DP]                ; spark calculation sends on
+                JNE     dl_tx_ok
+                SB      0fdh.7
                 J       dl_rx_ret
+dl_tx_ok:       SUBB    A, #001h
+                STB     A, [DP]
+if defined(FEAT_DLSTREAM)
+                CMPB    r2, #002h              ; streaming a version 4 list (75h): the short way (dlstream.asm)
+                JNE     dl_tx_any
+                J       dl5_tx
+endif
+dl_tx_any:      CAL     dl_next
+                J       dl_rx_ret
+
+; ------------------------------------------------------------------ the byte budget (every spark calculation, main loop)
+; At high rpm the interrupts leave the main loop (the spark calculation, the idle valve, the fail-safes) little time:
+; in the simulator at 8000 rpm about a tenth of it. Every byte sent costs the transmit interrupt about 0.1 ms, and a
+; stream (or a logger asking for frame after frame) sent flat out took most of what was left - the spark worked out 3
+; times a second instead of 19. So each spark calculation (XP_IGN) sets how many bytes may go before the next one,
+; fewer the higher the rpm (with the engine stopped, the main loop's pass does); the transmit interrupt spends one a byte, and with none left sends nothing (0FDh bit 7: a
+; byte waiting) - the next calculation sends it, here, with the interrupts off so nothing else is sending. Bytes, not
+; frames: a frame spread over a few calculations never lands on one in a lump. A main loop that stops stops the line.
+; Measured in the simulator (SkeletonTest --dlrate): the longest wait between two spark calculations, and how often
+; the spark is worked out, as with no logging at all (within the simulator's own rpm-to-rpm spread), at any rpm and
+; either line speed.
+dl_budget:      L       A, DP
+                PUSHS   A
+                L       A, 0ach                ; the crank period: larger is slower
+                CMP     A, #004e2h             ; under 1500 rpm (FFFFh, no reading, too): 32 bytes, the CPU mostly free
+                JGE     dl_budget_32
+                CMP     A, #00218h             ; 1500-3500 rpm: 8
+                JGE     dl_budget_8
+                CMP     A, #00177h             ; 3500-5000 rpm: 4
+                JGE     dl_budget_4
+                CMP     A, #00120h             ; 5000-6500 rpm: 2
+                JGE     dl_budget_2
+                LB      A, #001h               ; over 6500 rpm: 1
+                SJ      dl_budget_set
+dl_budget_2:    LB      A, #002h
+                SJ      dl_budget_set
+dl_budget_4:    LB      A, #004h
+                SJ      dl_budget_set
+dl_budget_8:    LB      A, #008h
+                SJ      dl_budget_set
+dl_budget_32:   LB      A, #020h
+dl_budget_set:  MOV     DP, #DL_BUDGET
+                STB     A, [DP]
+                MB      C, 0fdh.7              ; a byte waiting for it?
+                JGE     dl_budget_ret
+                L       A, PSW                 ; the interrupts as they were, put back after
+                PUSHS   A
+                RB      PSWH.0                 ; interrupts off
+                MB      C, 0fdh.7              ; (still waiting: a byte from the logger may have started something)
+                JGE     dl_budget_on
+                RB      0fdh.7
+                MOV     DP, #DL_BUDGET
+                LB      A, [DP]
+                SUBB    A, #001h
+                STB     A, [DP]
+                PUSHS   LRB
+                MOV     LRB, #0006fh
+                CAL     dl_next                ; the byte; the transmit interrupt sends the rest
+                POPS    LRB
+dl_budget_on:   POPS    A
+                ST      A, PSW
+dl_budget_ret:  POPS    A
+                MOV     DP, A
+                RT
+; The engine stopped (or cranking under 400 rpm, or no reading): the spark is not worked out, so the main loop's
+; every pass gives the budget instead - the CPU has time to spare, and the logger still hears the ECU with the key on.
+dl_budget_stopped:
+                L       A, 0ach
+                CMP     A, #01250h             ; (400 rpm)
+                JLT     dl_budget_none
+                J       dl_budget
+dl_budget_none: RT
 
 ; ------------------------------------------------------------------ the next byte of whatever is being sent (bank 6Fh)
 dl_next:        CLR     A
@@ -302,17 +417,18 @@ dl_frame_byte:  L       A, ACC
 endif
 ; the byte at address A (word): 0 is always 00h, FExxh the constant xx, FF0xh a status byte, 4000h + address a
 ; word's low byte (its high byte kept), 2000h + address that high byte. Uses DP (and 376h-377h for the word).
-dl_fetch:       CMP     A, #00000h
+dl_fetch:       CMP     A, #01000h             ; a RAM or SFR address (the most of them) first
+                JGE     dl_fb_notram
+                CMP     A, #00000h
                 JEQ     dl_fb_zero
-                CMP     A, #0fe00h
-                JGE     dl_fb_high
-                CMP     A, #02000h
-                JGE     dl_fb_word
-                CMP     A, #01000h
-                JGE     dl_fb_user
                 MOV     DP, A
                 LB      A, [DP]
                 RT
+dl_fb_notram:   CMP     A, #0fe00h
+                JGE     dl_fb_high
+                CMP     A, #02000h
+                JGE     dl_fb_word
+                SJ      dl_fb_user
 dl_fb_zero:     CLRB    A
                 RT
 ; 1000h + n: the RAM address picked in DatalogUserAddress n+1 (dlextra.asm); 00h when it is not a RAM address

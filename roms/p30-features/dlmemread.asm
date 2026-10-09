@@ -4,6 +4,8 @@
 ;> name: Datalogging: memory read
 ;> category: Diagnostics
 ;> conflicts: FEAT_STOCK_SERIAL
+;> shares: 375h-376h (the stream's list checksum and tick latch, the HTS frame's kept word: a memory read only
+;>         runs while nothing else is being sent)
 ;> about: The ECU's RAM read over the datalog cable while the engine runs, 32 bytes at a time: any value
 ;>        or module state on the car, not just the ones a datalog channel sends (Datalogging > Codes and
 ;>        service… > ECU memory). The ROM itself is never sent, so the code and the maps of a tune stay

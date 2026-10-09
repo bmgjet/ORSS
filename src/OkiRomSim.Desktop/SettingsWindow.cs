@@ -877,7 +877,8 @@ public sealed class SettingsWindow : Window
             {
                 var key = Norm(get());
                 var other = key.Length == 0 ? [] : AllKeys().Where(k => k.Key == key && !(k.Where == where && k.Action == action)).ToList();
-                // a table key the same as a program key is fine while the table has the keyboard (the table's wins), but worth knowing a null brush draws nothing: the text went invisible. Clear it back to the theme's colour instead
+                // a table key the same as a program key is fine while the table has the keyboard (the table's wins), but worth knowing
+                // a null brush draws nothing: the text went invisible. Clear it back to the theme's colour instead
                 if (other.Count > 0) box.Foreground = Brushes.Orange; else box.ClearValue(TextBox.ForegroundProperty);
                 ToolTip.SetTip(box, other.Count > 0
                     ? "Also: " + string.Join(", ", other.Select(o => $"{o.Action} ({o.Where})")) +
@@ -1202,9 +1203,9 @@ public sealed class SettingsWindow : Window
         _dlDemon.Text = "A Demon is the emulator (above): it datalogs the ECU over its own port, so the datalog goes through it " +
                         "('emulator'), or logs the simulator. Connect the emulator first; the protocol is asked for by the Demon.";
         p.Children.Add(_dlDemon);
-        var baud = _dlBaud = new ComboBox { ItemsSource = new[] { 9600, 19200, 38400, 57600, 115200 }, SelectedItem = _s.DatalogBaud, Width = 180 };
+        var baud = _dlBaud = new ComboBox { ItemsSource = new[] { 9600, 19200, 38400, 57600, 62500, 115200 }, SelectedItem = _s.DatalogBaud, Width = 180 };
         baud.SelectionChanged += (_, _) => { if (baud.SelectedItem is int b) _s.DatalogBaud = b; };
-        p.Children.Add(Row("Baud rate", baud, "The OBD1 datalogging ROMs all use 38400."));
+        p.Children.Add(Row("Baud rate", baud, "The OBD1 datalogging ROMs all use 38400. 62500: a ROM made here with \"62,500 baud\" on (Serial port page) - frames come in sooner; the cable has to take it (an FTDI one does)."));
 
         p.Children.Add(Section("Smoothing"));
         p.Children.Add(Note("Noise on the line shows up as a value that jumps and comes straight back - 6000 rpm, 28 rpm, 6000 rpm. With smoothing on, " +

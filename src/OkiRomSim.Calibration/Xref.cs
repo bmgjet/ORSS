@@ -316,6 +316,15 @@ public sealed record XrefHit(int Address, string Label, string Text, int Operand
 public static class Xref
 {
     /// `boundaries` are known instruction start addresses (from an assembled source map). When none are supplied the ROM is swept linearly from `sweepFrom`, which can drift through data blocks, so treat those hits as hints.
+    /// Whether an instruction's text names an address (0123h, 0ABCDh, 1234h: as the decoder writes it).
+    static bool Mentions(string text, int target)
+    {
+        var t = text.ToUpperInvariant();
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(t, @"\b0*([0-9A-F]+)H\b"))
+            if (int.TryParse(m.Groups[1].Value, System.Globalization.NumberStyles.HexNumber, null, out var v) && v == target) return true;
+        return false;
+    }
+
     public static List<XrefHit> Find(byte[] rom, int target, IEnumerable<int>? boundaries = null,
         Func<int, string>? labelAt = null, Func<int, string?>? sourceAt = null, int sweepFrom = 0x38, int maxHits = 200)
     {
@@ -347,15 +356,20 @@ public static class Xref
             if (d.DdAfter is bool v2) dd = v2;
             var bytes = Enumerable.Range(0, d.Len).Select(i => at + i < rom.Length ? rom[at + i] : (byte)0xFF).ToArray();
             string kind = "";
-            // 16-bit operand anywhere in the instruction
-            for (int i = 0; i + 1 < bytes.Length; i++)
+            var text = Decoder.Format(d, (ushort)(at + d.Len));
+            // the instruction as written names the address: a 16-bit operand, or a relative branch resolved to its target
+            // (bytes that only happen to spell it across two fields, MB 0B1h.7 for 3FB1h, are not a reference)
+            bool named = Mentions(text, target);
+            for (int i = 0; i + 1 < bytes.Length && named; i++)
                 if ((bytes[i] | (bytes[i + 1] << 8)) == target) kind = "word operand";
+            if (kind.Length == 0 && named && target >= 0x100)
+                kind = d.Mnemonic.StartsWith('J') || d.Mnemonic.StartsWith("SJ", StringComparison.Ordinal) || d.Mnemonic.StartsWith("CAL", StringComparison.Ordinal)
+                       || d.Mnemonic.StartsWith("SCAL", StringComparison.Ordinal) || d.Mnemonic.StartsWith("DJNZ", StringComparison.Ordinal) ? "branch" : "operand";
             // zero-page / SFR byte operand
-            if (kind.Length == 0 && target < 0x100)
+            if (kind.Length == 0 && target < 0x100 && named)
                 for (int i = 1; i < bytes.Length; i++)
                     if (bytes[i] == target) kind = "direct/zero-page operand";
             if (kind.Length == 0) continue;
-            var text = Decoder.Format(d, (ushort)(at + d.Len));
             hits.Add(new XrefHit(at, labelAt?.Invoke(at) ?? "", text, target, kind, sourceAt?.Invoke(at)));
             if (hits.Count >= maxHits) break;
         }

@@ -25,7 +25,7 @@ public sealed class DatalogView : UserControl
     readonly Button _connect;
     readonly Slider _pos = new() { Minimum = 0, Maximum = 0, MinWidth = 160, VerticalAlignment = VerticalAlignment.Center };
     readonly TextBlock _posText = new() { FontFamily = MainWindow.MonoFont, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0) };
-    readonly TextBlock _status = new() { Text = "", FontSize = 11.5, Opacity = 0.9, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
+    readonly TextBlock _status = new() { Text = "", FontSize = 11.5, Opacity = 0.9, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis };
     /// The state at a glance: green logging, blue replaying, grey idle.
     readonly Avalonia.Controls.Shapes.Ellipse _stateDot = new() { Width = 9, Height = 9, Fill = DataList.Dim, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
     readonly TextBlock _stateText = new() { Text = "not connected", FontSize = 11.5, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center };
@@ -78,7 +78,8 @@ public sealed class DatalogView : UserControl
     ulong _codeSince;
     bool _settingPos;
     DateTime _lastCode, _lastParams, _lastGauges;
-    // playback without a simulator (Tuner mode): step through frames in wall time ~30 steps a second: the replay (and its gauges, values and graph cursor) moves as smoothly as it plays
+    // playback without a simulator (Tuner mode): step through frames in wall time
+    // ~30 steps a second: the replay (and its gauges, values and graph cursor) moves as smoothly as it plays
     readonly DispatcherTimer _playTimer = new() { Interval = TimeSpan.FromMilliseconds(33) };
     DateTime _playWallStart; double _playLogStart; int _playIndex = -1;
 
@@ -99,6 +100,7 @@ public sealed class DatalogView : UserControl
     {
         bool changed = Port != port || !Protocol.Equals(protocol, StringComparison.OrdinalIgnoreCase) || Baud != baud;
         Port = port; Protocol = protocol; Baud = baud;
+        DatalogChannels.LineBaud = baud;
         if (changed && (Engine.Running || Engine.Watch.Wanted) && Engine.External == null && !_connecting) Reconnect("the datalog settings changed");
     }
 
@@ -201,6 +203,13 @@ public sealed class DatalogView : UserControl
         _host = host; _top = top; Settings = settings;
         Engine = new DatalogEngine(host);
         Gauges = new GaugePanel(Channels, top);
+        // one line; the whole of it (and what the ROM said at the handshake) in its tooltip
+        _status.PropertyChanged += (_, e) =>
+        {
+            if (e.Property != TextBlock.TextProperty) return;
+            string t = _status.Text ?? "";
+            ToolTip.SetTip(_status, t.Length == 0 ? null : Engine.Detail.Length > 0 && Engine.Running ? t + "\n\n" + Engine.Detail : t);
+        };
         Engine.Watch.Message += m => Dispatcher.UIThread.Post(() => { _status.Text = m; UpdateConnect(); });
         _connect = Btn("Connect", ToggleConnect, "Start or stop logging on the port set in Settings > Emulator & datalog ('simulator' logs the ROM running here, through its own serial port).");
         Engine.Frame += OnLiveFrame;
@@ -267,7 +276,8 @@ public sealed class DatalogView : UserControl
         var (fps, slowEvery) = DatalogChannels.Rate(picks);
         // logging now: the ROM gets the new list between frames, and the values and the graph follow it
         bool live = Engine.Reconfigure();
-        // logging with a protocol whose frame is fixed (the HTS 20h frame a skeleton ROM also answers): the picks change nothing until it is the channel stream - offered, and the link started again with it
+        // logging with a protocol whose frame is fixed (the HTS 20h frame a skeleton ROM also answers): the picks change nothing
+        // until it is the channel stream - offered, and the link started again with it
         if (!live && Engine.Running && Engine.Protocol is not ChannelStream && Engine.External == null &&
             await Dialogs.Confirm(owner, "Use the channel stream?",
                 $"The datalog is connected with {Engine.Protocol?.Name ?? "a protocol"}, which always sends the same frame: the channels picked are only sent by the channel stream (a skeleton ROM with its datalog). Connect again with the channel stream now?",
@@ -461,7 +471,8 @@ public sealed class DatalogView : UserControl
             AppLog.Action("datalog", "disconnect");
             return;
         }
-        // no port set: the first one - but never the emulator's (the one it has open, or is set to use), which a guess used to take whenever the emulator was not connected at that moment, and then held on to
+        // no port set: the first one - but never the emulator's (the one it has open, or is set to use), which a guess
+        // used to take whenever the emulator was not connected at that moment, and then held on to
         var port = ChosenPort();
         if (port.Length == 0) { _status.Text = "no serial port: pick one in Settings > Emulator & datalog (or 'simulator' to log the ROM running here)"; return; }
         if (port == "simulator" && _host.LoadedPath == null) { _status.Text = "open a ROM first to log it in the simulator"; return; }
@@ -764,7 +775,9 @@ public sealed class DatalogView : UserControl
     {
         // feeding the simulator the car's readings makes no sense when the simulator is the source
         if (DriveSimulator && !_compact && Engine.Source != "simulator") _host.ApplyFrame(f);
-        // where the engine is goes to the map as each frame arrives, not on the next screen refresh: the cell lit (and the one Lock to live cell edits) is the one this frame says. Frames that come quicker than the screen can take are folded into one: only the newest is shown
+        // where the engine is goes to the map as each frame arrives, not on the next screen refresh: the cell lit (and
+        // the one Lock to live cell edits) is the one this frame says. Frames that come quicker than the screen can
+        // take are folded into one: only the newest is shown
         if (Interlocked.Exchange(ref _framePosted, 1) == 0)
             Dispatcher.UIThread.Post(() =>
             {

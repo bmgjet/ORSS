@@ -19,7 +19,8 @@ if XP == XP_DEFS
 ;   0FBh        rolling idle: events to the next one left out (page zero: direct from any context)
 ;   0FCh        service: spark-cut request, any bit set = no spark (NEED_SPARKCUT); bit 0 is lib.asm's, bit 1 rolling idle's
 ;   0FDh        module flags (page zero, bit-addressable from anywhere): 0 secondary maps on, 2 anti-stall on,
-;               3 rolling idle skips injectors, 4 rolling idle skips sparks
+;               3 rolling idle skips injectors, 4 rolling idle skips sparks, 7 a datalog byte waiting for the
+;               next spark calculation (datalog.asm's byte budget)
 ;   0FEh-0FFh   service: tick, +1 every 2.048 ms (read only)
 ;   1F0h        service: fuel-cut request, any bit set = no fuel; bit 0 is lib.asm's
 ;   1F1h-1F6h   lib.asm (NEED_MODLIB): output states, the fuel and spark want words, flags
@@ -66,6 +67,15 @@ define MODRAM_NEXT (MOD_RAM_BASE + 10)
 ; back and forth (0..15, 15..0, 0..15): the heaviest ones have a slot each, the light ones share.
 ; A new module goes in this list where its cost puts it.
 define TICKSLOT_N 0
+; the remote control commands: the heaviest (measured 2026-10-07: about 250 us each half), in two halves on two slots
+if defined(FEAT_REMOTE)
+TS_REMOTE       EQU     TICKSLOT_N
+SLOT_REMOTE     EQU     ((TS_REMOTE & 15) + ((TS_REMOTE >> 4) & 1) * (15 - 2 * (TS_REMOTE & 15)))
+TS_REMOTE2      EQU     TS_REMOTE + 1
+SLOT_REMOTE2    EQU     ((TS_REMOTE2 & 15) + ((TS_REMOTE2 >> 4) & 1) * (15 - 2 * (TS_REMOTE2 & 15)))
+undef TICKSLOT_N
+define TICKSLOT_N (TS_REMOTE + 2)
+endif
 if defined(FEAT_FLEX)
 TS_FLEX         EQU     TICKSLOT_N
 SLOT_FLEX       EQU     ((TS_FLEX & 15) + ((TS_FLEX >> 4) & 1) * (15 - 2 * (TS_FLEX & 15)))
@@ -252,6 +262,12 @@ SLOT_GEARFUEL   EQU     ((TS_GEARFUEL & 15) + ((TS_GEARFUEL >> 4) & 1) * (15 - 2
 undef TICKSLOT_N
 define TICKSLOT_N (TS_GEARFUEL + 1)
 endif
+if defined(FEAT_NITROUS)
+TS_NITROUS      EQU     TICKSLOT_N
+SLOT_NITROUS    EQU     ((TS_NITROUS & 15) + ((TS_NITROUS >> 4) & 1) * (15 - 2 * (TS_NITROUS & 15)))
+undef TICKSLOT_N
+define TICKSLOT_N (TS_NITROUS + 1)
+endif
 if defined(FEAT_DUALMAPS)
 TS_DUALMAPS     EQU     TICKSLOT_N
 SLOT_DUALMAPS   EQU     ((TS_DUALMAPS & 15) + ((TS_DUALMAPS >> 4) & 1) * (15 - 2 * (TS_DUALMAPS & 15)))
@@ -350,6 +366,8 @@ include "tach.asm"
 include "gearlimit.asm"
 include "extmaps.asm"
 include "dualmaps.asm"
+; nitrous: the secondary maps (the skeleton builds them for it too), blended in by the shot
+include "nitrous.asm"
 include "watermark.asm"
 include "cfgoverride.asm"
 include "smartalt.asm"
@@ -365,6 +383,8 @@ include "speedcorr.asm"
 include "igncutmod.asm"
 ; after igncutmod.asm: a timing locked for service wins over a static cut timing
 include "dlservice.asm"
+; the remote control commands (after the limiters and dlservice.asm: its limits are one more cut request)
+include "remote.asm"
 ; a diagnostic that lengthens the tick when TICKBURN_US is defined (not a module)
 include "tickburn.asm"
 ; a diagnostic that flashes one output when OUTTEST is defined (not a module)

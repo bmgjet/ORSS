@@ -35,6 +35,18 @@ public static class TroubleCodes
     // ---------------------------------------------------------------- the service commands (dlservice.asm)
     public const byte ClearCodes = 0x50, InjectorsOff = 0x51, InjectorsOn = 0x52, TimingLock = 0x53, TimingNormal = 0x54,
                       MapsBySwitch = 0x55, MapsFirst = 0x56, MapsSecond = 0x57, Gio1 = 0x58, AllNormal = 0x5E, State = 0x5F;
+    // ---------------------------------------------------------------- the remote control commands (remote.asm)
+    public const byte FanAuto = 0x30, FanOn = 0x31, FanOff = 0x32, RevSet = 0x33, RevRead = 0x34, SpeedSet = 0x35, SpeedRead = 0x36,
+                      BoostSet = 0x37, BoostRead = 0x38, VtecSet = 0x39, VtecRead = 0x3A,
+                      PopcornOn = 0x3D, PopcornOff = 0x3E, RemoteState = 0x3F, RemoteNormal = 0x2D, RemoteLock = 0x2E, Password = 0x2F,
+                      KeyRead = 0x2B, KeySet = 0x2C;
+
+    /// The remote control state byte (the answer to 3Fh), read out.
+    public sealed record RemoteStateBits(bool FanForced, bool FanOn, bool Popcorn, bool Unlocked, bool Valet, bool LockedNow, bool Enabled)
+    {
+        public static RemoteStateBits From(byte b) => new((b & 1) != 0, (b & 2) != 0, (b & 4) != 0, (b & 8) != 0, (b & 0x10) != 0, (b & 0x40) != 0, (b & 0x80) != 0);
+    }
+
     /// The answer a ROM gives to a command it cannot carry out (the module it needs is not built in).
     public const byte Refused = 0x7F;
 

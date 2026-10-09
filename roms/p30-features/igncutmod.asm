@@ -38,7 +38,7 @@ if XP == XP_IGN
 endif
 
 if XP == XP_CAL
-;@ IgnCutModEnable type=u8 flag=1 on=1 off=0 category="Ignition cut" slot=revlimit.icmod desc="Shape the ignition cuts."
+;@ IgnCutModEnable type=u8 flag=1 on=1 off=0 category="Ignition cut" slot=revlimit.icmod desc="Shape the ignition cuts: each cut is held for the times below with sparks back in between, instead of cutting for as long as it is over the limit."
 icm_enable:             DB  000h
 ;@ IgnCutTime type=u8 formula="x * 2.048" inverse="x / 2.048" unit=ms decimals=0 category="Ignition cut" slot=revlimit.cutdelay desc="How long each cut lasts (rev limit and the rest)."
 icm_cut_main:           DB  031h
@@ -52,7 +52,7 @@ icm_refire:             DB  000h
 icm_enrich:             DB  080h
 ;@ IgnCutStaticOn type=u8 flag=1 on=1 off=0 category="Ignition cut" slot=revlimit.icstatic.on desc="Hold the timing at one value while an ignition cut is wanted."
 icm_static_on:          DB  000h
-;@ IgnCutStatic type=u8 formula=ign_advance category="Ignition cut" slot=revlimit.icstatic desc="The timing then."
+;@ IgnCutStatic type=u8 formula=ign_advance category="Ignition cut" slot=revlimit.icstatic desc="The timing held while an ignition cut is wanted (with Hold the timing on)."
 icm_static:             DB  018h
 endif
 

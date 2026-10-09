@@ -25,23 +25,20 @@ undef MODRAM_NEXT
 define MODRAM_NEXT (smartalt_timer + 1)
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_SMARTALT
-                JNE     smartalt_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_SMARTALT == TICK_SLOT
                 CAL     smartalt_tick
-smartalt_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
-;@ SmartAltEnable type=u8 flag=1 on=1 off=0 category="Smart alternator" slot=smartalt.enable desc="Smart alternator on."
+;@ SmartAltEnable type=u8 flag=1 on=1 off=0 category="Smart alternator" slot=smartalt.enable desc="Turn the alternator's charging off under heavy load (full throttle, high rpm) for a little more power; it charges again off load."
 smartalt_enable:        DB  000h
 ;@ SmartAltThrottle type=u8 formula=tps_pct category="Smart alternator" slot=smartalt.tps desc="Heavy load: throttle at least this..."
 smartalt_tps:           DB  0c0h
 ;@ SmartAltMap type=u8 formula=map_mbar category="Smart alternator" slot=smartalt.map desc="...or manifold pressure at least this."
 smartalt_map:           DB  0ffh
-;@ SmartAltRpm type=u16 formula=rpm_period_word category="Smart alternator" slot=smartalt.rpm desc="And at or above this rpm."
+;@ SmartAltRpm type=u16 formula=rpm_period_word category="Smart alternator" slot=smartalt.rpm desc="It also needs the rpm at or above this."
 smartalt_rpm:           DW  00177h
 ;@ SmartAltBatteryMin type=u8 formula=battery_v category="Smart alternator" slot=smartalt.batt desc="Never below this battery voltage: charging back on."
 smartalt_batt:          DB  07dh

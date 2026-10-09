@@ -1,4 +1,7 @@
-// Copyright (c) bmgjet. All rights reserved. Top-level glue tying Cpu + Bus + EngineState + InterruptController into a runnable simulator. The core step/tick/interrupt loop is: before = cpu.Cycles ExecStep.Step(cpu, bus) timerIrq = bus.TickTimers(cpu.Cycles - before) distIrq = engine.CheckDistributorPulses(bus, cpu.Cycles, Bus.CpuHz) InterruptController.HandlePendingInterrupts(cpu, bus, timerIrq | distIrq)
+// Copyright (c) bmgjet. All rights reserved.
+// Top-level glue tying Cpu + Bus + EngineState + InterruptController into a runnable simulator. The core step/tick/interrupt loop is:
+//
+// before = cpu.Cycles ExecStep.Step(cpu, bus) timerIrq = bus.TickTimers(cpu.Cycles - before) distIrq = engine.CheckDistributorPulses(bus, cpu.Cycles, Bus.CpuHz) InterruptController.HandlePendingInterrupts(cpu, bus, timerIrq | distIrq)
 
 using System.Diagnostics.CodeAnalysis;
 
@@ -44,6 +47,8 @@ public sealed class Simulator
     public bool StallInterventionEnabled;
     /// Called for every data-space read an instruction makes (not the timer block's own reads) - for tools that map which RAM a ROM uses.
     public Action<ushort>? DataReadHook;
+    /// Called before each instruction with its address and the data width mode (DD) it runs in: a check that the code's byte and word instructions run in the mode their source says.
+    public Action<ushort, bool>? BeforeStep;
 
     /// Byte-level ROM overrides applied after every load, as addr -> value. Survives reload, which is what makes it useful for working around a blanked region while you iterate on the .asm.
     public readonly Dictionary<ushort, byte> RomPatches = [];
@@ -248,6 +253,7 @@ public sealed class Simulator
         RecordPcForHotAddressTracking(pcBefore);
         Coverage.RecordExecution(pcBefore, Cpu.Cycles + 1);
         Bus.NowCycles = Cpu.Cycles;
+        BeforeStep?.Invoke(pcBefore, Cpu.Dd);
 
         if (StallInterventionEnabled)
         {

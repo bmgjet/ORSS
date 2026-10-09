@@ -27,13 +27,10 @@ define NEED_VTECHOOK
 endif
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_VTECCTL
-                JNE     vtecctl_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_VTECCTL == TICK_SLOT
                 CAL     vtecctl_tick
-vtecctl_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
@@ -152,7 +149,11 @@ mv_above_low:   LCB     A, [X1]
                 LCB     A, 00001h[X1]
                 SJ      mv_point
 mv_between:     VCAL    2
-mv_point:       STB     A, r0
+mv_point:
+if defined(FEAT_REMOTE)
+                CAL     rc_vtec_point          ; set over the datalog cable (remote.asm)
+endif
+                STB     A, r0
                 MOV     DP, #0011fh            ; engaged now (11Fh bit 2): it holds down to the point less the margin
                 MB      C, [DP].2
                 JGE     mv_compare

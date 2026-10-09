@@ -23,17 +23,14 @@ undef MODRAM_NEXT
 define MODRAM_NEXT (gearign_value + 2)
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_GEARIGN
-                JNE     gearign_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_GEARIGN == TICK_SLOT
                 CAL     gearign_tick
-gearign_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
-;@ TimingbygearEnable type=u8 flag=1 on=1 off=0 category="Timing by gear" slot=gearcorr.enable desc="On."
+;@ TimingbygearEnable type=u8 flag=1 on=1 off=0 category="Timing by gear" slot=gearcorr.enable desc="Timing by gear: add or pull timing in each gear with the table below (needs gear detection)."
 gearign_enable:        DB  000h
 ;@ Timingbygear type=u8 count=6 formula=(x-128)/4 unit=deg decimals=2 category="Timing by gear" slot=gearcorr.table colvalues=0,1,2,3,4,5 colunit=gear desc="The timing change in each gear (0 = not known)."
 gearign_table:         DB  080h, 080h, 080h, 080h, 080h, 080h

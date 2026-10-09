@@ -22,17 +22,14 @@ define NEED_OUTPORT
 endif
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_WARNLAMP
-                JNE     warnlamp_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_WARNLAMP == TICK_SLOT
                 CAL     warnlamp_tick
-warnlamp_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
-;@ WarnLampEnable type=u8 flag=1 on=1 off=0 category="Warning lamp" slot=warnlamp.enable desc="Warning lamp on."
+;@ WarnLampEnable type=u8 flag=1 on=1 off=0 category="Warning lamp" slot=warnlamp.enable desc="Light a warning lamp for hot coolant or a low battery."
 warnlamp_enable:        DB  000h
 ;@ WarnLampECT type=u8 formula=honda_temp_c category="Warning lamp" slot=warnlamp.ect desc="Light it above this coolant temperature."
 warnlamp_ect:           DB  012h                 ; 107 C

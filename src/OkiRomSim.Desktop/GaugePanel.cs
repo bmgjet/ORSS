@@ -31,7 +31,8 @@ public sealed class GaugePanel : UserControl
     {
         _channels = channels; _top = top;
 
-        // one short line, so a narrow panel keeps its room for the gauges: the dashboard's files and the floating widgets in two drop-downs, the everyday edits as icons
+        // one short line, so a narrow panel keeps its room for the gauges: the dashboard's files and the floating widgets in
+        // two drop-downs, the everyday edits as icons
         var bar = new WrapPanel { Margin = new Thickness(4, 2) };
         bar.Children.Add(Toolbar.Menu("Dashboard", Toolbar.Gauge, () =>
         [
@@ -324,7 +325,8 @@ public sealed class GaugePanel : UserControl
         AppLog.Action("gauges", $"{(edit == null ? "added" : "edited")} {dlg.Result.Kind} gauge for {dlg.Result.Channel}");
     }
 
-    /// Gauges for logged values (the datalog's values list, right-click): one each, laid out under the gauges already on the dashboard - or floated together in a widget of their own. No kind given: a lamp for an on / off value, a dial for the rpm, a bar for the rest.
+    /// Gauges for logged values (the datalog's values list, right-click): one each, laid out under the gauges already on the dashboard
+    /// - or floated together in a widget of their own. No kind given: a lamp for an on / off value, a dial for the rpm, a bar for the rest.
     public void AddFor(IReadOnlyList<(string Channel, double Value)> values, GaugeKind? kind, bool widget)
     {
         if (values.Count == 0) return;
@@ -485,7 +487,8 @@ public sealed class GaugePanel : UserControl
         _ownerPos = owner.Position;
         owner.PositionChanged += (_, e) =>
         {
-            // Windows parks a minimized window at about -32000, -32000: the jump there and back is not a move, and carrying it over threw every parented widget off the screen when the window came back
+            // Windows parks a minimized window at about -32000, -32000: the jump there and back is not a move, and
+            // carrying it over threw every parented widget off the screen when the window came back
             static bool Parked(PixelPoint p) => p.X <= -10000 || p.Y <= -10000;
             var was = _ownerPos;
             _ownerPos = e.Point;
@@ -503,7 +506,8 @@ public sealed class GaugePanel : UserControl
             if (!min)
             {
                 _ownerPos = owner.Position;
-                // coming back from minimized (to normal or maximized): the window settles over the next moment, and its position changes then are its own, not a drag to follow
+                // coming back from minimized (to normal or maximized): the window settles over the next moment, and
+                // its position changes then are its own, not a drag to follow
                 if (before == WindowState.Minimized)
                 {
                     _restoring = true;

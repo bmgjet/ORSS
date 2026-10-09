@@ -277,6 +277,8 @@ public sealed class DatalogEngine : IDisposable
     public int Good, Bad;
     public bool Running => _thread?.IsAlive == true || External != null;
     public string Status { get; private set; } = "not connected";
+    /// What the ROM said at the last handshake (its ident, the channels taken) - the status line's tooltip.
+    public string Detail { get; private set; } = "";
     /// Frames from somewhere else (a plugin reading a scan tool): its name while it is feeding the log, else null.
     public string? External { get; private set; }
     /// The external source was stopped from here (Disconnect): the plugin feeding it should stop too.
@@ -295,7 +297,7 @@ public sealed class DatalogEngine : IDisposable
     public string DetectReport { get; private set; } = "";
 
     /// Service commands waiting for the next gap between frames (Command).
-    readonly System.Collections.Concurrent.ConcurrentQueue<(byte Cmd, TaskCompletionSource<(byte? Answer, string Note)> Done)> _commands = new();
+    readonly System.Collections.Concurrent.ConcurrentQueue<(byte[] Msg, TaskCompletionSource<(byte? Answer, string Note)> Done)> _commands = new();
     /// Other work for the logging thread between frames (a new channel list, a memory read).
     readonly System.Collections.Concurrent.ConcurrentQueue<Action<IByteLink>> _work = new();
 
@@ -313,7 +315,8 @@ public sealed class DatalogEngine : IDisposable
         {
             if (Protocol is not ChannelStream cs) return;
             bool ok = cs.Handshake(link, out var note);
-            Status = ok ? $"logging {cs.Name} from {Source}: {note}" : $"{cs.Name}: the new channels were not taken ({note})";
+            Status = ok ? $"logging {cs.Name} from {Source}" : $"{cs.Name}: the new channels were not taken (see the Debug page)";
+            Detail = note;
             AppLog.Write(LogKind.Serial, "datalog", "channels changed: " + note);
         });
         return true;
@@ -337,7 +340,10 @@ public sealed class DatalogEngine : IDisposable
     }
 
     /// Send one service command (TroubleCodes: clear the codes, injectors off...) between frames, and its answer: null when nothing came back (the note says why). The datalog must be logging.
-    public async Task<(byte? Answer, string Note)> Command(byte cmd)
+    public Task<(byte? Answer, string Note)> Command(byte cmd) => Command([cmd]);
+
+    /// A command with its value bytes (the remote control commands), and the one answer after the last.
+    public async Task<(byte? Answer, string Note)> Command(byte[] cmd)
     {
         if (!(_thread?.IsAlive == true) || Protocol == null)
             return (null, External != null ? $"the datalog comes from {External}: it takes no commands" : "the datalog is not connected: connect it first (Datalogging menu)");
@@ -346,7 +352,7 @@ public sealed class DatalogEngine : IDisposable
         try { await done.Task.WaitAsync(TimeSpan.FromSeconds(4)); }
         catch (TimeoutException) { done.TrySetResult((null, "no gap between frames to send it in (4 s)")); }
         var r = await done.Task;
-        AppLog.Write(LogKind.Serial, "datalog", $"command {cmd:X2}: {r.Item2}");
+        AppLog.Write(LogKind.Serial, "datalog", $"command {string.Join(" ", cmd.Select(b => b.ToString("X2")))}: {r.Item2}");
         return r;
     }
 
@@ -414,6 +420,20 @@ public sealed class DatalogEngine : IDisposable
         Watch.Wanted = true;
     }
 
+    /// The ROM loaded here set for one line speed and the link for another (DatalogFast against Settings > Datalog): what to change, or null.
+    public string? BaudAdvice(int baud)
+    {
+        if (_link is SimLink && _host.RomSerialBaud is > 0 and var rom && _host.BaudMismatch)
+            return $"the ROM's serial port runs at {rom} baud and the datalog at {baud}: nothing will read right - set Settings > Datalog > Baud rate to {(rom > 60000 ? 62500 : 38400)}";
+        if (_link is SimLink || _host.Defs().Find("DatalogFast") is not { } fast || fast.Address < 0) return null;
+        var image = _host.RomCopy();
+        bool on = fast.Address < image.Length && image[fast.Address] != 0;
+        if (on && _link is EmulatorLink) return "this ROM has 62,500 baud on (Serial port page), but the Demon asks the ECU at 38,400: turn it off in the ROM to log through the emulator";
+        if (on && baud != 62500) return $"this ROM has 62,500 baud on (Serial port page) and the datalog is set to {baud}: set Settings > Datalog > Baud rate to 62500, or turn it off in the ROM";
+        if (!on && baud == 62500) return "the datalog is set to 62,500 baud but this ROM runs at 38,400 (62,500 baud is off on its Serial port page)";
+        return null;
+    }
+
     void StartLink(string port, string protocol, int baud)
     {
         StopLink();
@@ -447,6 +467,7 @@ public sealed class DatalogEngine : IDisposable
             AppLog.Warn("datalog", $"protocol '{protocol}' is not one of the ones here any more; detecting it instead");
         Status = $"connecting to {Source}...";
         AppLog.Write(LogKind.Serial, "datalog", $"start on {Source} ({protocol}, {baud} baud)");
+        if (BaudAdvice(baud) is { } advice) AppLog.Warn("datalog", advice);
         if (viaEmulator)
         {
             // the Demon asks the ECU itself: the ROM's protocol goes through it, reduced to its one request
@@ -459,7 +480,8 @@ public sealed class DatalogEngine : IDisposable
             _relayAuto = chosen == null;
         }
         else _relayAuto = false;
-        // the datalog comes first in Tuner mode: its thread is not the one kept waiting when the machine is busy (and 1 ms sleeps while it runs: its 1-2 ms waits for the next byte would otherwise be 10-15 ms on Windows, which slows every frame - see HiResTimer)
+        // the datalog comes first in Tuner mode: its thread is not the one kept waiting when the machine is busy
+        // (and 1 ms sleeps while it runs: its 1-2 ms waits for the next byte would otherwise be 10-15 ms on Windows, which slows every frame - see HiResTimer)
         _thread = new Thread(() => { HiResTimer.Begin(); try { Run(chosen); } finally { HiResTimer.End(); } })
             { IsBackground = true, Name = "datalog", Priority = ThreadPriority.AboveNormal };
         _thread.Start();
@@ -505,7 +527,9 @@ public sealed class DatalogEngine : IDisposable
             else
             {
                 chosen.OnPacket = OnPacket;
-                if (!chosen.Handshake(link, out var note))
+                bool shook = chosen.Handshake(link, out var note);
+                Detail = note;
+                if (!shook)
                 {
                     Status = $"{chosen.Name}: {note}";
                     AppLog.Warn("datalog", Status);
@@ -523,7 +547,7 @@ public sealed class DatalogEngine : IDisposable
                 while (_commands.TryDequeue(out var c))
                 {
                     byte? a = null; string cn;
-                    try { a = Protocol.Command(link, c.Cmd, out cn); }
+                    try { a = Protocol.Command(link, c.Msg, out cn); }
                     catch (Exception ex) { cn = ex.Message; }
                     c.Done.TrySetResult((a, cn));
                 }

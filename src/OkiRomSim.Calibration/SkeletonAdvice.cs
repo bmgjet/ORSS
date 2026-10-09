@@ -32,7 +32,7 @@ public static class SkeletonAdvice
         if (build is { Success: false })
         {
             if (build.Over > 0) list.Add(new(AdviceLevel.Error, "Too big for the ROM", $"Over the 32 KB by {build.Over:N0} bytes: leave something out.", RomSpace));
-            else if (build.Ram is { Full: true } full) list.Add(new(AdviceLevel.Error, "Module RAM is full", $"These modules want {full.Used} bytes of module RAM and there are {full.Size}: leave one out.", ModuleRam));
+            else if (build.Ram is { Full: true } full) list.Add(new(AdviceLevel.Error, "Module RAM is full", $"These modules want {full.Used} bytes of module RAM and there are {full.Size}: leave one out - the buttons under the Module RAM bar say which would do, and what each frees.", ModuleRam));
             else if (build.Errors.Count > 0) list.Add(new(AdviceLevel.Error, "Does not build", string.Join("\n", build.Errors.Take(3))));
         }
 

@@ -21,17 +21,14 @@ undef MODRAM_NEXT
 define MODRAM_NEXT (leanpro_count + 1)
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_LEANPRO
-                JNE     leanpro_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_LEANPRO == TICK_SLOT
                 CAL     leanpro_tick
-leanpro_tick_skip:
+endif
 endif
 
 if XP == XP_CAL
-;@ LeanProEnable type=u8 flag=1 on=1 off=0 category="Lean protection" slot=leanpro.enable desc="Lean protection on."
+;@ LeanProEnable type=u8 flag=1 on=1 off=0 category="Lean protection" slot=leanpro.enable desc="Lean protection: cut when the wideband reads leaner than the limit under load for longer than the delay - saves the engine from a failing pump or injector."
 leanpro_block:          DB  000h
 ;@ LeanProCut type=u8 category="Lean protection" slot=leanpro.cut desc="0 = fuel cut, 1 = ignition cut, 2 = both."
 leanpro_cut:            DB  002h
@@ -39,13 +36,13 @@ leanpro_cut:            DB  002h
 leanpro_input:          DB  000h
 ;@ LeanProAFR0 type=u8 formula=x/10 unit=AFR decimals=1 category="Lean protection" slot=leanpro.afr0 desc="The AFR the wideband reports at 0 V."
 leanpro_afr0:           DB  064h                 ; 10.0
-;@ LeanProAFR5 type=u8 formula=x/10 unit=AFR decimals=1 category="Lean protection" slot=leanpro.afr5 desc="The AFR it reports at 5 V."
+;@ LeanProAFR5 type=u8 formula=x/10 unit=AFR decimals=1 category="Lean protection" slot=leanpro.afr5 desc="The AFR the wideband controller reports at 5 V (its analogue output's top end; see its manual)."
 leanpro_afr5:           DB  0c8h                 ; 20.0
 ;@ LeanProAFR type=u8 formula=x/10 unit=AFR decimals=1 category="Lean protection" slot=leanpro.afr desc="Leaner than this counts as lean."
 leanpro_afr:            DB  08ch                 ; 14.0
 ;@ LeanProMAP type=u8 formula=map_mbar category="Lean protection" slot=leanpro.map desc="Only above this manifold pressure."
 leanpro_map:            DB  09dh                 ; 1075 mbar
-;@ LeanProRPM type=u16 formula=rpm_period_word category="Lean protection" slot=leanpro.rpm desc="Only above this rpm."
+;@ LeanProRPM type=u16 formula=rpm_period_word category="Lean protection" slot=leanpro.rpm desc="It only acts above this rpm."
 leanpro_rpm:            DW  00271h               ; 3000 rpm
 ;@ LeanProDelay type=u8 formula=x*32 unit=ms decimals=0 category="Lean protection" slot=leanpro.delay desc="Lean for this long before it cuts."
 leanpro_delay:          DB  008h                 ; 256 ms

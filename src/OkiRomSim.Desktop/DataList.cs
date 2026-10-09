@@ -18,6 +18,8 @@ public sealed class DataList : UserControl
     public sealed record Row(Cell[] Cells, IBrush? Mark = null, int Address = -1, string? Tip = null, bool Current = false, bool Heading = false, object? Tag = null);
 
     readonly Body _body;
+    /// The UI check: a row's right-click menu opened; how many of this list's menus are open after.
+    internal int MenuForCheck(int row) { _body.MenuForCheck(row); return _body.OpenMenus; }
     readonly ScrollViewer _scroll;
     /// Double-click (or Enter) on a row.
     public event Action<Row>? Activated;
@@ -28,7 +30,9 @@ public sealed class DataList : UserControl
     /// What a right-click on a row offers: (text, what it does); null or empty for no menu.
     public Func<Row, IEnumerable<(string Text, Action Run)>>? Menu { get; set; }
 
-    /// More than one row can be picked: Ctrl+click adds or takes one, Shift+click a run of them, a box dragged over the list the rows it touches (Ctrl held: added to those already picked), Ctrl+A all of them. The pick is kept by the rows' keys (KeyOf), so it stays through a list that is filled again many times a second.
+    /// More than one row can be picked: Ctrl+click adds or takes one, Shift+click a run of them, a box dragged over the list the rows
+    /// it touches (Ctrl held: added to those already picked), Ctrl+A all of them. The pick is kept by the rows' keys (KeyOf), so it
+    /// stays through a list that is filled again many times a second.
     public bool MultiSelect { get; set; }
     /// What a row is known by for the pick: its first cell's text unless set.
     public Func<Row, string> KeyOf { get; set; } = r => r.Cells.Length > 0 ? r.Cells[0].Text : "";
@@ -297,6 +301,34 @@ public sealed class DataList : UserControl
             if (banded) owner.SelectionChanged?.Invoke();
         }
 
+        ContextMenu? _menu;
+        internal int OpenMenus;
+
+        /// The UI check: a row's menu opened as a right-click would.
+        internal void MenuForCheck(int i)
+        {
+            if (i < 0 || i >= Rows.Count || owner.Menu?.Invoke(Rows[i])?.ToList() is not { Count: > 0 } items) return;
+            ShowMenu(items);
+        }
+
+        /// One right-click menu at a time: the one open is closed before the next opens (a menu per click stacked up otherwise).
+        void ShowMenu(List<(string Text, Action Run)> items)
+        {
+            _menu?.Close();
+            var menu = new ContextMenu();
+            foreach (var (text, run) in items)
+            {
+                if (text == "-") { menu.Items.Add(new Separator()); continue; }
+                var mi = new MenuItem { Header = text };
+                mi.Click += (_, _) => { menu.Close(); run(); };
+                menu.Items.Add(mi);
+            }
+            menu.Closed += (_, _) => { OpenMenus--; if (_menu == menu) _menu = null; };
+            _menu = menu;
+            menu.Open(this);
+            OpenMenus++;
+        }
+
         protected override void OnPointerPressed(PointerPressedEventArgs e)
         {
             base.OnPointerPressed(e);
@@ -316,19 +348,7 @@ public sealed class DataList : UserControl
                     InvalidateVisual();
                     var picked = owner.SelectedRows;
                     var items = (owner.SelectionMenu != null ? owner.SelectionMenu(picked) : owner.Menu?.Invoke(Rows[i]))?.ToList();
-                    if (items is { Count: > 0 })
-                    {
-                        var menu = new ContextMenu();
-                        foreach (var (text, run) in items)
-                        {
-                            if (text == "-") { menu.Items.Add(new Separator()); continue; }
-                            var mi = new MenuItem { Header = text };
-                            mi.Click += (_, _) => run();
-                            menu.Items.Add(mi);
-                        }
-                        menu.Open(this);
-                        e.Handled = true;
-                    }
+                    if (items is { Count: > 0 }) { ShowMenu(items); e.Handled = true; }
                     return;
                 }
                 if (!pt.Properties.IsLeftButtonPressed) return;
@@ -368,18 +388,7 @@ public sealed class DataList : UserControl
             if (e.GetCurrentPoint(this).Properties.IsRightButtonPressed)
             {
                 var items = owner.Menu?.Invoke(Rows[i])?.ToList();
-                if (items is { Count: > 0 })
-                {
-                    var menu = new ContextMenu();
-                    foreach (var (text, run) in items)
-                    {
-                        var mi = new MenuItem { Header = text };
-                        mi.Click += (_, _) => run();
-                        menu.Items.Add(mi);
-                    }
-                    menu.Open(this);
-                    e.Handled = true;
-                }
+                if (items is { Count: > 0 }) { ShowMenu(items); e.Handled = true; }
                 return;
             }
             if (e.ClickCount == 2) owner.Activated?.Invoke(Rows[i]);

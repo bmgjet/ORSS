@@ -32,13 +32,10 @@ undef MODRAM_NEXT
 define MODRAM_NEXT (fueltrim_scale + 2)
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_FUELTRIM
-                JNE     fueltrim_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_FUELTRIM == TICK_SLOT
                 CAL     fueltrim_tick
-fueltrim_tick_skip:
+endif
 endif
 
 if XP == XP_FUEL
@@ -52,7 +49,7 @@ fueltrim_enable:        DB  000h
 fueltrim_stock:         DW  000f0h               ; 240 cc
 ;@ InjectorFitted type=u16 formula=x unit=cc decimals=0 min=50 max=3000 category="Injectors" slot=injector.fitted desc="The injectors fitted (cc/min)."
 fueltrim_fitted:        DW  000f0h
-;@ InjectorTrim type=u8 formula=(x-128)*100/256 unit=% decimals=1 category="Injectors" slot=injector.trim desc="A trim on top, either way."
+;@ InjectorTrim type=u8 formula=(x-128)*100/256 unit=% decimals=1 category="Injectors" slot=injector.trim desc="A trim in % on top of the scaling: + richer, - leaner."
 fueltrim_trim:          DB  080h
 endif
 

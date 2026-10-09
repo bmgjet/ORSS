@@ -52,13 +52,10 @@ if XP == XP_IGN
                 CAL     dls_ign
 endif
 
-if XP == XP_TICK
-                LB      A, 0feh
-                ANDB    A, #00fh
-                CMPB    A, #SLOT_DLSERVICE
-                JNE     dls_tick_skip
+if XP == XP_TICKSLOT
+if SLOT_DLSERVICE == TICK_SLOT
                 CAL     dls_tick
-dls_tick_skip:
+endif
 endif
 
 if XP == XP_CAL

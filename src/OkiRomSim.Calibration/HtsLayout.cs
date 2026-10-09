@@ -489,7 +489,8 @@ public static partial class HtsLayout
         if (v is 115 or 120) return (Family.Hts115, $"HTS {v / 100}.{v % 100:00}");
         if (v == 116) return (Family.P13, "HTS P13 base ROM (1.16)");
         if (v is >= 100 and < 115) return (Family.Older, $"HTS {v / 100}.{v % 100:00}");
-        // a base ROM of the same family without the suite's name: its version as three digits at 7FEFh and a text of its maker's in the last bytes (HTS-master takes the last byte 'e', or "ITE" / "ple" before it)
+        // a base ROM of the same family without the suite's name: its version as three digits at 7FEFh and a text of its
+        // maker's in the last bytes (HTS-master takes the last byte 'e', or "ITE" / "ple" before it)
         bool digits = rom[0x7FEF] <= 9 && rom[0x7FF0] <= 9 && rom[0x7FF1] <= 9;
         bool tail = rom[0x7FFF] == (byte)'e' || (rom[0x7FFD] == (byte)'I' && rom[0x7FFE] == (byte)'T' && rom[0x7FFF] == (byte)'E');
         int bv = (rom[0x7FEF] * 100) + (rom[0x7FF0] * 10) + rom[0x7FF1];
@@ -666,7 +667,8 @@ public static partial class HtsLayout
         return null;
     }
 
-    /// byteToMillibar depends on the ROM's MAP sensor preset (60FCh): 0 = stock scale offset by the fuel-cut byte, 1 = stock, 2 = the custom high / low calibration words (stored + 32768). The formula is built from this ROM's own bytes, as HTS does every time it shows a pressure. The MAP pressure formulas built again from the ROM's preset bytes (after they change: a MAP sensor swap).
+    /// byteToMillibar depends on the ROM's MAP sensor preset (60FCh): 0 = stock scale offset by the fuel-cut byte, 1 = stock, 2 = the custom high / low calibration words (stored + 32768). The formula is built from this ROM's own bytes, as HTS does every time it shows a pressure.
+    /// The MAP pressure formulas built again from the ROM's preset bytes (after they change: a MAP sensor swap).
     public static void RefreshMapFormulas(DefinitionSet defs, byte[] rom) => MapFormulas(defs, rom);
 
     static void MapFormulas(DefinitionSet defs, byte[] rom)
