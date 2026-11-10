@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Troubleshooting — Rom Sim Studio guide</title>
+<link rel="icon" href="../favicon.ico">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<header class="topbar"><button class="menu-btn" aria-label="Contents">☰</button><a class="logo" href="index.html">ROM SIM <b>STUDIO</b></a><span class="sp"></span><span class="links"><a href="../">Website</a> &nbsp;·&nbsp; <a href="../#start">Download</a></span></header>
+<div class="frame"><nav class="side"></nav><main>
+
+<h1>Troubleshooting</h1>
+<p class="lead">What to check when something does not work. The <b>Debug</b> tab has everything the program did, with errors in red — look there first.</p>
+
+<h2>The datalog will not connect</h2>
+<ul>
+  <li>The right port? Unplug the cable and see which port goes away (Settings &gt; Emulator &amp; datalog lists them).</li>
+  <li>Does the ROM stream a datalog? A stock ROM does not. HTS, a skeleton ROM with a datalogging module, and most tuned ROMs do.</li>
+  <li>The protocol: leave it on auto-detect, or try <b>Detect layout</b> for an unknown ROM.</li>
+  <li>An echo on the line means the cable's wiring, not a slow ECU. Some cables need <b>Raise DTR and RTS</b> (Settings &gt; Emulator &amp; datalog &gt; Serial timing); a longer pause between request and answer helps a slow adapter.</li>
+  <li>The key on, the ECU powered: an ECU that just saw power takes a moment; the program retries.</li>
+</ul>
+
+<h2>Readings jump about</h2>
+<p>Turn on <b>Smooth values</b>: spikes on the line (a 28 rpm reading between two at 6000) are dropped and the rest blended; the raw frame is kept as it came.</p>
+
+<h2>The ECU will not boot, and every output strobes</h2>
+<p>That is the ECU resetting over and over. On a ROM built from the skeleton:</p>
+<ul>
+  <li>Make sure it was made with <b>version 0.0.0.4 or later</b>. Earlier skeletons let the stock clock self-test (<code>FEAT_STOCK_SELFTEST</code>) fail when some modules were added, which resets the ECU; rebuild the ROM with this version.</li>
+  <li>Check the checksum: save it with <b>Tools &gt; Save .bin…</b> (which keeps it right) rather than an outside tool.</li>
+  <li>Run it in the simulator first, from Reset, and look for a trap (BRK) in the Debug tab.</li>
+  <li>The chip: the right type (27C256 / 29C256), fully programmed and verified, in the right way round; a 64 KB chip needs the ROM in the half the board reads (see the <a href="tools.html#bintool">Bin tool</a>).</li>
+</ul>
+
+<h2>A module does nothing</h2>
+<p>Every module starts switched off. Open its page on the Calibration tab, set it up and tick its <b>Enable</b>. Some need extra hardware wired in: a wideband, an ethanol sensor, a switch on an input.</p>
+
+<h2>Two outputs fight</h2>
+<p>The <b>Problems</b> tab lists any two functions switched on and set to drive the same ECU pin, and a pin a built-in stock function drives too. Pick another output for one of them.</p>
+
+<h2>A value will not go higher</h2>
+<p>Values are held to what the ECU and the engine can use (rpm settings to 12,500, advance to 50°, duty to 100 %…). The editor shows the range when you point at the box. See <a href="new-rom.html#limits">safe limits</a>.</p>
+
+<h2>The program is slow on an old laptop</h2>
+<p>Turn on <b>Low performance mode</b> (Settings &gt; General) and use Tuner mode for tuning: the workbench's panels are let go and the datalog comes first.</p>
+
+<h2>The emulator will not upload</h2>
+<p>Check its port in Settings &gt; Emulator &amp; datalog, then <b>Connect</b> in the Emulator menu. <b>Validate</b> reads it back and compares; the dot blinks orange while a lost link is being rebuilt.</p>
+
+<h2>Still stuck?</h2>
+<p>Ask on the <a href="https://discord.gg/xynkH3ymkH">Discord</a>: say which ROM, what you did, and what the Debug tab shows.</p>
+
+<footer>Rom Sim Studio 0.0.0.8 · by bmgjet · <a href="licence.html">Licence</a></footer>
+</main></div>
+<script src="guide.js"></script>
+</body>
+</html>

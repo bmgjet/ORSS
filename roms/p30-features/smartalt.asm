@@ -51,7 +51,7 @@ endif
 if XP == XP_CODE
 smartalt_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -63,18 +63,18 @@ smartalt_tick:
                 CMPB    A, #000h
                 JEQ     smartalt_release
                 LCB     A, smartalt_batt       ; the battery first
-                CMPB    0c3h, A
+                CMPB    ENG_BATT, A
                 JLT     smartalt_release
                 LCB     A, smartalt_tps        ; heavy: throttle...
-                CMPB    0b9h, A
+                CMPB    ENG_TPS, A
                 JGE     smartalt_rpmchk
                 LCB     A, smartalt_map        ; ...or MAP
-                CMPB    0a3h, A
+                CMPB    ENG_MAP, A
                 JLT     smartalt_light
 smartalt_rpmchk:
                 CLR     A
                 LC      A, smartalt_rpm
-                CMP     0ach, A                ; period past the point's: below the rpm
+                CMP     ENG_RPMP, A                ; period past the point's: below the rpm
                 JGT     smartalt_light
                 MOV     DP, #smartalt_timer    ; heavy: charging down, the hold restarts
                 CLRB    A

@@ -19,18 +19,18 @@ public static class GearboxPanel
     public static List<GearboxPreset> Presets()
     {
         if (_presets != null) return _presets;
-        try { _presets = NewRomWindow.Templates() is { } t ? PresetLibrary.Load(Path.Combine(t, "Presets")).Gearboxes : []; }
+        try { _presets = AppPaths.Templates() is { } t ? PresetLibrary.Load(Path.Combine(t, "Presets")).Gearboxes : []; }
         catch (Exception ex) { AppLog.Error("gearbox", "presets could not be read", ex); _presets = []; }
         return _presets;
     }
 
     /// Write a set of boundaries as one undo step; what was done, for the status line.
-    public static string Write(SimHost host, int[] bounds, int preset, string what)
+    public static string Write(AppHost host, int[] bounds, int preset, string what)
     {
         var defs = host.Defs();
         var rom = host.RomCopy();
         var work = (byte[])rom.Clone();
-        if (!Gearboxes.Apply(defs, work, bounds, preset)) return "this ROM does not work out the gear (build in Gear detection: File > Change functions)";
+        if (!Gearboxes.Apply(defs, work, bounds, preset)) return $"this ROM does not work out the gear (build in Gear detection: {AboutPage.ChangeFunctions})";
         var patches = MapImport.Diff(rom, work);
         if (patches.Count == 0) return $"gearbox: {what} - already set";
         host.ApplyPatches(patches, "gearbox: " + what);
@@ -39,7 +39,7 @@ public static class GearboxPanel
     }
 
     /// The panel: the preset in use (or Custom), and Gear learning.
-    public static Control? Build(SimHost host, DatalogEngine engine, Action<string> status, Func<Window?> owner)
+    public static Control? Build(AppHost host, DatalogEngine engine, Action<string> status, Func<Window?> owner)
     {
         var defs = host.Defs();
         if (!Gearboxes.Has(defs)) return null;
@@ -85,17 +85,17 @@ public static class GearboxPanel
 /// averaged over the last couple of seconds there, and Apply writes the boundaries half way between the gears.
 public sealed class GearLearnWindow : Window
 {
-    readonly SimHost _host;
+    readonly AppHost _host;
     readonly DatalogEngine _engine;
     readonly Action<string> _status;
-    readonly TextBlock _live = new() { FontFamily = MainWindow.MonoFont, FontSize = 16 };
+    readonly TextBlock _live = new() { FontFamily = UiFonts.Mono, FontSize = 16 };
     readonly TextBlock _note = new() { FontSize = 11.5, Opacity = 0.8, TextWrapping = TextWrapping.Wrap };
     readonly TextBlock[] _got = new TextBlock[5];
     readonly double[] _learned = new double[5];
     readonly List<(double T, double Raw)> _recent = [];
     readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(200) };
 
-    public GearLearnWindow(SimHost host, DatalogEngine engine, Action<string> status)
+    public GearLearnWindow(AppHost host, DatalogEngine engine, Action<string> status)
     {
         _host = host; _engine = engine; _status = status;
         Title = "Gear learning";
@@ -117,7 +117,7 @@ public sealed class GearLearnWindow : Window
             int gear = g;
             var b = new Button { Content = $"Gear {g + 1}", Width = 110 };
             b.Click += (_, _) => Record(gear);
-            _got[g] = new TextBlock { Text = "-", VerticalAlignment = VerticalAlignment.Center, FontFamily = MainWindow.MonoFont };
+            _got[g] = new TextBlock { Text = "-", VerticalAlignment = VerticalAlignment.Center, FontFamily = UiFonts.Mono };
             Grid.SetRow(b, g); grid.Children.Add(b);
             Grid.SetRow(_got[g], g); Grid.SetColumn(_got[g], 1); grid.Children.Add(_got[g]);
         }
@@ -174,7 +174,8 @@ public sealed class GearLearnWindow : Window
         var per = _learned.Where(v => v > 0).ToList();
         if (per.Count < 2) { _note.Text = "record at least two gears first"; return; }
         if (per.Zip(per.Skip(1)).Any(p => p.Second <= p.First)) { _note.Text = "the gears must go up in ratio (gear 1 lowest): record them again"; return; }
-        var bounds = Gearboxes.FromLearned(_learned.Where(v => v > 0).ToList());
+        // every gear in its own place (0 for one not recorded), so a gear left out does not move the others down
+        var bounds = Gearboxes.FromLearned(_learned);
         var msg = GearboxPanel.Write(_host, bounds, -1, "learned");
         _note.Text = msg;
         _status(msg);

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Running, stepping and breakpoints — Rom Sim Studio guide</title>
+<link rel="icon" href="../favicon.ico">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<header class="topbar"><button class="menu-btn" aria-label="Contents">☰</button><a class="logo" href="index.html">ROM SIM <b>STUDIO</b></a><span class="sp"></span><span class="links"><a href="../">Website</a> &nbsp;·&nbsp; <a href="../#start">Download</a></span></header>
+<div class="frame"><nav class="side"></nav><main>
+
+<h1>Running, stepping and breakpoints</h1>
+<p class="lead">Run the ROM against the simulated engine, stop it where you want, and walk through it an instruction at a time.</p>
+
+<h2>Run and pause</h2>
+<p><b>Run</b> (<kbd>F5</kbd>) starts the simulated MSM66207 from where it is; <kbd>F5</kbd> again pauses it. <b>Reset</b> (<kbd>Ctrl</kbd>+<kbd>R</kbd>) starts it again from power-up. The speed — 0.1×, 0.5×, real time, 4× or as fast as it goes — is in <b>Settings &gt; General &gt; Simulation</b>, with <b>Fast boot</b>, which skips the 4.5 s key-on sensor scan the ROM does before it starts the engine.</p>
+<p>The simulation is cycle-counted at the real clock (a 10 MHz crystal, the CPU at 2.5 MHz, the timers at a quarter of that), so rpm, injector pulses and ignition timing come out as the ECU makes them.</p>
+
+<h2>Stepping</h2>
+<table>
+  <tr><th>Key</th><th>Button</th><th>Does</th></tr>
+  <tr><td><kbd>F11</kbd></td><td>Step</td><td>One instruction.</td></tr>
+  <tr><td><kbd>F10</kbd></td><td>Over</td><td>One instruction, running a call (CAL, VCAL) through to its return.</td></tr>
+  <tr><td><kbd>Ctrl</kbd>+<kbd>F11</kbd></td><td>Into</td><td>Step into — and at a conditional jump, take it whatever the flags say, to walk down a path the engine is not on.</td></tr>
+  <tr><td><kbd>Shift</kbd>+<kbd>F11</kbd></td><td>Out</td><td>Run until the routine (or interrupt handler) returns.</td></tr>
+</table>
+<p>The <b>Call stack</b> follows CAL, VCAL and interrupts, so Out and the stack are right even inside an interrupt. With <b>Follow reads</b> (Settings &gt; General) a step that reads a table switches the Calibration page to it.</p>
+
+<h2>Breakpoints</h2>
+<p>A breakpoint pauses the simulator when the CPU is about to run the instruction it is on.</p>
+<ul>
+  <li><kbd>F9</kbd> toggles one on the source line the caret is on.</li>
+  <li>Double-click a line of the <b>Disassembly</b> to toggle one there.</li>
+  <li>On <b>Lookup &amp; breakpoints</b>, type a label or an address and press <b>Break</b> (or <b>Toggle</b>); or right-click an address or name in the lookup results and pick <b>Add as breakpoint</b>.</li>
+</ul>
+<p>The <b>Breakpoints</b> list shows each one with ● when it is on and ○ when it is off. Right-click one to <b>switch it off</b> (it stays in the list and is not stopped at), switch it on again, or remove it. <b>Clear all</b> removes them all. Breakpoints, on and off, are saved with a <a href="projects.html">project</a>.</p>
+
+<h2>Lookup and references</h2>
+<figure><img src="img/lookup.png" alt="Lookup and breakpoints tab"><figcaption>Lookup &amp; breakpoints: what a name is, every instruction that touches an address, and the breakpoints.</figcaption></figure>
+<p>Type a label, a calibration name or an address and press Enter: the results say what it is and where. <b>Find references</b> lists every instruction that reads or writes the address. Double-click a result to go to it.</p>
+
+<h2>Changing code while it runs</h2>
+<p>Edit the source, then <b>Patch live</b> (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd>): only the bytes that changed go into the running ROM, and the program carries on with the new code at once. If the CPU is inside code that moved, it asks whether to patch anyway, patch and reset, or leave it.</p>
+
+<footer>Rom Sim Studio 0.0.0.8 · by bmgjet · <a href="licence.html">Licence</a></footer>
+</main></div>
+<script src="guide.js"></script>
+</body>
+</html>

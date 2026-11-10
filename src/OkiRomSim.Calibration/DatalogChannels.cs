@@ -3,9 +3,11 @@
 namespace OkiRomSim.Calibration;
 
 /// What the skeleton ROM's channel stream (p30-features/dlstream.asm) can send: every value a logger can tick on or off. A channel is one or more bytes of the ROM's channel table (dl_channels); its number there is fixed, so this list and that table must agree. Version 1 ROMs take RAM addresses instead (70h, at most 8 bytes), and the status bytes (FF0xh) have no address, so those channels need version 2. A word (rpm, injector time) is read in one go by the ROM, its low byte then its high byte, so it is always a fast channel: as a slow one its two bytes would come a frame apart.
-public sealed record DatalogChannel(string Key, string Name, string Group, string Unit, int[] Numbers, int[] Addresses,
+public sealed record DatalogChannel(string Key, string Name, string Group, string Unit, int[] Numbers, int[] AddressesP30,
     Action<LogFrame, byte[]> Decode, string Description = "", bool Slow = false, bool Word = false)
 {
+    /// Where the ROM's table has it, for the part the open ROM is for (P13's RAM is not the P30's).
+    public int[] Addresses => OkiRomSim.Core.Chip.Is66911 ? [.. Numbers.Select(n => DatalogChannels.RomTableP13[n])] : AddressesP30;
     public int Bytes => Numbers.Length;
     public bool NeedsVersion2 => Addresses.Any(a => a >= 0xFF00 || a == 0);
     /// The ROM version the channel needs: its channel numbers came in with it (the table only grows).
@@ -37,7 +39,25 @@ public sealed record SerialInputMap(int Input, string Channel, double Scale = 1,
 public static class DatalogChannels
 {
     /// The ROM's table, channel number -> address: dl_channels in dlstream.asm, less its 4000h / 2000h word flags. Channels 23-24 (the module fuel trim), 49-51 and the serial inputs (40-48) are in module RAM, which moves with the stock trouble codes: the ROM's own table always has the right one, and version 2 on asks by number, so only a version 1 request would need it (those are 0 here: version 2 and up).
-    public static readonly int[] RomTable =
+    /// The table of the ROM the app has open: P30 or P13 (skeleton builds for either).
+    public static int[] RomTable => OkiRomSim.Core.Chip.Is66911 ? RomTableP13 : RomTableP30;
+
+    /// P13's (dlstream.asm's dl_channels, PLATFORM_P13): the same channels from its own RAM, 0 where it has none (yet).
+    public static readonly int[] RomTableP13 =
+    [
+        0x0AE, 0x0AF, 0x0A5, 0x0AB, 0x0D9, 0x0D8, 0x0DC, 0x0DF, 0x0E0, 0x3D0,
+        0x3D8, 0x1D0, 0x1D1, 0x2B8, 0x288, 0x27F, 0xFF01, 0xFF02, 0xFF03, 0x272,
+        0x273, 0x27B, 0x27A, 0x408, 0x409, 0x1C0, 0x0FC, 0x1C1, 0x0FD, 0x225,
+        0x226, 0, 0x27E, 0x06F, 0x073, 0xFF04, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0x1C6,
+        // 53-131 (dlextra.asm): only what is traced on the P13 - dead time 142h, the cut flags 11Ah, the map row/column 0EEh/0EDh
+        0, 0, 0, 0x142, 0x143, .. new int[102 - 58], 0x11A,
+        0x1C2, 0x1C3, 0x1C4, 0x1C5, 0x0EE, 0x0ED, 0x0FF, .. new int[124 - 110], 0x1000, 0x1001, 0x1002, 0x1003, 0x1004, 0x1005, 0x1006, 0x1007,
+        .. new int[ModuleDebug.Bytes],
+    ];
+
+    public static readonly int[] RomTableP30 =
     [
         0x0AC, 0x0AD, 0x0A3, 0x0B9, 0x0C1, 0x0C0, 0x0C3, 0x0B4, 0x0A4, 0x3BE,
         0x3C6, 0x146, 0x147, 0x246, 0x0A7, 0x2FE, 0xFF01, 0xFF02, 0xFF03, 0x0C8,
@@ -64,7 +84,7 @@ public static class DatalogChannels
 
     /// The limiter modules, by their bit in lib.asm's cut-request words (MB_...).
     public static readonly string[] Limiters =
-        ["revlimit", "launch", "fts", "burnout", "boostcut", "ectpro", "antistart", "speedlimit", "ceiling", "leanpro", "traction", "gearlimit", "watermark", "remote", "popcorn"];
+        ["revlimit", "launch", "fts", "burnout", "boostcut", "ectpro", "antistart", "speedlimit", "ceiling", "leanpro", "traction", "gearlimit", "watermark", "remote", "popcorn", "sensorpro"];
 
     static double RpmLog(int x) => Math.Pow(2, x / 64) * (500 + (7.8125 * (x % 64)));
     static int W(byte[] b) => b[0] | (b[1] << 8);
@@ -82,7 +102,10 @@ public static class DatalogChannels
     }
 
     static DatalogChannel C(string key, string name, string group, string unit, int[] numbers, Action<LogFrame, byte[]> decode, string desc = "", bool slow = false, bool word = false) =>
-        new(key, name, group, unit, numbers, [.. numbers.Select(n => RomTable[n])], decode, desc, slow, word);
+        new(key, name, group, unit, numbers, [.. numbers.Select(n => RomTableP30[n])], decode, desc, slow, word);
+
+    /// The open ROM is a P13 (MSM66911): its sensors' scales where they are not the P30's.
+    static bool P13 => OkiRomSim.Core.Chip.Is66911;
 
     static void Bit(LogFrame f, string key, byte b, int bit) => f.Extra[key] = (b >> bit) & 1;
 
@@ -90,22 +113,22 @@ public static class DatalogChannels
     [
         C("rpm", "Rpm", "Engine", "rpm", [0, 1], (f, b) => { int p = b[0] | (b[1] << 8); f.Rpm = p == 0 || p == 0xFFFF ? 0 : Math.Round(1875000.0 / p); }, "From the crank period (two bytes, read together).", word: true),
         C("map", "MAP", "Engine", "kPa", [2], (f, b) => f.MapKpa = Math.Round(HondaDatalog.MapKpa(b[0]), 1)),
-        C("load", "Map load", "Engine", "mbar", [14], (f, b) => f.Extra["load_mbar"] = Math.Round(b[0] * 3.6105 + 114.3), "The load byte the fuel and ignition maps are looked up on."),
+        C("load", "Map load", "Engine", "mbar", [14], (f, b) => f.Extra["load_mbar"] = Math.Round(P13 ? HondaDatalog.P13LoadMbar(b[0]) : b[0] * 3.6105 + 114.3), "The load byte the fuel and ignition maps are looked up on."),
         C("tps", "Throttle", "Engine", "%", [3], (f, b) => f.TpsPct = Math.Round(HondaDatalog.TpsPct(b[0]), 1)),
         C("ect", "Coolant", "Engine", "°C", [4], (f, b) => f.EctC = HondaDatalog.ThermistorC(b[0]), slow: true),
         C("iat", "Intake air", "Engine", "°C", [5], (f, b) => f.IatC = HondaDatalog.ThermistorC(b[0]), slow: true),
-        C("baro", "Barometric pressure", "Engine", "kPa", [8], (f, b) => f.BaroKpa = Math.Round(HondaDatalog.MapKpa((byte)Math.Min(255, b[0] / 2 + 24)), 1), slow: true),
+        C("baro", "Barometric pressure", "Engine", "kPa", [8], (f, b) => f.BaroKpa = Math.Round(P13 ? HondaDatalog.P13LoadMbar(b[0]) / 10 : HondaDatalog.MapKpa((byte)Math.Min(255, b[0] / 2 + 24)), 1), slow: true),
         C("batt", "Battery", "Electrical", "V", [6], (f, b) => f.BattV = Math.Round(26.0 * b[0] / 270.0, 2), slow: true),
         C("eld", "Electrical load (ELD)", "Electrical", "V", [10], (f, b) => f.Extra["eld_v"] = Math.Round(HondaDatalog.Volts(b[0]), 2), slow: true),
         C("speed", "Road speed", "Engine", "km/h", [7], (f, b) => f.SpeedKmh = b[0]),
         C("gear", "Gear", "Engine", "", [15], (f, b) => f.Extra["gear"] = b[0], "Needs gear detection (FEAT_GEAR).", slow: true),
         C("o2", "O2 sensor", "Fuel", "V", [9], (f, b) => f.O2V = Math.Round(HondaDatalog.Volts(b[0]), 3)),
-        C("inj", "Injector time", "Fuel", "ms", [11, 12], (f, b) => f.InjMs = Math.Round((b[0] | (b[1] << 8)) * 3.2 / 1000, 2), word: true),
+        C("inj", "Injector time", "Fuel", "ms", [11, 12], (f, b) => f.InjMs = Math.Round((b[0] | (b[1] << 8)) * (P13 ? 4.00839 : 3.2) / 1000, 2), word: true),
         C("fueltrim", "Module fuel trim", "Fuel", "%", [23, 24], (f, b) => f.Extra["fuel_trim_pct"] = Math.Round((short)(b[0] | (b[1] << 8)) * 100.0 / 256, 1), "Every module's fuel trim added up.", word: true),
         C("fuelcut", "Fuel cut request", "Fuel", "", [25], (f, b) => f.Extra["fuel_cut"] = b[0] != 0 ? 1 : 0),
         C("pump", "Fuel pump", "Fuel", "", [18], (f, b) => f.FuelPump = (b[0] & 1) != 0, slow: true),
         C("alphan", "Alpha-N load", "Fuel", "mbar", [32], (f, b) => f.Extra["alphan_mbar"] = Math.Round(b[0] * 3.6105 + 114.3), "Needs maps indexing (FEAT_ALPHAN)."),
-        C("adv", "Ignition advance", "Ignition", "°", [13], (f, b) => f.IgnDeg = b[0] * 0.25 - 6),
+        C("adv", "Ignition advance", "Ignition", "°", [13], (f, b) => f.IgnDeg = P13 ? (b[0] - 24) * 0.25 : b[0] * 0.25 - 6),
         C("retard", "Module retard", "Ignition", "°", [21], (f, b) => f.Extra["mod_retard_deg"] = b[0] * 0.25),
         C("advreq", "Module advance", "Ignition", "°", [22], (f, b) => f.Extra["mod_advance_deg"] = b[0] * 0.25),
         C("igntrim", "Module timing trims", "Ignition", "°", [49, 50], (f, b) => f.Extra["ign_trim_deg"] = Math.Round((short)(b[0] | (b[1] << 8)) * 0.25, 2), "Every module's timing trim added up (+ advance).", word: true),
@@ -145,6 +168,7 @@ public static class DatalogChannels
         // ---- the "every channel" module (dlextra.asm)
         C("cuts", "Fuel cut: why", "Limiters and cuts", "", [102], (f, b) =>
         {
+            if (P13) { Bit(f, "fuel_cut", b[0], 0); Bit(f, "overrun_cut", b[0], 2); Bit(f, "rev_limit", b[0], 4); return; }
             Bit(f, "fuel_cut", b[0], 2); Bit(f, "overrun_cut", b[0], 4); Bit(f, "rev_limit", b[0], 5);
         }, "The fuel cut and why: rev_limit (the rev limiter, or a limiter module, is cutting), overrun_cut (closed throttle on overrun), fuel_cut (any cut). RAM 11Ch.", slow: false),
         C("limiters", "Limiters cutting", "Limiters and cuts", "", [103, 104, 105, 106], (f, b) =>
@@ -156,7 +180,7 @@ public static class DatalogChannels
         C("fuelmap", "Fuel map value", "Fuel corrections", "", [53], (f, b) => f.Extra["fuel_map"] = b[0],
             "The fuel map's value at this rpm and load, before any correction (RAM 138h)."),
         RawW("poststart", "Post-start fuel", "Fuel corrections", 54, "The extra fuel after a start as it decays (RAM 14Ah)."),
-        C("deadtime", "Injector dead time", "Fuel corrections", "ms", [56, 57], (f, b) => f.Extra["dead_time_ms"] = Math.Round(W(b) * 3.2 / 1000, 3),
+        C("deadtime", "Injector dead time", "Fuel corrections", "ms", [56, 57], (f, b) => f.Extra["dead_time_ms"] = Math.Round(W(b) * (P13 ? 4.0 : 3.2) / 1000, 3),
             "The time added to every pulse for the injector to open, from the battery voltage (RAM 13Ch).", word: true),
         RawW("fuelect", "Coolant fuel correction", "Fuel corrections", 58, "The injector correction against coolant temperature (RAM 144h)."),
         RawW("fueliat", "Intake air fuel correction", "Fuel corrections", 60, "The multiplier on the pulse against intake air temperature (RAM 14Ch)."),
@@ -200,7 +224,7 @@ public static class DatalogChannels
             Bit(f, "vtec_engaged", b[0], 2); Bit(f, "vtec_above_point1", b[1], 1); Bit(f, "vtec_above_point2", b[1], 2);
             f.Extra["vtec_state_byte"] = b[0]; f.Extra["vtec_points_byte"] = b[1];
         }, "vtec_engaged (the high cam asked for), and whether the rpm is past the stock VTEC points (RAM 11Fh, 128h)."),
-        C("rpmindex", "Map rpm index", "Engine state", "", [107], (f, b) => { f.Extra["rpm_index"] = b[0]; f.Extra["rpm_index_rpm"] = Math.Round(RpmLog(b[0])); },
+        C("rpmindex", "Map rpm index", "Engine state", "", [107], (f, b) => { f.Extra["rpm_index"] = b[0]; if (!P13) f.Extra["rpm_index_rpm"] = Math.Round(RpmLog(b[0])); },
             "The rpm byte the maps and VTEC points are read with (RAM 12Dh)."),
         Raw("loadindex", "Map load index", "Engine state", 108, "The load byte the maps are read with (RAM 12Ch)."),
         C("sincestart", "Time since start", "Engine state", "s", [109], (f, b) => f.Extra["since_start_s"] = b[0] / 10.0,

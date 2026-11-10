@@ -213,8 +213,8 @@ public sealed class TableGrid : Control
     /// The cell and heading sizes at their natural size; stretched, the table fills its panel and they grow (or shrink) with it.
     public const double BaseCellW = 46, BaseCellH = 19, BaseHeadW = 58, BaseHeadH = 20;
     double CellW = BaseCellW, CellH = BaseCellH, HeadW = BaseHeadW, HeadH = BaseHeadH, _font = FontSize;
-    static readonly Typeface Face = new(MainWindow.MonoFont, FontStyle.Normal, FontWeight.SemiBold);
-    static readonly Typeface Bold = new(MainWindow.MonoFont, FontStyle.Normal, FontWeight.Bold);
+    static readonly Typeface Face = new(UiFonts.Mono, FontStyle.Normal, FontWeight.SemiBold);
+    static readonly Typeface Bold = new(UiFonts.Mono, FontStyle.Normal, FontWeight.Bold);
     const double FontSize = 11;
     // laid-out text is by far the most expensive part of drawing a map; keep it between frames
     static readonly Dictionary<(string, bool, double, uint), FormattedText> TextCache = [];
@@ -263,7 +263,7 @@ public sealed class TableGrid : Control
 
     (int r, int c) _anchor, _cursor;
     bool _dragging, _swallowText;
-    readonly TextBox _editor = new() { FontFamily = MainWindow.MonoFont, FontSize = FontSize, Padding = new Thickness(2, 0), MinHeight = 0, IsVisible = false };
+    readonly TextBox _editor = new() { FontFamily = UiFonts.Mono, FontSize = FontSize, Padding = new Thickness(2, 0), MinHeight = 0, IsVisible = false };
     Canvas? _host;
 
     /// (cell indexes, new value, value is raw)
@@ -842,6 +842,17 @@ public sealed class TableGrid : Control
     /// Each selected cell to a value of its own, as one edit (a typed "+2" or "*1.05"): the values, and what to call the change.
     public event Action<IReadOnlyList<(int Index, double Value)>, string>? SetEach;
 
+    /// A number typed or pasted into a cell: the invariant form (12.5), or a decimal comma (12,5) where there is no point - and never
+    /// NaN or an infinity, which .NET reads from "NaN", "Infinity" or "1e400" and which a fuel map's write turned into 00h (no fuel).
+    internal static bool TryNumber(string text, out double value)
+    {
+        var inv = CultureInfo.InvariantCulture;
+        text = text.Trim();
+        bool ok = double.TryParse(text, NumberStyles.Float, inv, out value)
+                  || (text.Count(c => c == ',') == 1 && !text.Contains('.') && double.TryParse(text.Replace(',', '.'), NumberStyles.Float, inv, out value));
+        return ok && double.IsFinite(value);
+    }
+
     void CommitEdit()
     {
         _editor.IsVisible = false;
@@ -849,21 +860,20 @@ public sealed class TableGrid : Control
         var t = (_editor.Text ?? "").Trim();
         if (t.Length == 0) return;
         var sel = Selection();
-        var inv = CultureInfo.InvariantCulture;
-        if (t.StartsWith('r') && double.TryParse(t[1..], NumberStyles.Float, inv, out var raw)) { SetCells?.Invoke(sel, raw, true); return; }
+        if (t.StartsWith('r') && TryNumber(t[1..], out var raw)) { SetCells?.Invoke(sel, raw, true); return; }
         if (t.StartsWith('=')) t = t[1..].Trim();
-        else if ((t[0] is '+' or '-') && double.TryParse(t, NumberStyles.Float, inv, out var delta))
+        else if ((t[0] is '+' or '-') && TryNumber(t, out var delta))
         {
             // "+2" / "-2" change every selected cell by that much ("=-2" sets -2): one edit for all of them (one undo step, one write), not one per cell
-            SetEach?.Invoke([.. sel.Select(i => (i, Model.Values[i] + delta))], $"{(delta >= 0 ? "+" : "")}{delta:0.###}");
+            SetEach?.Invoke([.. sel.Select(i => (i, Model.Values[i] + delta)).Where(x => double.IsFinite(x.Item2))], $"{(delta >= 0 ? "+" : "")}{delta:0.###}");
             return;
         }
-        if (t.StartsWith('*') && double.TryParse(t[1..], NumberStyles.Float, inv, out var factor))
+        if (t.StartsWith('*') && TryNumber(t[1..], out var factor))
         {
-            SetEach?.Invoke([.. sel.Select(i => (i, Model.Values[i] * factor))], $"x {factor:0.###}");
+            SetEach?.Invoke([.. sel.Select(i => (i, Model.Values[i] * factor)).Where(x => double.IsFinite(x.Item2))], $"x {factor:0.###}");
             return;
         }
-        if (double.TryParse(t, NumberStyles.Float, inv, out var v)) SetCells?.Invoke(sel, v, false);
+        if (TryNumber(t, out var v)) SetCells?.Invoke(sel, v, false);
         else Message?.Invoke($"'{t}' is not a number");
     }
 
@@ -888,12 +898,17 @@ public sealed class TableGrid : Control
         var lines = text.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
         for (int dr = 0; dr < lines.Length; dr++)
         {
-            var parts = lines[dr].Split(new[] { '\t', ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            // a spreadsheet copies its cells tab-separated, and where the decimal mark is a comma a cell is 12,5: split on tabs alone then
+            // (and on ';' when that is the separator), so the comma stays inside the number. Split on ',' too, 12,5 went into two cells as 12 and 5.
+            var line = lines[dr];
+            var parts = line.Contains('\t') ? line.Split('\t', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                      : line.Contains(';') ? line.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                      : line.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries);
             for (int dc = 0; dc < parts.Length; dc++)
             {
                 int r = r0 + dr, c = c0 + dc;
                 if (r >= Model.Rows || c >= Model.Cols) continue;
-                if (double.TryParse(parts[dc], NumberStyles.Float, CultureInfo.InvariantCulture, out var v)) list.Add(((r * Model.Cols) + c, v));
+                if (TryNumber(parts[dc], out var v)) list.Add(((r * Model.Cols) + c, v));
             }
         }
         PasteCells?.Invoke(list);
@@ -1052,7 +1067,7 @@ public sealed class TableGraph : Control
             {
                 double at = Math.Max(y - 6, last + 12);
                 last = at;
-                ctx.DrawText(new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, new Typeface(MainWindow.MonoFont), 9.5,
+                ctx.DrawText(new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, new Typeface(UiFonts.Mono), 9.5,
                              AppTheme.Brush(c)), new Point(Bounds.Width - LabelRoom + 4, at));
             }
         }
@@ -1066,7 +1081,7 @@ public sealed class TableGraph : Control
             var p = new Point(tx, Pos(0, v).Y);
             ctx.DrawEllipse(null, new Pen(AppTheme.White, 3), p, 10, 10);
             ctx.DrawEllipse(AppTheme.Brush(TableModel.TraceColor), new Pen(AppTheme.Black, 1.5), p, 7, 7);
-            var readout = new FormattedText($"{m.Format(v)} {m.Unit}", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, new Typeface(MainWindow.MonoFont), 11.5, Dark.Text);
+            var readout = new FormattedText($"{m.Format(v)} {m.Unit}", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, new Typeface(UiFonts.Mono), 11.5, Dark.Text);
             var at = new Point(Math.Min(tx + 14, Bounds.Width - Right - readout.Width - 10), p.Y - 26);
             ctx.DrawRectangle(AppTheme.Brush(Color.FromArgb(215, 14, 15, 18)), new Pen(AppTheme.Brush(TableModel.TraceColor), 1),
                               new Rect(at.X - 5, at.Y - 2, readout.Width + 10, readout.Height + 4), 4, 4);
@@ -1156,7 +1171,7 @@ public sealed class TableGraph : Control
     }
 
     static void Label(DrawingContext ctx, string s, Point at, double size) =>
-        ctx.DrawText(new FormattedText(s, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, new Typeface(MainWindow.MonoFont), size, Dark.Text), at);
+        ctx.DrawText(new FormattedText(s, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, new Typeface(UiFonts.Mono), size, Dark.Text), at);
 
     int Nearest(Point p)
     {
@@ -1310,8 +1325,8 @@ public sealed class TableSurface : Control
     readonly List<Point[]> _quads = [];
     const double Grab = 14;
 
-    static readonly Typeface Face = new(MainWindow.MonoFont);
-    static readonly Typeface BoldFace = new(MainWindow.MonoFont, FontStyle.Normal, FontWeight.Bold);
+    static readonly Typeface Face = new(UiFonts.Mono);
+    static readonly Typeface BoldFace = new(UiFonts.Mono, FontStyle.Normal, FontWeight.Bold);
     static readonly IBrush PlateBg = AppTheme.Brush(Color.FromArgb(200, 14, 15, 18));
     static readonly IBrush RowInk = AppTheme.Brush(Color.FromRgb(255, 190, 110));
     static readonly IBrush ColInk = AppTheme.Brush(Color.FromRgb(120, 200, 255));

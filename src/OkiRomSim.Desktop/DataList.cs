@@ -150,8 +150,8 @@ public sealed class DataList : UserControl
         HashSet<string> _beforeBand = [];
         static readonly IBrush BandFill = AppTheme.Brush(Color.FromArgb(0x30, 0x4e, 0xa1, 0xff));
         static readonly IBrush BandEdge = AppTheme.Brush(Color.FromRgb(0x4e, 0xa1, 0xff));
-        static readonly Typeface Mono = new(MainWindow.MonoFont);
-        static readonly Typeface MonoBold = new(MainWindow.MonoFont, FontStyle.Normal, FontWeight.Bold);
+        static readonly Typeface Mono = new(UiFonts.Mono);
+        static readonly Typeface MonoBold = new(UiFonts.Mono, FontStyle.Normal, FontWeight.Bold);
         static readonly Typeface Ui = new(FontFamily.Default);
         readonly Dictionary<(string, bool, uint, double), FormattedText> _cache = [];
 

@@ -162,7 +162,7 @@ public sealed class GaugeEditor : Window
     static NumericUpDown Num(double v, double min = -1e6, double max = 1e6, double step = 1) => new()
     {
         Value = (decimal)v, Minimum = (decimal)min, Maximum = (decimal)max, Increment = (decimal)step,
-        Width = 140, FormatString = "0.###", FontFamily = MainWindow.MonoFont,
+        Width = 140, FormatString = "0.###", FontFamily = UiFonts.Mono,
     };
 
     static Control Row(string label, Control editor, string tip)

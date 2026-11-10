@@ -103,7 +103,7 @@ public sealed class WelcomeWindow : Window
 
     static FormattedText T(string s, double size, IBrush ink, bool bold = false, bool mono = true) =>
         new(s, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-            new Typeface(mono ? MainWindow.MonoFont : FontFamily.Default, FontStyle.Normal, bold ? FontWeight.Bold : FontWeight.Normal), size, ink);
+            new Typeface(mono ? UiFonts.Mono : FontFamily.Default, FontStyle.Normal, bold ? FontWeight.Bold : FontWeight.Normal), size, ink);
 
     /// The chip, and the assembly that runs on it.
     sealed class SimArt : Control

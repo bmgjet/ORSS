@@ -643,6 +643,8 @@ public static class RomData
     {
         // a definition can point anywhere (an imported or hand-edited one past the end of the image): nothing to write there
         if (addr < 0 || addr + (t is CellType.U16 or CellType.S16 or CellType.U16BE or CellType.S16BE ? 2 : 1) > rom.Length) return;
+        // never a byte made from NaN or an infinity: (int)NaN is 0 on .NET, which writes 00h where a value was meant
+        if (!double.IsFinite(raw)) return;
         int v = (int)Math.Round(raw, MidpointRounding.AwayFromZero);
         switch (t)
         {

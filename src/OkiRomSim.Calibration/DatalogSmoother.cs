@@ -44,7 +44,10 @@ public sealed class DatalogSmoother
             if (ch is "vtec" or "fuel_pump") continue;
             if (f.Get(ch) is double v) Put(f, ch, v);
         }
-        foreach (var ch in f.Extra.Keys.ToList()) Put(f, ch, f.Extra[ch]);
+        // extra channels only when they are a measurement (a unit, or a floor here): trouble-code bytes, flag bytes and limiter bit masks
+        // are not quantities - averaged, 80h and 88h made 82h and 85h, codes that were never set
+        foreach (var ch in f.Extra.Keys.ToList())
+            if (Floors.ContainsKey(ch) || LogFrame.UnitOf(ch).Length > 0) Put(f, ch, f.Extra[ch]);
     }
 
     void Put(LogFrame f, string ch, double v)

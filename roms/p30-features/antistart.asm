@@ -39,7 +39,7 @@ endif
 if XP == XP_CODE
 antistart_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -66,7 +66,7 @@ antistart_checked:
                 JEQ     antistart_hold
                 CLRB    A
                 LCB     A, antistart_tps       ; ...with the throttle past the point unlocks it
-                CMPB    0b9h, A                ; throttle - point borrows while below it
+                CMPB    ENG_TPS, A                ; throttle - point borrows while below it
                 JLT     antistart_hold
                 RB      off(MOD_FLAGS).0
 antistart_free: L       A, #MB_ANTISTART

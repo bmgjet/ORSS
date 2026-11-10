@@ -42,7 +42,7 @@ public static class FaultDisable
     }
 
     /// The bits of the fault field that flash as `code`.
-    public static IEnumerable<int> BitsFor(int code) => Enumerable.Range(0, 48).Where(b => MilMonitor.FaultBitCode(b) == code);
+    public static IEnumerable<int> BitsFor(int code) => Enumerable.Range(0, 48).Where(b => MilCodes.FaultBitCode(b) == code);
 
     /// The NOPs that take the sites out.
     public static List<BytePatch> Patches(IEnumerable<Site> sites) =>

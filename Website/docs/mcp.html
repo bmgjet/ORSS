@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP server and command line — Rom Sim Studio guide</title>
+<link rel="icon" href="../favicon.ico">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<header class="topbar"><button class="menu-btn" aria-label="Contents">☰</button><a class="logo" href="index.html">ROM SIM <b>STUDIO</b></a><span class="sp"></span><span class="links"><a href="../">Website</a> &nbsp;·&nbsp; <a href="../#start">Download</a></span></header>
+<div class="frame"><nav class="side"></nav><main>
+
+<h1>MCP server and command line</h1>
+<p class="lead">Let an AI agent — or a script — assemble, run, explore, calibrate and datalog ROMs.</p>
+
+<h2>The MCP server</h2>
+<p>The Model Context Protocol lets an AI agent (Claude and others) use the program's tools. Two ways:</p>
+<table>
+  <tr><th>Start it</th><th>Works on</th></tr>
+  <tr><td><b>Settings &gt; MCP server</b>: tick <i>Run the HTTP MCP server while the app is open</i></td><td>The ROM open on screen. The agent's edits go through undo, the safe limits and the checksum, reach the simulator, and the emulator if it is uploading — you watch them happen.</td></tr>
+  <tr><td><code>RomSimStudio --mcp --root &lt;folder&gt; [--read-only]</code></td><td>Files in a folder, over stdio, with no window.</td></tr>
+</table>
+<p>The HTTP server listens on <code>127.0.0.1</code> and the port set there, and asks for the password set there (<code>Authorization: Bearer …</code>). <b>Allow remote connections</b> listens on the network too; <b>Read-only</b> lets clients read and run, not write. The settings page shows the configuration to paste into a client.</p>
+<p>Only programs on your computer are answered: a request that names another website as its origin, or a host name that is not this machine's, is refused, so a page open in your browser cannot use the server even with no password set. Five wrong passwords lock an address out for five minutes (counting starts again after that). A file path a client gives must stay inside the workspace, including through folder links and junctions.</p>
+<p>The tools cover the instruction set, assembling and disassembling, running the simulator with inputs, symbols and cross-references, finding every map, comparing two ROMs, the whole calibration surface (list, read, write, define, detect, formulas, feature patches, save as .bin / definitions / XDF), the datalog, the emulator, and the files in the workspace. Every call is in the Debug tab with where it came from and how long it took.</p>
+
+<h2 id="annotating">Annotating a ROM with a model</h2>
+<p>A model connected to the server can name a ROM by following its code — a local one such as Qwen as well as Claude. With the ROM open in the app, everything it changes shows as it is made: the source in the editor (the caret and scroll stay where you left them), the names in the disassembly, <b>Lookup &amp; breakpoints</b> and the call stack, and the <b>Calibration</b> pages — without a reset, the simulator carrying on. A change that would break the build is reported back to the model with the errors, and the Build button lights so you can see it.</p>
+<p>Every name follows one standard, so a ROM named by different models, or over many sessions, reads as one. The model reads it with <code>naming_guide</code>; <code>rename</code> refuses a name that breaks it:</p>
+<table>
+  <tr><th>What</th><th>Style</th><th>Examples</th></tr>
+  <tr><td>Code labels</td><td>lower_snake_case, the first word the part of the ECU (fuel, ign, idle, vtec, crank, knock, dtc, serial…), then what it does</td><td><code>fuel_calc_base_pulse</code>, <code>ign_apply_knock_retard</code>, <code>fuel_calc_base_pulse_done</code></td></tr>
+  <tr><td>Calibration data</td><td>PascalCase; tables end in <code>Tbl</code>, switches in <code>Enable</code></td><td><code>CrankingFuelTbl</code>, <code>RevLimitLow</code>, <code>O2HeaterEnable</code></td></tr>
+  <tr><td>RAM</td><td>lower_snake_case after the value kept there</td><td><code>rpm_period</code>, <code>ect_filtered</code>, <code>knock_retard_now</code></td></tr>
+  <tr><td>Constants</td><td>UPPER_SNAKE_CASE</td><td><code>MAP_COLS</code></td></tr>
+</table>
+<p>Names a disassembler or an earlier pass made up — <code>loc_1234</code>, <code>tbl_5e20</code>, an address or a number in the name, an echoed instruction like <code>int_serial_rx_load_r7_2</code> — count as placeholders still to be named. The tools for the job:</p>
+<table>
+  <tr><th>Tool</th><th>Does</th></tr>
+  <tr><td><code>naming_guide</code></td><td>The standard, the comment style and the workflow.</td></tr>
+  <tr><td><code>annotate_todo</code></td><td>What is still unnamed, most-used first, and how far the ROM is named (a percentage).</td></tr>
+  <tr><td><code>explore</code>, <code>xref</code></td><td>Follow a routine and what it reads, writes, calls and drives; every instruction that uses an address, branches included.</td></tr>
+  <tr><td><code>rename</code></td><td>A new name everywhere it is used, in every source file of the build, checked against the standard.</td></tr>
+  <tr><td><code>comment</code></td><td>A comment block above a routine, or a comment on one line.</td></tr>
+  <tr><td><code>name_check</code></td><td>Whether a name follows the standard, and what to change.</td></tr>
+  <tr><td><code>cal_define</code></td><td>Name a table or setting found in the code, with its type, scaling, unit and category: it appears on the Calibration pages.</td></tr>
+</table>
+<p>A good first message for the model: <i>"Read naming_guide, then annotate the ROM open in the app: take annotate_todo's first entries, explore each, rename it and comment it. Only name what the code shows."</i> Its <code>file_edit</code> and <code>file_write</code> calls on the ROM's own files go through the app the same way.</p>
+
+<h2>The command line</h2>
+<p><code>okisim</code> does the same from a terminal:</p>
+<pre><code>okisim asm file.asm [-o out.bin] [-D NAME=val] [-I dir] [--lst --map --sym]
+okisim run file.bin|file.asm [--steps N] [--until label] [--trace N] [--rpm N] [--watch label]
+okisim disasm file.bin [--from 2528] [--count 40] [--sym file.sym]
+okisim symbols &lt;rom&gt; [pattern] [--at ADDR]
+okisim xref &lt;rom&gt; &lt;addr&gt; [--max N]
+okisim defs &lt;rom&gt; [--defs f.okidef.json] [--filter text] [--category name]
+okisim get &lt;rom&gt; &lt;name|label|address&gt; [--type u8] [--formula name]
+okisim set &lt;rom&gt; &lt;name|address&gt; &lt;value&gt; [--cell R,C] [--all] [--add X] [--scale X] [--raw]
+okisim formulas [name]
+okisim features &lt;rom&gt; [--apply id,id] [--remove id] [-o out.bin]</code></pre>
+<p><code>set</code> is held to the same safe limits as the editor, and keeps the checksum right.</p>
+
+<footer>Rom Sim Studio 0.0.0.8 · by bmgjet · <a href="licence.html">Licence</a></footer>
+</main></div>
+<script src="guide.js"></script>
+</body>
+</html>

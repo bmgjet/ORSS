@@ -38,7 +38,7 @@ public sealed class Explorer
         while (todo.Count > 0)
         {
             int pc = todo.Pop();
-            while (pc >= 0 && pc < Bus.RomSize && !r.Code.ContainsKey(pc))
+            while (pc >= 0 && pc < Chip.RomSize && !r.Code.ContainsKey(pc))
             {
                 if (r.Code.Count >= maxInstructions) { r.Truncated = true; break; }
                 var d = _p.DecodeAt(pc);
@@ -122,7 +122,7 @@ public sealed class Explorer
     string? RomRef(string part)
     {
         var m = Regex.Match(part, @"[A-Za-z_]\w*");
-        if (m.Success && _p.TryResolve(m.Value, out var a) && a >= 0x38 && a < Bus.RomSize && !_p.IsCode(a) &&
+        if (m.Success && _p.TryResolve(m.Value, out var a) && a >= 0x38 && a < Chip.RomSize && !_p.IsCode(a) &&
             _p.Asm?.Symbols.GetValueOrDefault(m.Value)?.Kind == SymbolKind.Label) return m.Value;
         var n = Regex.Match(part, @"\b0*([0-9A-Fa-f]{3,4})h\b");
         return n.Success ? n.Value : null;
@@ -141,8 +141,8 @@ public sealed class Explorer
             var s = asm?.Symbols.GetValueOrDefault(w);
             if (s == null) continue;
             if (s.Kind == SymbolKind.Sfr) yield return ("sfr", w);
-            else if (s.Value < Bus.RamSize && s.Kind == SymbolKind.Equate) yield return ("ram", $"{w}({s.Value:X3}h)");
-            else if (s.Kind == SymbolKind.Label && s.Value < Bus.RomSize && !_p.IsCode((int)s.Value)) yield return ("rom", w);
+            else if (s.Value < Chip.RamSize && s.Kind == SymbolKind.Equate) yield return ("ram", $"{w}({s.Value:X3}h)");
+            else if (s.Kind == SymbolKind.Label && s.Value < Chip.RomSize && !_p.IsCode((int)s.Value)) yield return ("rom", w);
         }
         // numeric RAM addresses: off(0236h), (001e7h-00180h)[USP], 0d9h, 0404h, N16[X1]
         if (part.StartsWith('#')) yield break;
@@ -152,7 +152,7 @@ public sealed class Explorer
             int v = Convert.ToInt32(num.Groups[1].Value, 16);
             bool off = part.Contains("off", StringComparison.OrdinalIgnoreCase);
             if (!off && v < 0x80 && OkiAssembler.Sfrs.FirstOrDefault(kv => kv.Value == v).Key is string sfr) yield return ("sfr", sfr);
-            else if (v < Bus.RamSize) yield return ("ram", $"{v:X3}h" + (part.Contains('[') ? "[idx]" : ""));
+            else if (v < Chip.RamSize) yield return ("ram", $"{v:X3}h" + (part.Contains('[') ? "[idx]" : ""));
         }
     }
 

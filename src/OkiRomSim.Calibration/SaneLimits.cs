@@ -22,7 +22,7 @@ public static partial class SaneLimits
         {
             case "rpm_period_word": return (0, MaxRpm);
             case "ign_advance": return (-6, 50);                 // past 50 degrees before TDC is misfire, not timing
-            case "p13_advance": return (-6, 50);
+            case "p13_advance": return (-6, 52);                 // stock P13's high-cam maps reach 51.5 at light load
             case "duty_half_pct": return (0, 100);
             // (no limit on tps_pct, ign_trim or the MAP scalings: their raw range is already the real one, and shipped ROMs keep axis and marker values past 0-100 %, +-20 deg and 0 mbar)
             case "volts_5v_byte" or "volts_5v_word" or "p13_volts": return (0, 5);   // the A/D reads 0-5 V

@@ -72,12 +72,12 @@ tach_on:        LB      A, [DP]
                 SJ      tach_done
 tach_port:      CMPB    A, #000h
                 JEQ     tach_done
-                MOV     DP, #003dch            ; P0's masks (outputs 1-3, 7-10)...
+                MOV     DP, #SVC_OVR           ; P0's masks (outputs 1-3, 7-10)...
                 CMPB    A, #004h
                 JLT     tach_have
                 CMPB    A, #007h
                 JGE     tach_have
-                MOV     DP, #003deh            ; ...or P1's (4-6)
+                MOV     DP, #SVC_OVR + 2       ; ...or P1's (4-6)
 tach_have:      L       A, ACC
                 MOV     X2, A
                 LCB     A, mod_out_mask[X2]    ; the pin's bit
@@ -96,7 +96,7 @@ tach_done:      POPS    A
 
 ; Switched off: the pin given back to the ECU (mod_output, which uses bank 7Eh's r4-r6, X2 and DP - saved above).
 tach_release:   PUSHS   LRB
-                MOV     LRB, #0007eh
+                MOV     LRB, #SVC_BANKF
                 CLRB    A
                 LCB     A, tach_output
                 RC

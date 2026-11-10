@@ -27,7 +27,7 @@ if XP == XP_CODE
 ; Tick context: only A is free; DP is kept.
 outtest_tick:
 if OUTTEST < 16
-                LB      A, 0feh
+                LB      A, SVC_TICK
                 JEQ     outtest_go             ; once every 256 ticks (524 ms)
                 RT
 else
@@ -43,9 +43,9 @@ outtest_go:     L       A, DP
                 PUSHS   A
 if OUTTEST < 16
 if OUTTEST < 8
-                MOV     DP, #003dch            ; P0's AND mask: the pin is the test's
+                MOV     DP, #SVC_OVR           ; P0's AND mask (P13: port B's): the pin is the test's
 else
-                MOV     DP, #003deh            ; P1's
+                MOV     DP, #SVC_OVR + 2       ; P1's (P13: port C's)
 endif
                 LB      A, [DP]
                 ANDB    A, #(0ffh - OUTTEST_BIT)

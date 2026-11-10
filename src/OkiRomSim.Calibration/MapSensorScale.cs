@@ -11,6 +11,70 @@ public static class MapSensorScale
 
     const int HtsPreset = 0x60FC, HtsZero = 0x60FD, HtsFull = 0x60FF;
 
+    /// The P13's own sensor: -70 mBar at 0 V, 1790 at 5 V (its ROM reads the A/D's high byte).
+    public static readonly (double Zero, double Full) P13Stock = (-70, 1790);
+    /// The stock sensor for the part the open ROM is for.
+    public static (double Zero, double Full) StockFor => OkiRomSim.Core.Chip.Is66911 ? P13Stock : Stock;
+
+    /// A build for the P13 (its features.inc says PLATFORM_IS_P13): the pressure formulas in the P13's scales - the MAP
+    /// byte its sensor's line, the map load byte the one the ROM builds ((MAP word - 1800h) >> 7). Returns whether it was.
+    public static bool ApplyP13(DefinitionSet defs)
+    {
+        if (!IsP13(defs)) return false;
+        PutP13(defs, P13Stock, P13StockLoad);
+        return true;
+    }
+
+    /// How the P13 skeleton turns its readings into the load byte its base fuel and maps work from (MapLoadGain /
+    /// MapLoadOffset, BaroLoadGain / BaroLoadOffset), and the base fuel's scale that goes with it (MapSensorFuel, 1 = 100 %).
+    public sealed record P13Load(int Gain, int Offset, int BaroGain, int BaroOffset, double Fuel);
+
+    /// The stock P13: (MAP word - 1800h) >> 7, the baro byte's (byte - 18h) x 2, 100 %.
+    public static readonly P13Load P13StockLoad = new(0x200, -48, 0x200, -48, 1.0);
+
+    // the stock load byte's mBar a count, its pressure at count 0, and where the P13's base fuel comes to nothing: it goes
+    // as (load + 26.3), measured in the simulator (40-100 kPa, the fuel maps flat)
+    const double P13Mbar = 1860.0 * 128 / 65535, P13Zero = -70 + 48 * P13Mbar, P13BaseFrom = 26.3;
+
+    /// The load scale for a sensor: the stock one for a sensor that reads no further than the stock one; for a wider one,
+    /// a count of load more mBar, so the byte's 255 is the sensor's top (or as far as a base fuel of 199 % takes it, about
+    /// 2040 mBar) - and the base fuel scaled to match, so it still goes with the pressure as the stock one does.
+    public static P13Load P13LoadScale((double Zero, double Full) sensor)
+    {
+        double pNoFuel = P13Zero - P13BaseFrom * P13Mbar;
+        double m = sensor.Full <= 1800 ? P13Mbar : Math.Clamp((sensor.Full - pNoFuel) / (255 + P13BaseFrom), P13Mbar, 1.99 * P13Mbar);
+        double p0 = pNoFuel + P13BaseFrom * m;                  // the pressure at load 0
+        double span = sensor.Full - sensor.Zero;
+        int gain = (int)Math.Round(65536 * span / (65535 * m)), offset = (int)Math.Round((sensor.Zero - p0) / m);
+        int baroGain = (int)Math.Round(512 * P13Mbar / m), baroOffset = (int)Math.Round((P13Zero - 48 * P13Mbar - p0) / m);
+        return new(gain, offset, baroGain, baroOffset, m / P13Mbar);
+    }
+
+    public static P13Load P13LoadOf(DefinitionSet defs, byte[] rom)
+    {
+        int? Read(string slot) => CalPage.Bound(defs, slot) is { } it ? (int)RomData.Read(defs, rom, it)[0].Value : null;
+        return Read("mapsensor.loadgain") is int g && Read("mapsensor.loadoffset") is int o ? new(g, o, 0, 0, 1) : P13StockLoad;
+    }
+
+    /// A P13 build (its features.inc says PLATFORM_IS_P13).
+    public static bool IsP13(DefinitionSet defs) => defs.Symbols.ContainsKey("PLATFORM_IS_P13");
+
+    /// The P13's pressure formulas for a sensor: its ROM keeps the raw reading, so each is the sensor's own line - the MAP
+    /// byte over 255 counts, the map load byte ((MAP word - 1800h) >> 7) over the word's 65535.
+    static void PutP13(DefinitionSet defs, (double Zero, double Full) s, P13Load load)
+    {
+        static string N(double v) => v.ToString("0.######", CultureInfo.InvariantCulture);
+        double span = Math.Max(1e-6, s.Full - s.Zero);
+        string z = s.Zero < 0 ? $" - {N(-s.Zero)}" : $" + {N(s.Zero)}", mz = s.Zero < 0 ? $" + {N(-s.Zero)}" : $" - {N(s.Zero)}";
+        string note = $"the P13's, for the MAP sensor fitted ({s.Zero:0} .. {s.Full:0} mBar)";
+        Put(defs, new FormulaDef { Name = "map_mbar", Expr = $"x * {N(span)} / 255{z}", Inverse = $"(x{mz}) * 255 / {N(span)}", Unit = "mbar", Decimals = 0, Notes = note });
+        Put(defs, new FormulaDef { Name = "map_kpa", Expr = $"(x * {N(span)} / 255{z}) / 10", Inverse = $"(x * 10{mz}) * 255 / {N(span)}", Unit = "kPa", Decimals = 1, Notes = note });
+        // the load byte: (word x gain) >> 16 + offset, the word the sensor's line - so a count is span x 65536 / (65535 x gain)
+        double per = span * 65536 / (65535.0 * load.Gain);
+        string off = load.Offset < 0 ? $" + {N(-load.Offset)}" : $" - {N(load.Offset)}", moff = load.Offset < 0 ? $" - {N(-load.Offset)}" : $" + {N(load.Offset)}";
+        Put(defs, new FormulaDef { Name = "map_load_axis_mbar", Expr = $"(x{off}) * {N(per)}{z}", Inverse = $"(x{mz}) / {N(per)}{moff}", Unit = "mbar", Decimals = 0, Notes = note });
+    }
+
     /// The pressure formulas written for the stock sensor: their expression, its inverse, and the unit's size in mBar.
     static readonly Dictionary<string, (string Expr, string Inverse, double Unit, string UnitName, int Decimals)> StockForms = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -66,6 +130,7 @@ public static class MapSensorScale
     {
         if (IsHts(rom)) HtsLayout.RefreshMapFormulas(defs, rom);
         if (!CanKeep(defs, rom)) return;
+        if (IsP13(defs)) { PutP13(defs, Of(defs, rom) ?? P13Stock, P13LoadOf(defs, rom)); return; }
         var s = Of(defs, rom) ?? Stock;
         bool stock = Math.Abs(s.Zero - Stock.Zero) < 0.5 && Math.Abs(s.Full - Stock.Full) < 0.5;
         foreach (var (name, f) in StockForms)
@@ -91,7 +156,15 @@ public static class MapSensorScale
         // (a definition that is one of those axes itself is moved with the axis, which knows how a Honda axis ends)
         var cells = defs.Items.Where(i => IsPressure(i.Formula) && !i.Flag && i.Text == null && !axes.ContainsKey(i.Address))
                         .Select(i => (Item: i, Values: RomData.Read(defs, rom, i).Select(c => c.Value).ToArray())).ToList();
-        // the sensor fitted
+        // the sensor fitted (a P13: its load byte's scale and base fuel with it, before the formulas are made from them)
+        string fuelNote = "";
+        if (IsP13(defs) && CalPage.Bound(defs, "mapsensor.loadgain") != null)
+        {
+            var ls = P13LoadScale(to);
+            foreach (var (slot, v) in new[] { ("mapsensor.loadgain", (double)ls.Gain), ("mapsensor.loadoffset", ls.Offset), ("mapsensor.barogain", ls.BaroGain), ("mapsensor.barooffset", ls.BaroOffset), ("mapsensor.fuel", ls.Fuel * 100) })
+                if (CalPage.Bound(defs, slot) is { } it) RomData.Write(defs, rom, it, 0, v);
+            fuelNote = ls.Fuel == 1 ? "" : $"; the load byte reaches {to.Zero + (255 - ls.Offset) * 65536.0 / ls.Gain * (to.Full - to.Zero) / 65535:0} mBar and the base fuel is x {ls.Fuel:0.000} to match (the P13 works its fuel out from the load byte)";
+        }
         if (keep) { Write(defs, rom, to.Zero, to.Full); ApplyFormulas(defs, rom); }
         else ApplyStockAs(defs, to);
         int moved = 0, clipped = 0;
@@ -117,7 +190,7 @@ public static class MapSensorScale
         foreach (var (it, values) in cells)
             for (int i = 0; i < values.Length; i++) RomData.Write(defs, rom, it, i, values[i]);
         if (!keep) ApplyStockAs(defs, Stock);
-        return $"MAP sensor {from.Zero:0}..{from.Full:0} -> {to.Zero:0}..{to.Full:0} mBar: {moved} load breakpoint(s) on {axes.Count} axes and {cells.Count} pressure setting(s) moved to the same real pressures" +
+        return $"MAP sensor {from.Zero:0}..{from.Full:0} -> {to.Zero:0}..{to.Full:0} mBar: {moved} load breakpoint(s) on {axes.Count} axes and {cells.Count} pressure setting(s) moved to the same real pressures" + fuelNote +
                (clipped > 0 ? $", {clipped} at the end of the new sensor's range" : "") +
                (keep ? "" : " (this ROM has nowhere to say which sensor is fitted: its pressures still read on the stock scale)");
     }
@@ -125,6 +198,7 @@ public static class MapSensorScale
     /// A ROM that cannot say which sensor it has: the formulas as if it could, for the length of a swap.
     static void ApplyStockAs(DefinitionSet defs, (double Zero, double Full) s)
     {
+        if (IsP13(defs)) { PutP13(defs, s, P13LoadScale(s)); return; }
         foreach (var (name, f) in StockForms) Put(defs, Composed(name, f, s));
     }
 

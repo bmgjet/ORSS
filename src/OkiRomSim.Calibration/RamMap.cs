@@ -91,6 +91,7 @@ public static partial class RamMap
                 if (!FrameFields.TryGetValue(k, out var f)) continue;
                 int a = W(sk + (k * 2));
                 if (a is 0 or >= 0xFE00) continue;
+                a &= ~0x6000;                 // 4000h / 2000h: the low / high byte of a word (the stream's marks)
                 list.Add(new RamEntry(a, f.Size, f.Name, f.Formula, f.Unit, "datalog frame", $"Byte {k} of the 51-byte datalog frame."));
             }
         }

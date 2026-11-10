@@ -65,7 +65,7 @@ public sealed class NewRomWindow : Window
     static readonly Dictionary<string, int> LastBytes = new(StringComparer.OrdinalIgnoreCase);
 
     static string Key(Skeleton sk, IEnumerable<string> set) =>
-        sk.Path + "|" + string.Join(",", set.Select(d => d.ToUpperInvariant()).Distinct().Order(StringComparer.Ordinal));
+        OkiRomSim.Core.ProcessorProfile.Current.Name + "|" + sk.Path + "|" + string.Join(",", set.Select(d => d.ToUpperInvariant()).Distinct().Order(StringComparer.Ordinal));
 
     SkeletonBuildResult BuildCached(Skeleton sk, IEnumerable<string> set)
     {
@@ -82,6 +82,23 @@ public sealed class NewRomWindow : Window
     readonly RadioButton _existing = new() { Content = "Existing - start from a finished ROM", GroupName = "kind", IsChecked = true, FontWeight = FontWeight.SemiBold };
     readonly RadioButton _create = new() { Content = "Create - a skeleton ROM and only the functions you want", GroupName = "kind", FontWeight = FontWeight.SemiBold };
     readonly Control _existingPanel, _createPanel;
+
+    /// Called with the part a base is for as soon as it is picked (the MSM66911 for the P13, the MSM66207 otherwise), so the app is on that processor from then on.
+    public Action<OkiRomSim.Core.ProcessorProfile>? ProcessorWanted { get; init; }
+
+    /// The part the picked base is for, passed on (Create only).
+    /// A base's builds use the register names of the processor the app is on, so a base for the other part switches it
+    /// first (through the main window, which shows the part; on its own here when nothing is listening), then builds again.
+    void WantProcessor()
+    {
+        if (Current is not { } sk || _create.IsChecked != true) return;
+        var want = OkiRomSim.Core.ProcessorProfile.Builtin(sk.Processor ?? "") ?? OkiRomSim.Core.ProcessorProfile.Msm66207();
+        static bool P13(OkiRomSim.Core.ProcessorProfile p) => p.Name.Equals(OkiRomSim.Core.ProcessorProfile.Msm66911().Name, StringComparison.OrdinalIgnoreCase);
+        if (P13(want) == P13(OkiRomSim.Core.ProcessorProfile.Current)) return;
+        if (ProcessorWanted is { } tell) tell(want); else want.Apply();
+        if (P13(want) != P13(OkiRomSim.Core.ProcessorProfile.Current)) want.Apply();
+        Rebuild();
+    }
 
     public NewRomWindow(ChangeRequest? change = null)
     {
@@ -190,7 +207,7 @@ public sealed class NewRomWindow : Window
         SuggestSaveAs();
     }
 
-    readonly TextBox _saveAs = new() { FontFamily = MainWindow.MonoFont };
+    readonly TextBox _saveAs = new() { FontFamily = UiFonts.Mono };
     string? _suggested;
 
     /// A name for the new ROM in the ROMs folder that is not taken yet - unless one has been typed or browsed to.
@@ -275,15 +292,7 @@ public sealed class NewRomWindow : Window
     }
 
     /// The Templates folder: beside the app, or (running from a source checkout) the one at the repository root.
-    public static string? Templates()
-    {
-        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir != null; dir = dir.Parent)
-        {
-            var t = Path.Combine(dir.FullName, "Templates");
-            if (Directory.Exists(t)) return t;
-        }
-        return null;
-    }
+    public static string? Templates() => AppPaths.Templates();
 
     /// The template's opening comment block is its description, up to a line with "<end>" on it (the text before the marker on that line is kept).
     void Describe()
@@ -350,7 +359,9 @@ public sealed class NewRomWindow : Window
     Control CreatePanel()
     {
         _base.ItemsSource = _skeletons;
-        _base.SelectionChanged += (_, _) => FillFeatures();
+        _base.SelectionChanged += (_, _) => { WantProcessor(); FillFeatures(); };
+        _create.IsCheckedChanged += (_, _) => WantProcessor();
+        Opened += (_, _) => WantProcessor();
         ToolTip.SetTip(_base, "The skeleton to build on. Put another xxx-skeleton.asm (with its xxx-features folder) in the Templates folder to add one.");
 
         var baseRow = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
@@ -459,7 +470,8 @@ public sealed class NewRomWindow : Window
         DockPanel.SetDock(tools, Dock.Top); p.Children.Add(tools);
         DockPanel.SetDock(bottom, Dock.Bottom); p.Children.Add(bottom);
         p.Children.Add(lists);
-        if (_skeletons.Count > 0) _base.SelectedIndex = 0;
+        // the P30 skeleton first, whatever else is in Templates (the P13 one sorts ahead of it by name)
+        if (_skeletons.Count > 0) _base.SelectedIndex = Math.Max(0, _skeletons.FindIndex(s => s.Platform == "P30"));
         return p;
     }
 
@@ -614,6 +626,11 @@ public sealed class NewRomWindow : Window
     internal string SpaceTipForCheck() => _meterTips.TryGetValue("ROM space", out var m) ? ToolTip.GetTip(m.Parts[1])?.ToString() ?? "" : "";
     internal void StockPlusForCheck() => SetAll(f => (f.Stock && f.Define != "FEAT_STOCK_SERIAL") || f.Define is "FEAT_DATALOG" or "FEAT_DLSTREAM" or "FEAT_DLEXTRA" or "FEAT_FLEX" or "FEAT_WBCL" or "FEAT_TRACTION" or "FEAT_GEAR" or "FEAT_LAUNCH" or "FEAT_FTS");
     internal void DefaultForCheck() => SetPreset(SkeletonPresets.Default);
+    internal void BaseForCheck(string platform) => _base.SelectedIndex = _skeletons.FindIndex(s => s.Platform == platform);
+    internal string BaseNameForCheck() => Current?.Platform ?? "";
+    internal void StockForCheck() => SetAll(f => f.Stock);
+    internal string AdviceForCheck() => string.Join(" | ", _advice.Select(a => $"{a.Level}: {a.Title}"));
+    internal bool CanCreateForCheck() => _ok.IsEnabled;
     internal string TickForCheck() => $"{_tickFig.Text} · {_tickText.Text}";
     internal string RamForCheck() => $"{_ramFig.Text} · {_ramText.Text}";
 
@@ -626,7 +643,7 @@ public sealed class NewRomWindow : Window
         if (Current is not { } sk) return;
         _changing = true;
         var chosen = new List<string>();
-        foreach (var d in preset)
+        foreach (var d in SkeletonPresets.ForSkeleton(sk, preset))
             if (sk.Feature(d) != null && sk.Problems([.. chosen, d]).Count == 0) chosen.Add(d);
         foreach (var (d, b) in _boxes) b.IsChecked = chosen.Contains(d, StringComparer.OrdinalIgnoreCase);
         _changing = false;
@@ -722,10 +739,15 @@ public sealed class NewRomWindow : Window
             try
             {
                 await Task.Delay(700, cts.Token);              // ticking several boxes in a row: only the last pick is run
-                var b = sk.Build(chosen);
-                if (cts.IsCancellationRequested || b.Assembly == null) return;
-                var built = IsrTiming.Measure(b.Assembly, allOn: false, cts.Token);
-                var on = built == null ? null : IsrTiming.Measure(b.Assembly, allOn: true, cts.Token);
+                IsrTiming.Result? built, on;
+                if (IsrTimingProcess.SamePart(sk))
+                {
+                    var b = sk.Build(chosen);
+                    if (cts.IsCancellationRequested || b.Assembly == null) return;
+                    built = IsrTiming.Measure(b.Assembly, allOn: false, cts.Token);
+                    on = built == null ? null : IsrTiming.Measure(b.Assembly, allOn: true, cts.Token);
+                }
+                else (built, on) = await IsrTimingProcess.Measure(sk, chosen, cts.Token);   // another part: timed in a process of its own
                 if (built != null) Timings[key] = (built, on);
                 Dispatcher.UIThread.Post(() => { if (!cts.IsCancellationRequested) ShowTick(built == null ? null : (built, on), built == null ? "the ROM did not run in the simulator" : null); });
             }
@@ -742,13 +764,15 @@ public sealed class NewRomWindow : Window
         _tickBar.Value = Math.Min(_tickBar.Maximum, r.TickWorstUs);
         _tickBar.Foreground = r.TickWorstUs > IsrTiming.CautionUs ? Brushes.OrangeRed : r.TickWorstUs > IsrTiming.GoodUs ? Brushes.Goldenrod : AppTheme.Brush(Color.FromRgb(0x4e, 0xa1, 0xff));
         int lost = Math.Max(r.LostTeeth, t.AllOn?.LostTeeth ?? 0);
+        int resets = Math.Max(r.Resets, t.AllOn?.Resets ?? 0);
         _tickFig.Text = $"{r.TickWorstUs:0} us";
         _tickText.Text = "worst tick as built" + (t.AllOn is { } on ? $" · {on.TickWorstUs:0} us with every module on" : "") +
                          $" · interrupts {r.CpuPercent:0} % of the CPU" +
-                         (lost > 0 ? $"\nThe rpm reading failed {lost} time(s) at 7000 rpm{(r.LostTeeth == 0 ? " with every module on" : "")}: too much for the CPU at high rpm - leave something out." : "");
+                         (lost > 0 ? $"\nThe rpm reading failed {lost} time(s) at 7000 rpm{(r.LostTeeth == 0 ? " with every module on" : "")}: too much for the CPU at high rpm - leave something out." : "") +
+                         (resets > 0 ? $"\nThe ECU reset itself {resets} time(s) by {IsrTiming.TopRpm + 200} rpm{(r.Resets == 0 ? " with every module on" : "")}: its own check found the main program starved - too much for the CPU at high rpm, leave something out." : "");
         double worst = t.AllOn?.TickWorstUs ?? r.TickWorstUs;
-        _tickText.Foreground = r.TickWorstUs > IsrTiming.CautionUs || r.LostTeeth > 0 ? DataList.Error
-                             : worst > IsrTiming.CautionUs || r.TickWorstUs > IsrTiming.GoodUs || lost > 0 ? DataList.Warning : DataList.Text;
+        _tickText.Foreground = r.TickWorstUs > IsrTiming.CautionUs || r.LostTeeth > 0 || r.Resets > 0 ? DataList.Error
+                             : worst > IsrTiming.CautionUs || r.TickWorstUs > IsrTiming.GoodUs || lost > 0 || resets > 0 ? DataList.Warning : DataList.Text;
         _tickFig.Foreground = r.TickWorstUs > IsrTiming.CautionUs ? DataList.Error : r.TickWorstUs > IsrTiming.GoodUs ? DataList.Warning : DataList.Text;
     }
 

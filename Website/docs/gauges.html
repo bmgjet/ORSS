@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gauges, graph and widgets — Rom Sim Studio guide</title>
+<link rel="icon" href="../favicon.ico">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<header class="topbar"><button class="menu-btn" aria-label="Contents">☰</button><a class="logo" href="index.html">ROM SIM <b>STUDIO</b></a><span class="sp"></span><span class="links"><a href="../">Website</a> &nbsp;·&nbsp; <a href="../#start">Download</a></span></header>
+<div class="frame"><nav class="side"></nav><main>
+
+<h1>Gauges, graph and widgets</h1>
+<p class="lead">A dashboard of your own for the datalog: on the Datalog panel, or in floating widgets anywhere on the screen.</p>
+
+<h2>The dashboard</h2>
+<p>The gauges sit above the graph or the parameters on the Datalog panel. Each shows one channel of the log — rpm, MAP, AFR, coolant, an aux channel of your own — over the range you give it, with a warning level. Simulator mode and Tuner mode each keep a dashboard of their own.</p>
+<table>
+  <tr><th>Gauge</th><th>Shows</th></tr>
+  <tr><td>Dial</td><td>A round dial with a needle.</td></tr>
+  <tr><td>Arc</td><td>A digital-dash sweep: a thick arc that fills, the number big in the middle.</td></tr>
+  <tr><td>Bar</td><td>A bar that fills up.</td></tr>
+  <tr><td>Number</td><td>The reading as a big number.</td></tr>
+  <tr><td>Light</td><td>A lamp that comes on past the warning level (or below it).</td></tr>
+  <tr><td>Shift lights</td><td>Green, amber, then red as the reading climbs to the warning level; they flash past it.</td></tr>
+  <tr><td>Graph / Bar graph</td><td>The last few seconds as a line or as bars.</td></tr>
+  <tr><td>Text</td><td>A caption on its own, for headings.</td></tr>
+</table>
+<figure><img src="img/gauge-editor.png" alt="The gauge editor"><figcaption>The gauge editor: kind, channel, range, warning level, colours and a picture behind it.</figcaption></figure>
+<p><b>+</b> adds a gauge; double-click one (or ✎) to change it: its kind, channel, range, warning level, colours, and a picture for its face or behind it. Drag gauges to arrange them; <kbd>Delete</kbd> takes the selected one off, and <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd> undo and redo any change to the dashboard. The <b>Dashboard</b> menu saves and loads a layout as a file, and replaces it with a ready-made <b>template</b>.</p>
+<p>Gauges can also be made from the values themselves: pick one or several in the datalog's values list (<kbd>Ctrl</kbd>+click, <kbd>Shift</kbd>+click or drag a box over them), right-click, and <b>Add gauges</b> — or all as dials, bars, numbers, rolling graphs or lamps, or floating in a widget. Each comes with a range to suit its channel, ready to change by double-clicking it.</p>
+<p>The gauges panel zooms on its own with <kbd>Ctrl</kbd> + mouse wheel, without changing the size of the graph or the parameters.</p>
+
+<h2>Widgets</h2>
+<p>The <b>Widgets</b> menu floats gauges in windows of their own, for a second screen or the corner of a laptop's:</p>
+<ul>
+  <li><b>Create widget</b> — the whole dashboard in one window, laid out as it is. Drag it anywhere, resize it (the gauges scale with it), double-click its bar to roll it up.</li>
+  <li><b>Widget of the selected gauge</b> — one gauge on its own.</li>
+  <li><b>Hide / Unhide</b> — out of the way and back exactly where they were.</li>
+  <li><b>Parent to the main window</b> — the widgets sit over the program only, move with it and minimise with it; bring the program back and they are where they were.</li>
+  <li><b>Arrange</b> — line them up in the free space of the main window.</li>
+</ul>
+
+<h2>The graph</h2>
+<p>Below the gauges, the <b>Graph / Parameters</b> toggle picks between a scrolling graph of the chosen channels and the frame's values as a list. <b>Graph…</b> opens the whole log as a graph in a window of its own: any set of channels against time, each on its own scale, with a cursor that reads them all at once and moves the log's position with it. Sets of channels can be saved as templates.</p>
+<figure><img src="img/datalog-graph.png" alt="The datalog graph window"><figcaption>The graph window.</figcaption></figure>
+
+<footer>Rom Sim Studio 0.0.0.8 · by bmgjet · <a href="licence.html">Licence</a></footer>
+</main></div>
+<script src="guide.js"></script>
+</body>
+</html>

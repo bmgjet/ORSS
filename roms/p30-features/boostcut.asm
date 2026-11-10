@@ -28,7 +28,7 @@ if SLOT_BOOSTCUT == TICK_SLOT
 endif
 endif
 if XP == XP_TICK
-                LB      A, 0feh
+                LB      A, SVC_TICK
                 ANDB    A, #00fh
                 CMPB    A, #SLOT_BOOSTCUT
                 JEQ     boostcut_tick_skip
@@ -65,7 +65,7 @@ boostcut_fast:  L       A, DP                  ; (no registers here: these are t
                 MOV     DP, #bc_point
                 LB      A, [DP]
                 JEQ     boostcut_fast_pop      ; off
-                CMPB    0a3h, A                ; MAP - cut point: no borrow once at or above it
+                CMPB    ENG_MAP, A                ; MAP - cut point: no borrow once at or above it
                 JLT     boostcut_fast_pop
                 POPS    A
                 MOV     DP, A
@@ -77,7 +77,7 @@ boostcut_fast_pop:
 
 boostcut_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -89,7 +89,7 @@ boostcut_tick:
                 CMPB    A, #000h
                 JEQ     boostcut_disabled
                 LCB     A, boostcut_ect
-                CMPB    0c1h, A                ; coolant byte - threshold borrows (C) while warmer than it
+                CMPB    ENG_ECT, A                ; coolant byte - threshold borrows (C) while warmer than it
                 LCB     A, boostcut_hot
                 JLT     boostcut_have
                 LCB     A, boostcut_cold
@@ -106,14 +106,14 @@ endif
                 JNE     boostcut_cutting
                 CLRB    A
                 LB      A, r4
-                CMPB    0a3h, A                ; MAP - cut point: no borrow once at or above it
+                CMPB    ENG_MAP, A                ; MAP - cut point: no borrow once at or above it
                 JLT     boostcut_off
                 SJ      boostcut_on
 boostcut_cutting:
                 CLRB    A
                 LB      A, r4
                 SUBB    A, #003h               ; back in about 20 mbar under the cut point
-                CMPB    0a3h, A
+                CMPB    ENG_MAP, A
                 JLT     boostcut_off
 boostcut_on:    MOV     X1, #boostcut_block
                 L       A, #MB_BOOSTCUT

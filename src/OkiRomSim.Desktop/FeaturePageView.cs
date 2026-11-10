@@ -12,7 +12,7 @@ namespace OkiRomSim.Desktop;
 /// One feature of the ECU on a page of its own, laid out the way the established tuning software lays it out: the input and output it is wired to in one box, the window of conditions that switches it in a two-column Minimum / Maximum grid, and the options as tick boxes underneath. Each row is bound to one of the ROM's definitions. That binding is what makes the page work on any ROM: the names in a disassembled image are not the ones a page could look for, so the page says what it needs ("the minimum rpm for GPO 1") and the binding says where that lives. The first time a page is opened the bindings are guessed from the names, and every row shows - and can change - the definition behind it.
 public sealed class FeaturePageView : UserControl
 {
-    readonly SimHost _host;
+    readonly AppHost _host;
     readonly CalPage _page;
     readonly Action<string> _status;
     readonly Action<ItemDef> _openTable;
@@ -25,7 +25,7 @@ public sealed class FeaturePageView : UserControl
     /// Show only valid: the rows this ROM has nothing for (no definition bound) are left off, and a box left empty goes.
     readonly bool _validOnly;
 
-    public FeaturePageView(SimHost host, CalPage page, Action<string> status, Action<ItemDef> openTable, bool validOnly = false)
+    public FeaturePageView(AppHost host, CalPage page, Action<string> status, Action<ItemDef> openTable, bool validOnly = false)
     {
         _host = host; _page = page; _status = status; _openTable = openTable; _validOnly = validOnly;
         Build();
@@ -226,7 +226,7 @@ public sealed class FeaturePageView : UserControl
     /// button when it does not (the ECU would reset on it with the check switched on).
     Control WithChecksum(Control row, CheckBox on)
     {
-        var line = new TextBlock { FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, FontFamily = MainWindow.MonoFont };
+        var line = new TextBlock { FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, FontFamily = UiFonts.Mono };
         var fix = Btn("Recalculate", () =>
         {
             _status(_host.RecalculateChecksum());
@@ -364,7 +364,7 @@ public sealed class FeaturePageView : UserControl
                     {
                         Width = 130, Minimum = (decimal)Math.Max(-1e9, slo), Maximum = (decimal)Math.Min(1e9, shi),
                         Increment = (decimal)Math.Round(step * Units.ScaleOf(fu), 6), Value = (decimal)Math.Round(double.IsFinite(c.Value) ? S(c.Value) : 0, 6),
-                        FormatString = "0." + new string('#', Math.Clamp(f.Decimals, 0, 6)), FontFamily = MainWindow.MonoFont,
+                        FormatString = "0." + new string('#', Math.Clamp(f.Decimals, 0, 6)), FontFamily = UiFonts.Mono,
                     };
                     nud.ValueChanged += (_, e) =>
                     {
@@ -408,7 +408,7 @@ public sealed class FeaturePageView : UserControl
         if (it.Text == "watermark") return RomPasswordUi.WatermarkEditor(_host, it, () => TopLevel.GetTopLevel(this) as Window, _status);
         bool wm = it.Text == "watermark";
         int len = wm ? WatermarkCodec.Length : it.Count;
-        var box = new TextBox { MaxLength = len, FontFamily = MainWindow.MonoFont, VerticalAlignment = VerticalAlignment.Center };
+        var box = new TextBox { MaxLength = len, FontFamily = UiFonts.Mono, VerticalAlignment = VerticalAlignment.Center };
         var state = new TextBlock { FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0) };
         void Show()
         {

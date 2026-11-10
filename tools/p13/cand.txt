@@ -1,0 +1,242 @@
+L705    L       A, #031cch                       imm 31CC  inside code L5842                  READ
+L707    MOV     er0, #005a9h                     imm 05A9  inside code L785                   READ
+L1039   L       A, #05555h                       imm 5555  inside data L9396                  READ
+L1041   CMP     SSP, #05555h                     imm 5555  inside data L9396                  READ
+L1101   L       A, #05555h                       imm 5555  inside data L9396                  READ
+L1126   MOV     [DP], #05555h                    imm 5555  inside data L9396                  READ
+L1127   CMP     [DP], #05555h                    imm 5555  inside data L9396                  READ
+L1204   CMP     USP, #00480h                     imm 0480  inside code L658                   READ
+L1206   MOV     USP, #00480h                     imm 0480  inside code L658                   READ
+L1248   MOV     X1, #011c1h                      imm 11C1  inside code L2137                  READ
+L1258   MOV     DP, #07ffeh                      imm 7FFE  nothing                            -
+L1272   LCB     A, 07ff1h                        adr 7FF1  nothing                            READ
+L1292   LCB     A, 07ff1h                        adr 7FF1  nothing                            READ
+L1294   LCB     A, 07ff3h                        adr 7FF3  nothing                            READ
+L1309   LCB     A, 07ff1h                        adr 7FF1  nothing                            READ
+L1427   LC      A, 0555ah                        adr 555A  inside data L9397                  READ
+L1480   L       A, #04d00h                       imm 4D00  inside code L8958                  READ
+L1548   L       A, #05555h                       imm 5555  inside data L9396                  READ
+L1560   MOV     [DP], #05555h                    imm 5555  inside data L9396                  READ
+L1570   CMP     X1, #05555h                      imm 5555  inside data L9396                  READ
+L1609   LCB     A, 07ff1h                        adr 7FF1  nothing                            READ
+L1627   CMP     A, #05ff6h                       imm 5FF6  label calchecksum_loop_tbl         READ
+L1670   CMP     A, #007f6h                       imm 07F6  inside code L1062                  READ
+L1692   CMP     A, #0141bh                       imm 141B  inside code L2415                  READ
+L1695   MOV     IE, #05555h                      imm 5555  inside data L9396                  READ
+L1701   CMP     X1, #05555h                      imm 5555  inside data L9396                  READ
+L1731   L       A, #05555h                       imm 5555  inside data L9396                  READ
+L1746   CMP     A, #05555h                       imm 5555  inside data L9396                  READ
+L1867   LCB     A, 07ff1h                        adr 7FF1  nothing                            READ
+L1870   LCB     A, 07ff2h                        adr 7FF2  nothing                            READ
+L1919   LCB     A, 07ff3h                        adr 7FF3  nothing                            READ
+L1978   LCB     A, 07ff1h                        adr 7FF1  nothing                            READ
+L1980   LCB     A, 07ff3h                        adr 7FF3  nothing                            READ
+L2071   L       A, #0124fh                       imm 124F  inside code L2199                  READ
+L2073   L       A, #01d4ch                       imm 1D4C  inside code L3433                  READ
+L2098   LC      A, 05558h                        adr 5558  inside data L9396                  READ
+L2246   MOV     X1, #05086h                      imm 5086  inside data L9227                  READ
+L2247   MOV     X2, #05094h                      imm 5094  inside data L9229                  READ
+L2250   MOV     X1, #050a2h                      imm 50A2  inside data L9231                  READ
+L2251   MOV     X2, #050b0h                      imm 50B0  inside data L9232                  READ
+L2261   MOV     X1, #05072h                      imm 5072  inside data L9225                  READ
+L2300   MOV     X1, #051c1h                      imm 51C1  inside data L9267                  READ
+L2304   MOV     X1, #051cfh                      imm 51CF  inside data L9268                  READ
+L2308   MOV     X1, #051ddh                      imm 51DD  inside data L9270                  READ
+L2312   MOV     X1, #051ebh                      imm 51EB  inside data L9272                  READ
+L2316   MOV     X1, #051f9h                      imm 51F9  inside data L9274                  READ
+L2322   MOV     X1, #05207h                      imm 5207  inside data L9275                  READ
+L2326   MOV     X1, #0534ah                      imm 534A  inside data L9316                  READ
+L2330   MOV     X1, #05356h                      imm 5356  inside data L9317                  READ
+L2334   MOV     X1, #05364h                      imm 5364  inside data L9319                  READ
+L2375   MOV     X1, #0528bh                      imm 528B  inside data L9292                  READ
+L2387   MOV     X1, #0545fh                      imm 545F  inside data L9365                  READ
+L2389   MOV     X1, #0547ah                      imm 547A  inside data L9369                  READ
+L2394   MOV     X1, #054cbh                      imm 54CB  inside data L9379                  READ
+L2396   MOV     X1, #054e6h                      imm 54E6  inside data L9382                  READ
+L2406   MOV     X1, #055dah                      imm 55DA  inside data L9413                  READ
+L2412   AND     A, #02074h                       imm 2074  inside code L3828                  READ
+L2434   MOV     X1, #05532h                      imm 5532  inside data L9392                  READ
+L2447   L       A, #00a77h                       imm 0A77  inside code L1330                  READ
+L2450   MOV     X1, #0551dh                      imm 551D  inside data L9389                  READ
+L2455   L       A, #00945h                       imm 0945  inside code L1201                  READ
+L2459   MOV     X1, #0550fh                      imm 550F  inside data L9387                  READ
+L2461   MOV     X1, #05501h                      imm 5501  inside data L9386                  READ
+L2480   MOV     X1, #05495h                      imm 5495  inside data L9372                  READ
+L2482   MOV     X1, #054b0h                      imm 54B0  inside data L9375                  READ
+L2493   LC      A, 0555ah                        adr 555A  inside data L9397                  READ
+L2495   LC      A, 05558h                        adr 5558  inside data L9396                  READ
+L2497   MOV     X1, #05397h                      imm 5397  inside data L9325                  READ
+L2499   MOV     X1, #053a5h                      imm 53A5  inside data L9327                  READ
+L2503   MOV     X1, #053b3h                      imm 53B3  inside data L9329                  READ
+L2505   MOV     X1, #053c1h                      imm 53C1  inside data L9331                  READ
+L2530   MOV     X1, #0540bh                      imm 540B  label revlimit_p2_reset_540b       READ
+L2531   MOV     X2, #0540fh                      imm 540F  label revlimit_p2_set_540f         READ
+L2533   MOV     X1, #05403h                      imm 5403  label revlimit_p1_reset_5403       READ
+L2534   MOV     X2, #05407h                      imm 5407  label revlimit_p1_set_5407         READ
+L2542   LC      A, 05403h                        adr 5403  label revlimit_p1_reset_5403       READ
+L2544   LC      A, 05407h                        adr 5407  label revlimit_p1_set_5407         READ
+L2548   MOV     X1, #0540bh                      imm 540B  label revlimit_p2_reset_540b       READ
+L2549   MOV     X2, #0540fh                      imm 540F  label revlimit_p2_set_540f         READ
+L2551   MOV     X1, #05403h                      imm 5403  label revlimit_p1_reset_5403       READ
+L2552   MOV     X2, #05407h                      imm 5407  label revlimit_p1_set_5407         READ
+L2582   MOV     X1, #052e3h                      imm 52E3  inside data L9303                  READ
+L2586   MOV     X1, #05346h                      imm 5346  inside data L9315                  READ
+L2590   MOV     X1, #05287h                      imm 5287  inside data L9291                  READ
+L2597   MOV     X1, #053ffh                      imm 53FF  inside data L9338                  READ
+L2620   MOV     X1, #05215h                      imm 5215  inside data L9277                  READ
+L2643   MOV     X1, #055c1h                      imm 55C1  inside data L9410                  READ
+L2679   LCB     A, 05176h[ACC]                   adr 5176  inside data L9257                  READ
+L2694   CMP     (00160h-00180h)[USP], #05d80h    imm 5D80  label sensor_bank_gate3_tbl_3      READ
+L2704   CMP     [DP], #06566h                    imm 6566  label fueltbl_range_check_tbl      READ
+L2711   MOV     X1, #0523fh                      imm 523F  inside data L9282                  READ
+L2715   MOV     X1, #05243h                      imm 5243  inside data L9283                  READ
+L2904   MOV     X1, #0502ch                      imm 502C  inside data L9216                  READ
+L2908   MOV     X1, #052fbh                      imm 52FB  inside data L9306                  READ
+L2958   LCB     A, 07ff0h                        adr 7FF0  inside data L10878                 READ
+L2984   LC      A, 05413h[ACC]                   adr 5413  inside data L9356                  READ
+L3000   LCB     A, 07ff0h                        adr 7FF0  inside data L10878                 READ
+L3048   MOV     X1, #0542bh                      imm 542B  inside data L9359                  READ
+L3051   MOV     X1, #05443h                      imm 5443  inside data L9362                  READ
+L3071   LCB     A, 07ff1h                        adr 7FF1  nothing                            READ
+L3077   LCB     A, 07ff0h                        adr 7FF0  inside data L10878                 READ
+L3107   LCB     A, 07ff1h                        adr 7FF1  nothing                            READ
+L3243   CMP     (00172h-00180h)[USP], #005d7h    imm 05D7  inside code L810                   READ
+L3461   MOV     [DP], #00bb3h                    imm 0BB3  inside code L1459                  READ
+L3495   MOV     (00172h-00180h)[USP], #00bb3h    imm 0BB3  inside code L1459                  READ
+L3587   AND     A, #014f1h                       imm 14F1  label vemapscalar_gate_load_ram0d9 READ
+L3619   AND     IRQ, #00600h                     imm 0600  inside code L830                   READ
+L3622   MOV     IE, #0141bh                      imm 141B  inside code L2415                  READ
+L3635   MOV     er0, #04d00h                     imm 4D00  inside code L8958                  READ
+L3774   CMP     A, #00ea6h                       imm 0EA6  inside code L1775                  READ
+L3818   MOV     X1, #050f0h                      imm 50F0  inside data L9240                  READ
+L3968   MOV     DP, #051ach                      imm 51AC  inside data L9264                  READ
+L3969   MOV     X1, #051b3h                      imm 51B3  inside data L9265                  READ
+L4087   MOV     X1, #05372h                      imm 5372  inside data L9321                  READ
+L4097   MOV     X1, #05376h                      imm 5376  inside data L9321                  READ
+L4204   MOV     X1, #050c8h                      imm 50C8  inside data L9235                  READ
+L4206   MOV     X1, #050dch                      imm 50DC  inside data L9238                  READ
+L4227   MOV     X1, #05082h                      imm 5082  inside data L9227                  READ
+L4241   MOV     X1, #050beh                      imm 50BE  inside data L9234                  READ
+L4286   MOV     X1, #0507eh                      imm 507E  inside data L9226                  READ
+L4309   MOV     DP, #0517bh                      imm 517B  inside data L9258                  READ
+L4313   MOV     DP, #0518fh                      imm 518F  inside data L9260                  READ
+L4355   MOV     X1, #0515ah                      imm 515A  inside data L9254                  READ
+L4369   MOV     X1, #05168h                      imm 5168  inside data L9255                  READ
+L4523   MOV     X1, #05046h                      imm 5046  inside data L9219                  READ
+L4532   MOV     X1, #05000h                      imm 5000  inside data L9210                  READ
+L4565   MOV     DP, #0511eh                      imm 511E  inside data L9246                  READ
+L4569   MOV     DP, #05146h                      imm 5146  inside data L9251                  READ
+L4757   L       A, #01d4ch                       imm 1D4C  inside code L3433                  READ
+L4759   L       A, #00b45h                       imm 0B45  inside code L1413                  READ
+L4970   MOV     X1, #0537ah                      imm 537A  inside data L9322                  READ
+L4979   MOV     X1, #05393h                      imm 5393  inside data L9325                  READ
+L5050   MOV     X1, #0522ah                      imm 522A  inside data L9280                  READ
+L5054   MOV     er2, #02000h                     imm 2000  inside code L3772                  READ
+L5092   L       A, #07000h                       imm 7000  label tipin_gate_common_if_ram130_bit6_set READ
+L5097   L       A, #00b00h                       imm 0B00  inside code L1384                  READ
+L5107   CMP     er0, #02000h                     imm 2000  inside code L3772                  READ
+L5126   L       A, #02000h                       imm 2000  inside code L3772                  READ
+L5176   MOV     X1, #05267h                      imm 5267  inside data L9287                  READ
+L5195   MOV     X1, #05277h                      imm 5277  inside data L9289                  READ
+L5417   MOV     X1, #053cfh                      imm 53CF  inside data L9332                  READ
+L5419   MOV     X1, #053e7h                      imm 53E7  inside data L9335                  READ
+L5421   MOV     X1, #053dbh                      imm 53DB  inside data L9334                  READ
+L5423   MOV     X1, #053f3h                      imm 53F3  inside data L9337                  READ
+L5573   L       A, #052b3h                       imm 52B3  inside data L9297                  READ
+L5574   MOV     X1, #052c1h                      imm 52C1  inside data L9299                  READ
+L5576   L       A, #05297h                       imm 5297  inside data L9293                  READ
+L5577   MOV     X1, #052a5h                      imm 52A5  inside data L9295                  READ
+L5616   MOV     X1, #053dbh                      imm 53DB  inside data L9334                  READ
+L5618   MOV     X1, #053cfh                      imm 53CF  inside data L9332                  READ
+L5621   MOV     X1, #053f3h                      imm 53F3  inside data L9337                  READ
+L5623   MOV     X1, #053e7h                      imm 53E7  inside data L9335                  READ
+L5731   MOV     X1, #051b9h                      imm 51B9  inside data L9266                  READ
+L5747   MOV     X1, #052efh                      imm 52EF  inside data L9304                  READ
+L6035   L       A, #07fffh                       imm 7FFF  nothing                            -
+L6060   MOV     X1, #052dfh                      imm 52DF  inside data L9302                  READ
+L6088   AND     A, #01420h                       imm 1420  inside code L2417                  READ
+L6167   LCB     A, 051a3h[DP]                    adr 51A3  inside data L9263                  READ
+L6454   CMP     A, #02dfeh                       imm 2DFE  inside code L5422                  READ
+L6456   MOV     er0, #01000h                     imm 1000  inside code L1941                  READ
+L6457   CMP     A, #00499h                       imm 0499  label crank_a0_update_set_ram09f_bit5 READ
+L6459   MOV     er0, #04000h                     imm 4000  inside code L7424                  READ
+L6555   MOV     X1, #050fah                      imm 50FA  inside data L9242                  READ
+L6559   MOV     X1, #05102h                      imm 5102  inside data L9243                  READ
+L6740   MOV     X2, #00800h                      imm 0800  inside code L1067                  READ
+L6747   L       A, #00550h                       imm 0550  label injtimer_countdown_store_load_tbl_x1 READ
+L6857   L       A, #04e20h                       imm 4E20  label int_break_sub_load_ram07b    READ
+L6921   L       A, #01000h                       imm 1000  inside code L1941                  READ
+L6923   L       A, #01c00h                       imm 1C00  inside code L3296                  READ
+L6925   L       A, #02b00h                       imm 2B00  inside code L5077                  READ
+L6927   L       A, #03fffh                       imm 3FFF  inside code L7424                  READ
+L6936   MOV     X1, #055a5h                      imm 55A5  inside data L9406                  READ
+L6948   MOV     X1, #055afh                      imm 55AF  inside data L9407                  READ
+L6951   MOV     X1, #0559bh                      imm 559B  inside data L9405                  READ
+L6977   AND     A, #02054h                       imm 2054  inside code L3815                  READ
+L7019   ADD     A, #00500h                       imm 0500  inside code L712                   READ
+L7029   MOV     X1, #055d0h                      imm 55D0  inside data L9411                  READ
+L7049   MOV     off(00248h), #00c00h             imm 0C00  inside code L1498                  READ
+L7081   MOV     X1, #055f5h                      imm 55F5  inside data L9416                  READ
+L7196   AND     A, #02054h                       imm 2054  inside code L3815                  READ
+L7210   MOV     X1, #0555ch                      imm 555C  inside data L9397                  READ
+L7221   MOV     X1, #0556ah                      imm 556A  inside data L9399                  READ
+L7227   MOV     X1, #0557fh                      imm 557F  inside data L9401                  READ
+L7231   MOV     X1, #0558dh                      imm 558D  inside data L9403                  READ
+L7238   MOV     er0, #02000h                     imm 2000  inside code L3772                  READ
+L7282   L       A, #02000h                       imm 2000  inside code L3772                  READ
+L7288   AND     A, #02054h                       imm 2054  inside code L3815                  READ
+L7332   LC      A, 05558h                        adr 5558  inside data L9396                  READ
+L7348   MOV     X1, #05550h                      imm 5550  inside data L9395                  READ
+L7352   MOV     X1, #0554dh                      imm 554D  inside data L9395                  READ
+L7371   MOV     X1, #05547h                      imm 5547  inside data L9394                  READ
+L7374   MOV     X1, #0554ah                      imm 554A  inside data L9395                  READ
+L7435   SUB     A, #00600h                       imm 0600  inside code L830                   READ
+L7447   ADD     A, #01800h                       imm 1800  inside code L2820                  READ
+L7536   MOV     DP, #05554h                      imm 5554  inside data L9396                  READ
+L7556   MOV     er3, #00900h                     imm 0900  inside code L1166                  READ
+L7563   LC      A, 05558h                        adr 5558  inside data L9396                  READ
+L7565   LC      A, 0555ah                        adr 555A  inside data L9397                  READ
+L7612   L       A, #07fffh                       imm 7FFF  nothing                            -
+L7622   MOV     er3, #04000h                     imm 4000  inside code L7424                  READ
+L7661   MOV     er1, #01107h                     imm 1107  inside code L2059                  READ
+L7671   LCB     A, 07ff1h                        adr 7FF1  nothing                            READ
+L7709   MOV     er1, #02b20h                     imm 2B20  inside code L5091                  READ
+L7733   LCB     A, 07ff1h                        adr 7FF1  nothing                            READ
+L8011   L       A, #07fffh                       imm 7FFF  nothing                            -
+L8274   LC      A, 05247h                        adr 5247  inside data L9283                  READ
+L8296   MOV     er2, #006f7h                     imm 06F7  inside code L937                   READ
+L8300   MOV     er2, #00767h                     imm 0767  inside code L998                   READ
+L8306   DW  00acfh                               adr 0ACF  inside code L1361                  READ
+L8316   L       A, #05249h                       imm 5249  inside data L9284                  READ
+L8318   L       A, #05253h                       imm 5253  inside data L9285                  READ
+L8333   L       A, #00a00h                       imm 0A00  inside code L1284                  READ
+L8370   LC      A, 05247h                        adr 5247  inside data L9283                  READ
+L8380   L       A, #0525dh                       imm 525D  inside data L9286                  READ
+L8382   L       A, #05262h                       imm 5262  inside data L9287                  READ
+L8512   MOV     X1, #0532eh                      imm 532E  inside data L9312                  READ
+L8537   ADD     X1, #05310h                      imm 5310  inside data L9308                  READ
+L8553   SUB     A, #01140h                       imm 1140  inside code L2080                  READ
+L8590   MOV     DP, #01000h                      imm 1000  inside code L1941                  READ
+L8659   LC      A, 05558h                        adr 5558  inside data L9396                  READ
+L8661   LC      A, 0555ah                        adr 555A  inside data L9397                  READ
+L8903   LC      A, 05558h                        adr 5558  inside data L9396                  READ
+L8905   LC      A, 0555ah                        adr 555A  inside data L9397                  READ
+L8975   L       A, #00bb3h                       imm 0BB3  inside code L1459                  READ
+L9006   AND     A, #00fffh                       imm 0FFF  inside code L1940                  READ
+L9046   L       A, #0141bh                       imm 141B  inside code L2415                  READ
+L9052   MOV     IE, #0141bh                      imm 141B  inside code L2415                  READ
+L9056   MOV     IE, #0141bh                      imm 141B  inside code L2415                  READ
+L9151   L       A, #02000h                       imm 2000  inside code L3772                  READ
+L9153   LC      A, 03d2bh                        adr 3D2B  inside data L7105                  READ
+L9157   LCB     A, 03d38h                        adr 3D38  inside data L7109                  READ
+L9173   LCB     A, 0145bh                        adr 145B  inside code L2437                  READ
+L9175   LCB     A, 01470h                        adr 1470  inside code L2445                  READ
+L9961   DW  05858h                               adr 5858  inside data L9497                  READ
+L10108  MOV     er2, #006f7h                     imm 06F7  inside code L937                   READ
+L10130  MOV     X1, #053dbh                      imm 53DB  inside data L9334                  READ
+L10132  MOV     X1, #053cfh                      imm 53CF  inside data L9332                  READ
+L10252  AND     A, #074fdh                       imm 74FD  label vss_clamp_common_tbl         READ
+L10313  L       A, #07fffh                       imm 7FFF  nothing                            -
+L10324  L       A, #07fffh                       imm 7FFF  nothing                            -
+L10349  L       A, #07fffh                       imm 7FFF  nothing                            -
+L10353  L       A, #07fffh                       imm 7FFF  nothing                            -

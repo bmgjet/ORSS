@@ -5,6 +5,7 @@
 ;> category: Diagnostics
 ;> conflicts: FEAT_STOCK_SERIAL
 ;> ram: 374h-377h, 3E0h-3EFh
+;> shares: 374h-377h (the HTS frame's link RAM, datalog.asm's DL_LOW / DL_KEEP: one frame goes out at a time)
 ;> about: Logging only what you need, as fast as the line allows: the logger says which channels it wants
 ;>        and the ECU streams them back in frames stamped with its own 2.048 ms tick (Datalogging >
 ;>        Channels… picks them). Fast channels go in every frame; slow ones (temperatures, battery, codes)
@@ -16,7 +17,8 @@
 ; Channel stream protocol
 ;   7Eh                          identify: 7Eh, version 04h, channels in the table, what else is built in (bit 0
 ;                                fast and slow channels (74h), 1 serial inputs, 2 memory read, 3 service
-;                                commands, 4 slow ranges, 5 remote control commands), checksum (the five bytes sum to 00h)
+;                                commands, 4 slow ranges, 5 remote control commands, 6 the trigger pattern log), checksum (the five
+;                                bytes sum to 00h)
 ;   75h N F c1 .. c(N-1) chk     (version 4) the channels as a list: N its length (F's byte counted, 16 at most),
 ;                                F how many of them are fast, then the fast channel numbers, then the slow ones. chk
 ;                                makes N, the list and it sum to 00h. Answer 75h or 7Fh. The least work a byte: the
@@ -41,12 +43,11 @@
 ifdef FEAT_DLSTREAM
 
 if XP == XP_DEFS
-DL_NEWN         EQU     00374h          ; the list: its length (bits 0-5); bit 7: channel numbers (73h, 74h), not
+DL_NEWN         EQU     DL_LOW          ; the list: its length (bits 0-5); bit 7: channel numbers (73h, 74h), not
                                         ; addresses; bit 6: the two masks (74h)
-DL_RXSUM        EQU     00375h          ; a list's checksum while it comes in; streaming version 4, the slow channel
-DL_TICK         EQU     00376h          ; tick word latched when a frame starts (then datalog.asm's word kept)
+DL_RXSUM        EQU     DL_LOW + 1      ; a list's checksum while it comes in; streaming version 4, the slow channel
+DL_TICK         EQU     DL_LOW + 2      ; tick word latched when a frame starts (then datalog.asm's word kept)
 DL_LIST         EQU     003e0h          ; the channel addresses, a word each (70h), channel numbers (73h), or the
-                                        ; fast mask (3E0h-3E7h) and the slow one (3E8h-3EFh) (74h)
 if defined(FEAT_DLEXTRA)
 DL_NCHANNELS    EQU     188             ; entries in dl_channels (dlextra.asm adds 53-131, and 132-187: every byte of module RAM)
 else
@@ -71,6 +72,11 @@ if defined(FEAT_REMOTE)
 DL_CAP_RC       EQU     020h
 else
 DL_CAP_RC       EQU     000h
+endif
+if defined(FEAT_TRIGLOG)
+DL_CAP_TRG      EQU     040h
+else
+DL_CAP_TRG      EQU     000h
 endif
 endif
 
@@ -212,7 +218,7 @@ dl_next_notm:   MB      C, [DP].5
 dl_next_v3:     LB      A, r3
                 JNE     dl_next_s1
                 MOV     DP, #DL_TICK           ; frame start: latch the tick
-                L       A, 0feh
+                L       A, SVC_TICK
                 ST      A, [DP]
                 LB      A, #0a5h
                 J       dl_next_put
@@ -290,7 +296,7 @@ dl_next_idok:   L       A, ACC
 dl4_next:       LB      A, r3
                 JNE     dl4_n1
                 MOV     DP, #DL_TICK           ; frame start: latch the tick
-                L       A, 0feh
+                L       A, SVC_TICK
                 ST      A, [DP]
                 LB      A, #0a5h
                 J       dl_next_put
@@ -520,7 +526,7 @@ dl5_tx:         MOV     DP, #DL_NEWN
                 CMPB    A, #001h
                 JEQ     dl5_tx_tlo
                 JGE     dl5_tx_thi
-                L       A, 0feh
+                L       A, SVC_TICK
                 ST      A, [DP]
                 LB      A, #0a5h
                 SJ      dl5_tx_put
@@ -589,7 +595,7 @@ dl5_tx_long:    J       dl_tx_any
 dl5_next:       LB      A, r3
                 JNE     dl5_n1
                 MOV     DP, #DL_TICK           ; frame start: latch the tick
-                L       A, 0feh
+                L       A, SVC_TICK
                 ST      A, [DP]
                 LB      A, #0a5h
                 J       dl_next_put
@@ -701,7 +707,7 @@ dl4_chan_ok:    L       A, ACC
                 J       dl_fetch               ; (its RT is this one's)
 
 ;@ DatalogIdent type=u8 count=4 formula=raw category="Internal" desc="Datalog: the answer to the channel-stream identify command (not a tuning value)."
-dl_ident:       DB      07eh, 004h, DL_NCHANNELS, 001h | DL_CAP_IN | DL_CAP_MEM | DL_CAP_SVC | DL_CAP_RC | 010h
+dl_ident:       DB      07eh, 004h, DL_NCHANNELS, 001h | DL_CAP_IN | DL_CAP_MEM | DL_CAP_SVC | DL_CAP_RC | DL_CAP_TRG | 010h
 if defined(FEAT_DLEXTRA)
 ;@ DatalogChannels type=u16 count=188 formula=raw category="Internal" desc="Datalog: what each channel number of the stream sends (the app has the same list; not a tuning value). An address, or as the 20h frame's table: 4000h + a word's low byte, 2000h + its high byte."
 else
@@ -747,6 +753,8 @@ if defined(FEAT_DLEXTRA)
                 DW  00124h, 00125h, 00126h, 00216h, 00217h              ; 118 flags 124h-126h, 216h, 217h
                 DW  00227h, 01000h, 01001h, 01002h, 01003h              ; 123 flags 227h, the addresses you pick (DatalogUserAddress 1-4)...
                 DW  01004h, 01005h, 01006h, 01007h                      ; 128 ...5-8
+endif
+if defined(FEAT_DLEXTRA)
 ; 132-187: every byte of module RAM, where each function keeps its state (the app names them from the build's symbols)
                 DW  MOD_RAM_BASE + 0, MOD_RAM_BASE + 1, MOD_RAM_BASE + 2, MOD_RAM_BASE + 3, MOD_RAM_BASE + 4, MOD_RAM_BASE + 5, MOD_RAM_BASE + 6, MOD_RAM_BASE + 7 ; 132 module RAM +0..+7
                 DW  MOD_RAM_BASE + 8, MOD_RAM_BASE + 9, MOD_RAM_BASE + 10, MOD_RAM_BASE + 11, MOD_RAM_BASE + 12, MOD_RAM_BASE + 13, MOD_RAM_BASE + 14, MOD_RAM_BASE + 15 ; 140 module RAM +8..+15

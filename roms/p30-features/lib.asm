@@ -40,18 +40,18 @@ if XP == XP_DEFS
 ifndef NEED_SPARKCUT
 define NEED_SPARKCUT
 endif
-MOD_OUTSTATE    EQU     001f1h          ; bits: 0 IAB, 1 rpm switch, 2 warning lamp, 3 tach, 4-6 GIO 1-3, 7 spare
-MOD_FUELWANT    EQU     001f2h          ; word: a bit per limiter that wants fuel cut
-MOD_SPARKWANT   EQU     001f4h          ; word: a bit per limiter that wants spark cut
-MOD_FLAGS       EQU     001f6h          ; bits: 0 anti-start locked, 1 anti-start checked, 3 smart alternator taken, 4 A/C cut taken, 5 anti-stall taken, 6 tach holds its pin; 2, 7 spare
+MOD_OUTSTATE    EQU     SVC_MODLIB          ; bits: 0 IAB, 1 rpm switch, 2 warning lamp, 3 tach, 4-6 GIO 1-3, 7 spare
+MOD_FUELWANT    EQU     SVC_MODLIB + 1          ; word: a bit per limiter that wants fuel cut
+MOD_SPARKWANT   EQU     SVC_MODLIB + 3          ; word: a bit per limiter that wants spark cut
+MOD_FLAGS       EQU     SVC_MODLIB + 5          ; bits: 0 anti-start locked, 1 anti-start checked, 3 smart alternator taken, 4 A/C cut taken, 5 anti-stall taken, 6 tach holds its pin; 2, 7 spare
 MOD_PAGE0       EQU     000fdh          ; bits: 0 secondary maps on, 1 decel pops on, 2 anti-stall on, 3 rolling idle on
-MOD_SPARE       EQU     001f7h          ; (the datalog service commands' flags, dlservice.asm)
+MOD_SPARE       EQU     SVC_MODLIB + 6          ; (the datalog service commands' flags, dlservice.asm)
 MOD_FUELSUM     EQU     MOD_RAM_BASE    ; word: the fuel trims added up, 1/256ths
 MOD_FUELMUL     EQU     MOD_RAM_BASE + 2 ; word: the multiplier the fuel hook applies, 8000h = 1.0
 MOD_IGNSUM      EQU     MOD_RAM_BASE + 4 ; word: the timing trims added up, 0.25 degree steps, + = advance
 MOD_PWMSTEP     EQU     MOD_RAM_BASE + 6 ; P4.3 PWM: the step of the 25-step cycle...
 MOD_PWMDUTY     EQU     MOD_RAM_BASE + 7 ; ...and how many of them are on (0-25)
-MOD_GEAR        EQU     002feh          ; the gear, 0 when not known (FEAT_GEAR); page 2, so main-loop code reads it with off()
+; MOD_GEAR (the gear, 0 when not known; FEAT_GEAR; page 2, so main-loop code reads it with off()) is in features.inc
 if defined(NEED_REVCAP)
 MOD_REVCAP      EQU     MODRAM_NEXT     ; the lowest rev limit a module holds now, as its crank period / 4 (0 none):
 MOD_REVNEXT     EQU     MODRAM_NEXT + 1 ; the crank interrupt cuts the fuel at once past it (mod_revcap); and the next
@@ -89,12 +89,13 @@ MB_GEARLIMIT    EQU     00800h
 MB_WATERMARK    EQU     01000h
 MB_REMOTE       EQU     02000h          ; remote.asm: its rev / speed limit, and the anti-start lock
 MB_POPCORN      EQU     04000h          ; remote.asm: popcorn mode's spark cut
+MB_SENSORPRO    EQU     08000h          ; sensorpro.asm: a sender's reading past its level
 ; the tick slot each module runs on (tick mod 16): features.inc hands them out when the ROM is built, the heaviest
 ; modules a slot of their own
 endif
 
 if XP == XP_TICK
-                LB      A, 0feh                ; each tick cycle (slot 0) the rev cap becomes what the modules
+                LB      A, SVC_TICK                ; each tick cycle (slot 0) the rev cap becomes what the modules
                 ANDB    A, #00fh               ; asked for in the cycle before
                 JNE     mod_revcap_roll_skip
 if defined(NEED_REVCAP)
@@ -122,7 +123,7 @@ mod_boot_init:  L       A, DP                  ; nothing wanted, nothing trimmed
                 MOV     DP, #MOD_OUTSTATE
 mod_boot_clear: MOVB    [DP], #000h            ; 1F1h-1F7h
                 INC     DP
-                CMP     DP, #001f8h
+                CMP     DP, #SVC_MODLIB + 7
                 JNE     mod_boot_clear
                 MOV     DP, #MOD_FUELSUM
 mod_boot_clear2:
@@ -132,7 +133,7 @@ mod_boot_clear2:
                 JNE     mod_boot_clear2
                 MOV     DP, #MOD_FUELMUL
                 MOV     [DP], #08000h          ; x 1.0
-                MOV     DP, #002fch
+                MOV     DP, #SVC_IGNADV
                 MOVB    [DP], #000h            ; no advance
                 POPS    A
                 MOV     DP, A
@@ -277,7 +278,7 @@ mod_limit_cutting:
 if defined(FEAT_REMOTE)
                 CAL     rc_limit_reset
 endif
-                CMP     0ach, A
+                CMP     ENG_RPMP, A
                 JGT     mod_limit_release
 mod_limit_cut:  L       A, er0                 ; word mode
                 ST      A, er1                 ; fuel
@@ -326,10 +327,10 @@ mod_limit_release:
 ; fold the want words into the skeleton's requests: 1F0h bit 0 (fuel cut), 0FCh bit 0 (spark cut)
 mod_fold:       L       A, off(MOD_FUELWANT)
                 JEQ     mod_fold_fuel_off
-                SB      off(001f0h).0
+                SB      off(SVC_FUELCUT).0
                 SJ      mod_fold_spark
 mod_fold_fuel_off:
-                RB      off(001f0h).0
+                RB      off(SVC_FUELCUT).0
 mod_fold_spark:
 if defined(FEAT_IGNCUTMOD)
                 RT                             ; igncutmod.asm drives 0FCh bit 0 itself, every tick
@@ -421,12 +422,12 @@ endif
 ; 1/4 of the period at most (starting, the rpm doubles from one reading to the next); otherwise 0ACh itself.
 ; Out: A (word). Uses DP, er2 (r4-r5). Tick context.
 mod_period_ahead:
-                MOV     DP, #0036ch            ; the reading before 0ACh's
+                MOV     DP, #ENG_RPMPREV       ; the reading before 0ACh's
                 L       A, [DP]
-                SUB     A, 0ach                ; before - newest: the change while the rpm rises
+                SUB     A, ENG_RPMP                ; before - newest: the change while the rpm rises
                 JLT     mod_ahead_now
                 ST      A, er2
-                L       A, 0ach
+                L       A, ENG_RPMP
                 SRL     A
                 SRL     A
                 CMP     A, er2
@@ -436,12 +437,12 @@ mod_ahead_step: L       A, er2                 ; one and a half readings ahead (
                 SRL     A
                 ADD     A, er2
                 ST      A, er2
-                L       A, 0ach
+                L       A, ENG_RPMP
                 SUB     A, er2
                 JGE     mod_ahead_ret
                 CLR     A
 mod_ahead_ret:  RT
-mod_ahead_now:  L       A, 0ach
+mod_ahead_now:  L       A, ENG_RPMP
                 RT
 
 ; ------------------------------------------------------------------ cut or not, as the module decides
@@ -529,7 +530,7 @@ mod_igntrim:    ST      A, er0
                 MB      C, ACCH.7
                 JLT     mod_igntrim_retard
                 ST      A, er0                 ; advance
-                MOV     DP, #002fdh
+                MOV     DP, #SVC_IGNRET
                 MOVB    [DP], #000h
                 DEC     DP
                 LB      A, r0
@@ -539,7 +540,7 @@ mod_igntrim_retard:
                 XOR     A, #0ffffh             ; retard = -total
                 ADD     A, #00001h
                 ST      A, er0
-                MOV     DP, #002fch
+                MOV     DP, #SVC_IGNADV
                 MOVB    [DP], #000h
                 INC     DP
                 LB      A, r0
@@ -549,7 +550,7 @@ mod_igntrim_retard:
 ; ------------------------------------------------------------------ the fuel hook: trims on the pulse width
 ; Crank interrupt, right after the final pulse width is stored in 146h (before dead time).
 mod_fuel_apply: PUSHS   LRB
-                MOV     LRB, #0007eh           ; bank 3F0h: scratch, nothing of the caller's
+                MOV     LRB, #SVC_BANKF           ; bank 3F0h: scratch, nothing of the caller's
                 L       A, DP
                 PUSHS   A
                 MOV     DP, #MOD_FUELMUL
@@ -557,7 +558,7 @@ mod_fuel_apply: PUSHS   LRB
                 CMP     A, #08000h
                 JEQ     mod_fuel_done          ; x 1.0: nothing to do
                 ST      A, er0
-                MOV     DP, #00146h
+                MOV     DP, #SVC_FUELPW
                 L       A, [DP]
                 MUL                            ; er1:A = pulse x multiplier
                 SLL     A                      ; / 8000h: one bit left, keep the high word
@@ -640,7 +641,7 @@ mod_afr_span:   STB     A, r0
 
 ; ------------------------------------------------------------------ rpm as a byte
 ; Out: A (byte) = rpm / 32 (255 at 8160 rpm and above). Uses er0-er2.
-mod_rpmbyte:    L       A, 0ach                ; crank period, rpm = 1875000 / period
+mod_rpmbyte:    L       A, ENG_RPMP                ; crank period, rpm = 1875000 / period
                 CMP     A, #000e6h
                 JLT     mod_rpmbyte_max
                 ST      A, er2
@@ -760,33 +761,33 @@ endif
                 CMPB    A, #000h
                 JEQ     gio_f1
                 LCB     A, 00009h[X1]          ; throttle window
-                CMPB    0b9h, A
+                CMPB    ENG_TPS, A
                 JLT     gio_f1
                 LCB     A, 0000ah[X1]
-                CMPB    0b9h, A
+                CMPB    ENG_TPS, A
                 JGT     gio_f1
                 LCB     A, 0000bh[X1]          ; MAP window
-                CMPB    0a3h, A
+                CMPB    ENG_MAP, A
                 JLT     gio_f1
                 LCB     A, 0000ch[X1]
-                CMPB    0a3h, A
+                CMPB    ENG_MAP, A
                 JGT     gio_f1
                 LCB     A, 0000dh[X1]          ; coolant at least (a larger byte is colder)
-                CMPB    0c1h, A
+                CMPB    ENG_ECT, A
                 JGT     gio_f1
                 LCB     A, 0000eh[X1]          ; coolant at most
-                CMPB    0c1h, A
+                CMPB    ENG_ECT, A
                 JLT     gio_f1
                 SJ      gio_c2
 gio_f1:         J       gio_false
 gio_c2:         LCB     A, 0000fh[X1]          ; intake air at least
-                CMPB    0c0h, A
+                CMPB    ENG_IAT, A
                 JGT     gio_f2
                 LCB     A, 00010h[X1]          ; road speed window
-                CMPB    0b4h, A
+                CMPB    ENG_VSS, A
                 JLT     gio_f2
                 LCB     A, 00011h[X1]
-                CMPB    0b4h, A
+                CMPB    ENG_VSS, A
                 JGT     gio_f2
 if defined(FEAT_GEAR)
                 MOV     DP, #MOD_GEAR          ; gear window
@@ -801,7 +802,7 @@ if defined(FEAT_GEAR)
 endif
                 CLRB    A
                 LCB     A, 00014h[X1]          ; battery at least
-                CMPB    0c3h, A
+                CMPB    ENG_BATT, A
                 JLT     gio_f2
                 LB      A, r3                  ; the rpm window, with hysteresis on the state
                 ANDB    A, off(MOD_OUTSTATE)
@@ -811,7 +812,7 @@ endif
                 SJ      gio_rpm_cmp
 gio_rpm_on:     CLR     A
                 LC      A, 00007h[X1]
-gio_rpm_cmp:    CMP     0ach, A                ; period past the point's: below the rpm
+gio_rpm_cmp:    CMP     ENG_RPMP, A                ; period past the point's: below the rpm
                 JGT     gio_f2
                 MOVB    r2, #001h              ; every condition holds
                 SJ      gio_decide
@@ -935,7 +936,7 @@ swpwm_done:     POPS    A
 ; C = on. The tick prologue, then mod_output.
 mod_swpwm_drive:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -1003,13 +1004,13 @@ mod_output_8255:
                 CMPB    A, #000h
                 JEQ     mod_output_ret         ; 0: none
                 STB     A, r4
-                MOV     DP, #003dch            ; P0's masks
+                MOV     DP, #SVC_OVR           ; P0's masks
                 LB      A, r5
                 CMPB    A, #004h
                 JLT     mod_output_port
                 CMPB    A, #007h               ; 7-9: P0 too
                 JGE     mod_output_port
-                MOV     DP, #003deh            ; P1's
+                MOV     DP, #SVC_OVR + 2       ; P1's
 mod_output_port:
                 LB      A, r6
                 CMPB    A, #000h

@@ -16,8 +16,8 @@ public sealed class ProcessorProfile
     public int ClockDivider { get; set; } = 4;
     /// Which on-chip peripherals the simulator should model: "66207" (the OBD1 P28 family) or "66911" (the Honda P13 / P14 part). The two have different register maps, timers, one-shots and injector drivers, so this decides whether a ROM can be *run* as well as read.
     public string Peripherals { get; set; } = "66207";
-    public int RomSize { get; set; } = Bus.RomSize;
-    public int RamSize { get; set; } = Bus.RamSize;
+    public int RomSize { get; set; } = Chip.RomSize;
+    public int RamSize { get; set; } = Chip.RamSize;
     /// Last byte of on-chip RAM; data addresses above it go out on the external bus.
     public int InternalRamEnd { get; set; } = 0x047F;
     /// 28 names: reset, BRK, WDT, NMI, the 16 maskable interrupts in IRQ/IE bit order, VCAL 0-7.
@@ -58,9 +58,9 @@ public sealed class ProcessorProfile
         Current = this;
         OkiRomSim.Assembler.OkiAssembler.UseSfrs(Sfrs);
         BinDisassembler.UseNames(VectorNames);
-        Bus.SetCrystal(CrystalMHz, ClockDivider);
-        Bus.SetPeripheralSet(Peripherals);
-        if (Ppi is { } ppi) Bus.SetPpi(ppi.PortA, ppi.PortB);
+        Chip.SetCrystal(CrystalMHz, ClockDivider);
+        Chip.SetPeripheralSet(Peripherals);
+        if (Ppi is { } ppi) Chip.SetPpi(ppi.PortA, ppi.PortB);
         AppLog.Info("processor", $"profile {Name} on {Board}: {CrystalMHz:0.##} MHz / {ClockDivider} " +
                                  $"({1000.0 / (CrystalMHz * 1000 / ClockDivider):0.###} us a machine cycle), " +
                                  $"{Sfrs.Count} SFRs, {Peripherals} peripherals");
@@ -79,6 +79,10 @@ public sealed class ProcessorProfile
     public static ProcessorProfile FromJson(string json)
     {
         var p = JsonSerializer.Deserialize<ProcessorProfile>(json, Json) ?? throw new InvalidDataException("empty processor profile");
+        // a list or map written as null is refused here, before anything is applied: Apply switched the clock and the part and then threw
+        // at the null (and the SFR names fell back to the 66207's), leaving a half-applied processor behind a "kept the current one" message
+        if (p.VectorNames == null || p.Sfrs == null || p.SdipPins == null || p.QfpPins == null || p.PinFunctions == null || p.PpiFunctions == null || p.OtherPins == null)
+            throw new InvalidDataException("a processor profile's lists (VectorNames, Sfrs, pins and pin functions) cannot be null");
         if (p.VectorNames.Count != 28) throw new InvalidDataException($"VectorNames needs 28 entries (4 fixed, 16 interrupts, 8 VCAL), has {p.VectorNames.Count}");
         return p.ClockDivider <= 0 || p.CrystalMHz <= 0 ? throw new InvalidDataException("CrystalMHz and ClockDivider must be positive") : p;
     }
@@ -100,7 +104,24 @@ public sealed class ProcessorProfile
         for (int n = 0; n < 200 && end >= 0 && end < source.Length; n++) end = source.IndexOf('\n', end + 1);
         var head = end < 0 ? source : source[..end];
         var m = DeclaredRe.Match(head);
-        return m.Success ? Builtin(m.Groups[1].Value) : null;
+        if (m.Success) return Builtin(m.Groups[1].Value);
+        // a build file written by hand that says nothing but includes the P13 skeleton is for the MSM66911 all the same
+        return P13SkeletonRe.IsMatch(head) ? Msm66911() : null;
+    }
+
+    static readonly System.Text.RegularExpressions.Regex P13SkeletonRe =
+        new(@"^\s*include\s+""[^""]*p13-skeleton\.asm""", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Multiline);
+
+    /// The part a 32 KB image was built for, from its first bytes: every 66207 ROM seen (P30, P28, P72, P08, HTS and the
+    /// rest) has its NMI vector (0006h) at 003Ch; P13 (MSM66911) does not, and keeps the factory byte 00h at 7FF0h. Null
+    /// when the image fits neither (leave the part as it is).
+    public static ProcessorProfile? ForImage(byte[] rom)
+    {
+        if (rom.Length < 0x8000) return null;
+        int nmi = rom[6] | rom[7] << 8;
+        if (nmi == 0x003C) return Msm66207();
+        if (rom[0x7FF0] == 0x00 && nmi is > 0x40 and < 0x8000) return Msm66911();
+        return null;
     }
 
     // ------------------------------------------------------------------ built-in parts

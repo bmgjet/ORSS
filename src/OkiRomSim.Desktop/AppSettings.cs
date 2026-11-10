@@ -196,7 +196,7 @@ public sealed class AppSettings
     public Dictionary<string, Dictionary<string, string>> PluginSettings { get; set; } = [];
 
     /// Where updates for the program and its templates come from (Settings > Updates). Where updates come from: always the author's website (fixed, so an update can only ever come from there).
-    [System.Text.Json.Serialization.JsonIgnore] public string UpdateSite => Updater.DefaultSite;
+    [System.Text.Json.Serialization.JsonIgnore] public string UpdateSite => AboutPage.Website;
     /// Ask the site at start-up whether anything is newer, and say so on the status line (nothing is downloaded).
     public bool CheckUpdatesAtStart { get; set; } = true;
 
@@ -206,6 +206,8 @@ public sealed class AppSettings
     public bool McpRemote { get; set; }
     /// Stored encrypted for the current Windows user (DPAPI); plain elsewhere.
     public string McpPasswordStored { get; set; } = "";
+#if !TUNER_ONLY
+    // (the tuning-only build has no MCP server: it never reads the password - and does not take it into its own settings file)
     [JsonIgnore]
     public string McpPassword
     {
@@ -230,6 +232,7 @@ public sealed class AppSettings
             McpPasswordStored = "dpapi:" + Convert.ToBase64String(enc);
         }
     }
+#endif
     public List<string> McpRoots { get; set; } = [];
     public bool McpReadOnly { get; set; }
 
@@ -254,7 +257,13 @@ public sealed class AppSettings
                 _moved = true;
                 try { Directory.Move(old, now); } catch { try { CopyDir(old, now); } catch { } }
             }
+#if TUNER_ONLY
+            // RomSimTuner keeps a settings file of its own beside Rom Sim Studio's: its window, its last file and the choices it offers
+            // differently must not change how Rom Sim Studio starts. The first time, Load starts it from Rom Sim Studio's.
+            return Path.Combine(now, "tuner-settings.json");
+#else
             return Path.Combine(now, "settings.json");
+#endif
         }
     }
 
@@ -273,9 +282,24 @@ public sealed class AppSettings
     {
         try
         {
-            if (File.Exists(FilePath))
+#if TUNER_ONLY
+            // the tuner's own file; before it has one, Rom Sim Studio's settings are the starting point (read only: the tuner saves to its own)
+            var from = File.Exists(FilePath) ? FilePath : Path.Combine(Dir, "settings.json");
+#else
+            var from = FilePath;
+#endif
+            if (File.Exists(from))
             {
-                var s = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath), Json) ?? new AppSettings();
+                var s = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(from), Json) ?? new AppSettings();
+#if TUNER_ONLY
+                // started from Rom Sim Studio's: what only it uses - the MCP server's password and folders, the plugins and their
+                // settings - is not copied into the tuner's file (on Linux and macOS the password is kept as it is)
+                if (from != FilePath)
+                {
+                    s.McpPasswordStored = ""; s.McpRoots = []; s.McpEnabled = false;
+                    s.PluginSettings = []; s.Plugins = [];
+                }
+#endif
                 foreach (var (k, v) in DefaultHotKeys()) s.HotKeys.TryAdd(k, v);
                 foreach (var (k, v) in TableKeys.Defaults()) s.TableHotKeys.TryAdd(k, v);
                 // Compare started on Ctrl+Shift+C, which copying a whole table now uses
@@ -299,13 +323,19 @@ public sealed class AppSettings
 
     public void Save()
     {
+#if !TUNER_ONLY
         if (UiCheck.Active) return;   // the layout check resizes everything: it must not become your layout
+#endif
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
             // complete file first, then swapped in: a crash or a full disk in the middle cannot leave half a settings file
             var temp = FilePath + ".new";
             File.WriteAllText(temp, JsonSerializer.Serialize(this, Json));
+            // on Linux and macOS the MCP password is kept as it is (there is no DPAPI there): readable by this user only, not by every
+            // account on the laptop (a new file is 0644 by default)
+            if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(temp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            OkiRomSim.Core.SafeFile.FlushToDisk(temp);
             File.Move(temp, FilePath, overwrite: true);
         }
         catch { }
@@ -321,6 +351,9 @@ public sealed class AppSettings
         var c = Clone();
         c.McpPasswordStored = ""; c.McpRoots = []; c.McpEnabled = false;
         c.WindowX = c.WindowY = null; c.LastFile = null;
+        // nor what belongs to this PC rather than the ROM - plugins and their settings, external feeds (their addresses and tokens), the
+        // files opened lately: a project is something shared, and none of these is read back from one (ApplyRomSettings)
+        c.PluginSettings = []; c.Plugins = []; c.ExternalFeeds = []; c.RecentFiles = []; c.Favourites = [];
         return c;
     }
 }

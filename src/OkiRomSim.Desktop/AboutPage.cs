@@ -11,9 +11,17 @@ namespace OkiRomSim.Desktop;
 public static class AboutPage
 {
     /// The website: updates and the manual come from here. Fixed, so an update can only ever come from the author.
-    public const string Website = Updater.DefaultSite;
+    public const string Website = "https://romsimstudio.com/";
 
     public const string Author = "bmgjet";
+
+    /// Where a ROM made from a skeleton gets a function added or taken out, for the messages that send the user there (RomSimTuner
+    /// has no ROM builder: it is Rom Sim Studio's menu).
+#if TUNER_ONLY
+    public const string ChangeFunctions = "Rom Sim Studio's File > Change functions";
+#else
+    public const string ChangeFunctions = "File > Change functions";
+#endif
 
     /// The community server: questions, tunes, modules and bug reports.
     public const string Discord = "https://discord.gg/xynkH3ymkH";
@@ -90,11 +98,11 @@ public static class AboutPage
                    "Everyone who has shared what they learnt about these ECUs, their ROMs and their datalogging over the years.",
             TextWrapping = TextWrapping.Wrap, FontSize = 12,
         }));
-        p.Children.Add(Labelled("Program folder", new SelectableTextBlock { Text = Updater.Home, FontFamily = MainWindow.MonoFont, FontSize = 11.5 }));
+        p.Children.Add(Labelled("Program folder", new SelectableTextBlock { Text = Updater.Home, FontFamily = UiFonts.Mono, FontSize = 11.5 }));
 
         var text = new TextBox
         {
-            Text = Licence, IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, FontFamily = MainWindow.MonoFont,
+            Text = Licence, IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, FontFamily = UiFonts.Mono,
             FontSize = 11.5, Height = 300, BorderThickness = new Thickness(0), Background = Brushes.Transparent,
         };
         var copy = Panels.Button("Copy", async () =>

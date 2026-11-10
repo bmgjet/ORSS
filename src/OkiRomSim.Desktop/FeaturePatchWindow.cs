@@ -12,7 +12,7 @@ namespace OkiRomSim.Desktop;
 /// The code patches in a feature file, against the ROM that is loaded: which ones fit it, which are already in, and Apply / Remove for the one picked. Every change goes through the same undo as any other edit, and a patch is only written where the ROM holds exactly the bytes it expects.
 public sealed class FeaturePatchWindow : Window
 {
-    readonly SimHost _host;
+    readonly AppHost _host;
     FeatureFile _file = new();
     string _path;
     readonly ListBox _list = new() { SelectionMode = SelectionMode.Single };
@@ -20,14 +20,14 @@ public sealed class FeaturePatchWindow : Window
     readonly TextBlock _state = new() { FontSize = 12, Margin = new Thickness(0, 2, 0, 6) };
     readonly TextBlock _desc = new() { TextWrapping = TextWrapping.Wrap, FontSize = 12 };
     readonly TextBlock _verified = new() { TextWrapping = TextWrapping.Wrap, FontSize = 11, Opacity = 0.75, Margin = new Thickness(0, 6, 0, 0) };
-    readonly TextBlock _sites = new() { TextWrapping = TextWrapping.Wrap, FontSize = 11, FontFamily = MainWindow.MonoFont, Margin = new Thickness(0, 8, 0, 0) };
+    readonly TextBlock _sites = new() { TextWrapping = TextWrapping.Wrap, FontSize = 11, FontFamily = UiFonts.Mono, Margin = new Thickness(0, 8, 0, 0) };
     readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap, FontSize = 11.5, Margin = new Thickness(12, 4) };
     readonly CheckBox _onlyFits = new() { Content = "only what fits this ROM", IsChecked = true, Margin = new Thickness(0, 0, 0, 4) };
     readonly Button _apply = new() { Content = "Apply", MinWidth = 96 };
     readonly Button _remove = new() { Content = "Remove", MinWidth = 96 };
     public bool Changed { get; private set; }
 
-    public FeaturePatchWindow(SimHost host)
+    public FeaturePatchWindow(AppHost host)
     {
         _host = host;
         Title = "Feature patches";

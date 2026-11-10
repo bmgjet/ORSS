@@ -12,24 +12,24 @@
 if TICKSLOT_N > 0
 tick_slots:
 if TICKSLOT_N > 8
-                JBS     off(000feh).3, tick_n8_16
+                JBS     off(SVC_TICK).3, tick_n8_16
 else
-                JBS     off(000feh).3, tick_none
+                JBS     off(SVC_TICK).3, tick_none
 endif
 if TICKSLOT_N > 4
-                JBS     off(000feh).2, tick_n4_8
+                JBS     off(SVC_TICK).2, tick_n4_8
 else
-                JBS     off(000feh).2, tick_none
+                JBS     off(SVC_TICK).2, tick_none
 endif
 if TICKSLOT_N > 2
-                JBS     off(000feh).1, tick_n2_4
+                JBS     off(SVC_TICK).1, tick_n2_4
 else
-                JBS     off(000feh).1, tick_none
+                JBS     off(SVC_TICK).1, tick_none
 endif
 if TICKSLOT_N > 1
-                JBS     off(000feh).0, tick_n1_2
+                JBS     off(SVC_TICK).0, tick_n1_2
 else
-                JBS     off(000feh).0, tick_none
+                JBS     off(SVC_TICK).0, tick_none
 endif
                 J       tick_slot_0
 if TICKSLOT_N > 1
@@ -39,9 +39,9 @@ endif
 if TICKSLOT_N > 2
 tick_n2_4:
 if TICKSLOT_N > 3
-                JBS     off(000feh).0, tick_n3_2
+                JBS     off(SVC_TICK).0, tick_n3_2
 else
-                JBS     off(000feh).0, tick_none
+                JBS     off(SVC_TICK).0, tick_none
 endif
                 J       tick_slot_2
 if TICKSLOT_N > 3
@@ -52,14 +52,14 @@ endif
 if TICKSLOT_N > 4
 tick_n4_8:
 if TICKSLOT_N > 6
-                JBS     off(000feh).1, tick_n6_4
+                JBS     off(SVC_TICK).1, tick_n6_4
 else
-                JBS     off(000feh).1, tick_none
+                JBS     off(SVC_TICK).1, tick_none
 endif
 if TICKSLOT_N > 5
-                JBS     off(000feh).0, tick_n5_2
+                JBS     off(SVC_TICK).0, tick_n5_2
 else
-                JBS     off(000feh).0, tick_none
+                JBS     off(SVC_TICK).0, tick_none
 endif
                 J       tick_slot_4
 if TICKSLOT_N > 5
@@ -69,9 +69,9 @@ endif
 if TICKSLOT_N > 6
 tick_n6_4:
 if TICKSLOT_N > 7
-                JBS     off(000feh).0, tick_n7_2
+                JBS     off(SVC_TICK).0, tick_n7_2
 else
-                JBS     off(000feh).0, tick_none
+                JBS     off(SVC_TICK).0, tick_none
 endif
                 J       tick_slot_6
 if TICKSLOT_N > 7
@@ -83,19 +83,19 @@ endif
 if TICKSLOT_N > 8
 tick_n8_16:
 if TICKSLOT_N > 12
-                JBS     off(000feh).2, tick_n12_8
+                JBS     off(SVC_TICK).2, tick_n12_8
 else
-                JBS     off(000feh).2, tick_none
+                JBS     off(SVC_TICK).2, tick_none
 endif
 if TICKSLOT_N > 10
-                JBS     off(000feh).1, tick_n10_4
+                JBS     off(SVC_TICK).1, tick_n10_4
 else
-                JBS     off(000feh).1, tick_none
+                JBS     off(SVC_TICK).1, tick_none
 endif
 if TICKSLOT_N > 9
-                JBS     off(000feh).0, tick_n9_2
+                JBS     off(SVC_TICK).0, tick_n9_2
 else
-                JBS     off(000feh).0, tick_none
+                JBS     off(SVC_TICK).0, tick_none
 endif
                 J       tick_slot_8
 if TICKSLOT_N > 9
@@ -105,9 +105,9 @@ endif
 if TICKSLOT_N > 10
 tick_n10_4:
 if TICKSLOT_N > 11
-                JBS     off(000feh).0, tick_n11_2
+                JBS     off(SVC_TICK).0, tick_n11_2
 else
-                JBS     off(000feh).0, tick_none
+                JBS     off(SVC_TICK).0, tick_none
 endif
                 J       tick_slot_10
 if TICKSLOT_N > 11
@@ -118,14 +118,14 @@ endif
 if TICKSLOT_N > 12
 tick_n12_8:
 if TICKSLOT_N > 14
-                JBS     off(000feh).1, tick_n14_4
+                JBS     off(SVC_TICK).1, tick_n14_4
 else
-                JBS     off(000feh).1, tick_none
+                JBS     off(SVC_TICK).1, tick_none
 endif
 if TICKSLOT_N > 13
-                JBS     off(000feh).0, tick_n13_2
+                JBS     off(SVC_TICK).0, tick_n13_2
 else
-                JBS     off(000feh).0, tick_none
+                JBS     off(SVC_TICK).0, tick_none
 endif
                 J       tick_slot_12
 if TICKSLOT_N > 13
@@ -135,9 +135,9 @@ endif
 if TICKSLOT_N > 14
 tick_n14_4:
 if TICKSLOT_N > 15
-                JBS     off(000feh).0, tick_n15_2
+                JBS     off(SVC_TICK).0, tick_n15_2
 else
-                JBS     off(000feh).0, tick_none
+                JBS     off(SVC_TICK).0, tick_none
 endif
                 J       tick_slot_14
 if TICKSLOT_N > 15

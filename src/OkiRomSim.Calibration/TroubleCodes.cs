@@ -3,13 +3,13 @@ using OkiRomSim.Core;
 
 namespace OkiRomSim.Calibration;
 
-/// The OBD1 Honda trouble codes a datalog frame carries: four bytes, one bit per code (the 51-byte frame's bytes 12-15, or the skeleton ROM's codes channel) - a copy of the ROM's stored-code array (31Ah-31Dh on P30, 31Eh on the P28 family and HTS), numbered as the ROM's own flash routine numbers them (MilMonitor.FlashCode: bit i is code i+1, but 24 is 35, 25 is 36, 26 is 41 and 28 is 43). The service commands the skeleton ROM's datalog answers (p30-features/dlservice.asm) are here too.
+/// The OBD1 Honda trouble codes a datalog frame carries: four bytes, one bit per code (the 51-byte frame's bytes 12-15, or the skeleton ROM's codes channel) - a copy of the ROM's stored-code array (31Ah-31Dh on P30, 31Eh on the P28 family and HTS), numbered as the ROM's own flash routine numbers them (MilCodes.FlashCode: bit i is code i+1, but 24 is 35, 25 is 36, 26 is 41 and 28 is 43). The service commands the skeleton ROM's datalog answers (p30-features/dlservice.asm) are here too.
 public static class TroubleCodes
 {
     /// The code a bit stands for (bit 0-31 of the four bytes).
-    public static int CodeOf(int bit) => MilMonitor.FlashCode(bit);
+    public static int CodeOf(int bit) => MilCodes.FlashCode(bit);
 
-    public static string Describe(int code) => MilMonitor.Name(code);
+    public static string Describe(int code) => MilCodes.Name(code);
 
     /// The codes set in four bytes (low bit of the first byte first).
     public static List<int> Decode(ReadOnlySpan<byte> bytes)
@@ -35,6 +35,8 @@ public static class TroubleCodes
     // ---------------------------------------------------------------- the service commands (dlservice.asm)
     public const byte ClearCodes = 0x50, InjectorsOff = 0x51, InjectorsOn = 0x52, TimingLock = 0x53, TimingNormal = 0x54,
                       MapsBySwitch = 0x55, MapsFirst = 0x56, MapsSecond = 0x57, Gio1 = 0x58, AllNormal = 0x5E, State = 0x5F;
+    /// The cylinder test: 63h every injector firing, 64h-67h cylinder 1-4's injector cut (one at a time).
+    public const byte CylinderAll = 0x63, CylinderCut1 = 0x64;
     // ---------------------------------------------------------------- the remote control commands (remote.asm)
     public const byte FanAuto = 0x30, FanOn = 0x31, FanOff = 0x32, RevSet = 0x33, RevRead = 0x34, SpeedSet = 0x35, SpeedRead = 0x36,
                       BoostSet = 0x37, BoostRead = 0x38, VtecSet = 0x39, VtecRead = 0x3A,

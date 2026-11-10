@@ -15,7 +15,7 @@ namespace OkiRomSim.Desktop;
 /// Datalog page: every value the ECU sends in a parameter list (plus the wideband and aux channels), the raw packets going back and forth, and playback of saved logs. The port, protocol, wideband and aux channels are set in Settings. With a simulator behind it the page also drives the simulated engine with the log and compares what the simulated ECU does with what the car's did, listing the code that ran. In Tuner mode it sits beside the Calibration page in a compact form and marks the cell the car is in on the map.
 public sealed class DatalogView : UserControl
 {
-    readonly SimHost _host;
+    readonly AppHost _host;
     readonly Func<TopLevel?> _top;
     public readonly DatalogEngine Engine;
     List<LogFrame> _loaded = [];
@@ -24,7 +24,7 @@ public sealed class DatalogView : UserControl
 
     readonly Button _connect;
     readonly Slider _pos = new() { Minimum = 0, Maximum = 0, MinWidth = 160, VerticalAlignment = VerticalAlignment.Center };
-    readonly TextBlock _posText = new() { FontFamily = MainWindow.MonoFont, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0) };
+    readonly TextBlock _posText = new() { FontFamily = UiFonts.Mono, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0) };
     readonly TextBlock _status = new() { Text = "", FontSize = 11.5, Opacity = 0.9, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis };
     /// The state at a glance: green logging, blue replaying, grey idle.
     readonly Avalonia.Controls.Shapes.Ellipse _stateDot = new() { Width = 9, Height = 9, Fill = DataList.Dim, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
@@ -75,9 +75,15 @@ public sealed class DatalogView : UserControl
     public static readonly double[] Rates = [0.2, 0.5, 1, 2, 5, 10];
     int _fedIndex = -1;
     List<int> _codeAddrs = [];
+#if !TUNER_ONLY
     ulong _codeSince;
+#endif
     bool _settingPos;
+#if !TUNER_ONLY
     DateTime _lastCode, _lastParams, _lastGauges;
+#else
+    DateTime _lastParams, _lastGauges;
+#endif
     // playback without a simulator (Tuner mode): step through frames in wall time
     // ~30 steps a second: the replay (and its gauges, values and graph cursor) moves as smoothly as it plays
     readonly DispatcherTimer _playTimer = new() { Interval = TimeSpan.FromMilliseconds(33) };
@@ -148,7 +154,7 @@ public sealed class DatalogView : UserControl
     /// Settings were saved or applied (units, the dyno's): windows of this page show them.
     public event Action? SettingsApplied;
     public void RaiseSettingsApplied() => SettingsApplied?.Invoke();
-    internal SimHost Host => _host;
+    internal AppHost Host => _host;
     public LogFrame? Current { get; private set; }
 
     /// Where the panel sizes are kept (AppSettings.PanelSizes): the app's settings as they are now.
@@ -198,7 +204,7 @@ public sealed class DatalogView : UserControl
         _status.Text = "panels put back to their starting sizes";
     }
 
-    public DatalogView(SimHost host, Func<TopLevel?> top, Func<AppSettings>? settings = null)
+    public DatalogView(AppHost host, Func<TopLevel?> top, Func<AppSettings>? settings = null)
     {
         _host = host; _top = top; Settings = settings;
         Engine = new DatalogEngine(host);
@@ -211,7 +217,11 @@ public sealed class DatalogView : UserControl
             ToolTip.SetTip(_status, t.Length == 0 ? null : Engine.Detail.Length > 0 && Engine.Running ? t + "\n\n" + Engine.Detail : t);
         };
         Engine.Watch.Message += m => Dispatcher.UIThread.Post(() => { _status.Text = m; UpdateConnect(); });
+#if !TUNER_ONLY
         _connect = Btn("Connect", ToggleConnect, "Start or stop logging on the port set in Settings > Emulator & datalog ('simulator' logs the ROM running here, through its own serial port).");
+#else
+        _connect = Btn("Connect", ToggleConnect, "Start or stop logging on the port set in Settings > Emulator & datalog.");
+#endif
         Engine.Frame += OnLiveFrame;
         _playTimer.Tick += (_, _) => PlayTick();
 
@@ -224,7 +234,9 @@ public sealed class DatalogView : UserControl
             ShowFrame(i);
             var f = log[i];
             SetCurrent(f);
+#if !TUNER_ONLY
             if (!_host.PlaybackActive && DriveSimulator && !_compact && _host.LoadedPath != null) _host.ApplyFrame(f);
+#endif
         };
         ToolTip.SetTip(_pos, "Position in the loaded log. Drag to look at a moment (the calibration map marks where the engine was).");
         ToolTip.SetTip(_params, "Every value in the latest frame: decoded, with its unit and the raw byte(s). Wideband and aux channels (Settings > Emulator & datalog) are added at the bottom.\n\n" +
@@ -243,7 +255,12 @@ public sealed class DatalogView : UserControl
         ShowViewButton();
         _smoothBox.IsCheckedChanged += (_, _) => { if (_smoothBox.IsChecked == true != Engine.Smooth.Enabled) SetSmoothing(_smoothBox.IsChecked == true); };
         Content = _body;
+#if !TUNER_ONLY
         SetCompact(false);
+#else
+        // the tuning-only build only ever shows the compact page beside the maps
+        SetCompact(true);
+#endif
     }
 
     /// Datalogging > Smooth values (and the box on the page): on or off, remembered.
@@ -293,7 +310,7 @@ public sealed class DatalogView : UserControl
             await Task.Delay(1500);
             if (Engine.Protocol is ChannelStream { Dropped.Count: > 0 } cs2)
                 Dispatcher.UIThread.Post(() => _status.Text = $"not in this ROM, so not logged: {string.Join(", ", cs2.Dropped)}. " +
-                    (cs2.TableSize < DatalogChannels.TableSizeAll ? "Add 'Datalogging: every channel' (File > Change functions) to log them." : ""));
+                    (cs2.TableSize < DatalogChannels.TableSizeAll ? $"Add 'Datalogging: every channel' ({AboutPage.ChangeFunctions}) to log them." : ""));
         });
         _status.Text = $"channel stream: {picks.Count} channel(s), {DatalogChannels.FrameBytes(picks)} bytes a frame, about {fps:0} frames a second" +
                        (slowEvery > 0 ? $", each slow one every {(slowEvery < 1 ? $"{slowEvery * 1000:0} ms" : $"{slowEvery:0.0} s")}" : "") +
@@ -329,8 +346,13 @@ public sealed class DatalogView : UserControl
     public void SetCompact(bool compact)
     {
         _compact = compact;
+#if !TUNER_ONLY
         // Tuner mode and the simulator keep their own gauges: the dashboard on screen (and where its floating widgets sit) is written out, and the other mode's is put back as it was left
         Gauges.UseProfile(compact ? "tuner" : "simulator");
+#else
+        // RomSimTuner keeps a dashboard of its own: Rom Sim Studio's (simulator and Tuner mode) are not written from here
+        Gauges.UseProfile("RomSimTuner");
+#endif
         foreach (var c in new Control[] { _connect, _pos, _posText, _status, _paramHost, Gauges, _compare, _code, _rawBox, _smoothBox, _stateDot, _stateText }) Detach(c);
         UiStyles.Adopt(_params);
         if (_graphPanel != null) UiStyles.Adopt(_graphPanel);
@@ -350,9 +372,11 @@ public sealed class DatalogView : UserControl
             "that reads them all at the moment it sits on and moves the position here with it. Channel sets can be saved as templates."));
         row1.Children.Add(Btn("Channels…", () => _ = OpenChannels(),
             "Pick what the channel stream logs (the skeleton ROM's datalog module): a box for every value it can send - untick what the car does not have."));
+#if !TUNER_ONLY
         row1.Children.Add(Btn("Detect layout", DetectLayout,
             "Work out how this ROM datalogs, from the ROM itself: its serial code is read for the command bytes it answers, each is tried in a simulator " +
             "until one returns a checksummed frame, and then every engine input is changed in turn to see which byte of the frame follows it."));
+#endif
         row1.Children.Add(_smoothBox);
         }
         var row2 = new WrapPanel { Margin = new Thickness(0, 2), VerticalAlignment = VerticalAlignment.Center };
@@ -392,7 +416,9 @@ public sealed class DatalogView : UserControl
         }
         else
         {
+#if !TUNER_ONLY
             row1.Children.Add(Btn("Clear code list", () => { _codeSince = _host.Sim.Cpu.Cycles; _code.SetRows([]); }, "Start the 'code that ran' list afresh from now."));
+#endif
             row1.Children.Add(Btn("Reset panels", ResetPanels, "Put the panels back to the sizes they start at (the dividers between them can be dragged, and are remembered)."));
             var p1 = _valuesCard = Panels.Card(_showGraph ? "Graph" : "Values", _paramHost, _rawBox);
             Gauges.Height = double.NaN;
@@ -474,10 +500,15 @@ public sealed class DatalogView : UserControl
         // no port set: the first one - but never the emulator's (the one it has open, or is set to use), which a guess
         // used to take whenever the emulator was not connected at that moment, and then held on to
         var port = ChosenPort();
+#if !TUNER_ONLY
         if (port.Length == 0) { _status.Text = "no serial port: pick one in Settings > Emulator & datalog (or 'simulator' to log the ROM running here)"; return; }
         if (port == "simulator" && _host.LoadedPath == null) { _status.Text = "open a ROM first to log it in the simulator"; return; }
         _codeSince = _host.Sim.Cpu.Cycles;
         if (DriveSimulator && !_compact && port != "simulator" && !_host.IsRunning && _host.LoadedPath != null) _host.Control("run");
+#else
+        if (port.Length == 0) { _status.Text = "no serial port: pick one in Settings > Emulator & datalog"; return; }
+        if (port.Equals("simulator", StringComparison.OrdinalIgnoreCase)) { _status.Text = "this is the tuning-only build: there is no simulator to log here - pick the car's serial port in Settings > Emulator & datalog"; return; }
+#endif
         _connecting = true;
         _connect.IsEnabled = false;
         _connect.Content = "Connecting…";
@@ -511,6 +542,18 @@ public sealed class DatalogView : UserControl
         var w = new ServiceWindow(Engine, _host);
         _service = w;
         w.Closed += (_, _) => { if (ReferenceEquals(_service, w)) _service = null; };
+        w.Show(owner);
+    }
+
+    TriggerWindow? _trigger;
+
+    void OpenTrigger()
+    {
+        if (_top() is not Window owner) return;
+        if (_trigger is { } open) { try { open.Activate(); return; } catch { _trigger = null; } }
+        var w = new TriggerWindow(Engine, _host);
+        _trigger = w;
+        w.Closed += (_, _) => { if (ReferenceEquals(_trigger, w)) _trigger = null; };
         w.Show(owner);
     }
 
@@ -623,7 +666,9 @@ public sealed class DatalogView : UserControl
         {
             _playTimer.Stop();
             _playIndex = -1;
+#if !TUNER_ONLY
             _host.StopPlayback();
+#endif
             _status.Text = $"paused at frame {(int)_pos.Value + 1} of {Log().Count} - Play carries on from here";
             AppLog.Action("datalog", $"paused at frame {(int)_pos.Value}");
             ShowState();
@@ -693,19 +738,25 @@ public sealed class DatalogView : UserControl
         new Toolbar.Entry(Toolbar.Detect, "Codes and service…",
             "The trouble codes the ECU has stored and its check-engine lamp, read from the datalog, with Clear codes; on the skeleton ROM also injectors off, " +
             "timing locked for a timing light, the maps picked and the GIO outputs forced on - over the datalog cable.", OpenService),
+        new Toolbar.Entry(Toolbar.Log, "Trigger pattern…",
+            "The crank (CKP), TDC and cylinder (CYP) signals as the ECU sees them, a cam revolution at a time, as bars: a missed or extra crank " +
+            "pulse, a TDC pulse out of place, no cylinder pulse - for a sensor that plays up. Needs the skeleton ROM's trigger pattern log.", OpenTrigger),
         new Toolbar.Entry(Toolbar.Gauge, "Virtual dyno…",
             "Power and torque from the datalog: an inertia dyno (the car spins a roller of known inertia) or a strip run (the car's own weight on a " +
             "straight, flat stretch). Triggers start and stop each run; runs are kept, replayed, overlaid, raced head to head and printed.", OpenDyno),
         new Toolbar.Entry(Toolbar.Log, "Demon onboard logging…",
             "Set up a Moates Demon to log the ECU by itself, into its own memory, with no laptop in the car; read its sessions back here.", OpenOnboard),
+#if !TUNER_ONLY
         new Toolbar.Entry(Toolbar.Detect, "Detect layout",
             "Work out how this ROM datalogs, from the ROM itself: the serial code is read for the command bytes it answers, each is tried in a simulator.", DetectLayout),
+#endif
     ];
 
+#if !TUNER_ONLY
     /// Work the protocol out from the ROM itself (in a simulator, off the UI thread).
     void DetectLayout()
     {
-        var rom = _host.RomBytes(0, Bus.RomSize);
+        var rom = _host.RomBytes(0, Chip.RomSize);
         if (_host.LoadedPath == null) { _status.Text = "open a ROM first"; return; }
         if (Engine.Running) { _status.Text = "stop logging first"; return; }
         _status.Text = "reading the ROM's serial code and probing it in a simulator…";
@@ -729,7 +780,7 @@ public sealed class DatalogView : UserControl
                         Protocol = r.Protocol.Name;
                         _status.Text = "detected: " + r.Protocol.Description + ". Connect to log it.";
                     }
-                    else _status.Text = "nothing found - see the Debug page for what was tried.";
+                    else _status.Text = $"nothing found - see {DebugView.Where} for what was tried.";
                     DetectedLayoutChanged?.Invoke(Engine.Detected);
                 });
             }
@@ -740,9 +791,12 @@ public sealed class DatalogView : UserControl
             }
         });
     }
+#endif
 
     /// Raised when a layout has been detected, so it can be saved with the project.
+#if !TUNER_ONLY
     public event Action<DetectedProtocol?>? DetectedLayoutChanged;
+#endif
 
     public void Stop() { if (Engine.Running || Engine.Watch.Wanted) ToggleConnect(); }
     /// Start logging on the port set in Settings, unless it is already going.
@@ -774,7 +828,9 @@ public sealed class DatalogView : UserControl
     void OnLiveFrame(LogFrame f)
     {
         // feeding the simulator the car's readings makes no sense when the simulator is the source
+#if !TUNER_ONLY
         if (DriveSimulator && !_compact && Engine.Source != "simulator") _host.ApplyFrame(f);
+#endif
         // where the engine is goes to the map as each frame arrives, not on the next screen refresh: the cell lit (and
         // the one Lock to live cell edits) is the one this frame says. Frames that come quicker than the screen can
         // take are folded into one: only the newest is shown
@@ -782,7 +838,11 @@ public sealed class DatalogView : UserControl
             Dispatcher.UIThread.Post(() =>
             {
                 Volatile.Write(ref _framePosted, 0);
+#if !TUNER_ONLY
                 if (Engine.Running && Engine.Latest is { } latest && !ReferenceEquals(latest, Current) && !_playTimer.IsEnabled && !_host.PlaybackActive)
+#else
+                if (Engine.Running && Engine.Latest is { } latest && !ReferenceEquals(latest, Current) && !_playTimer.IsEnabled)
+#endif
                     SetCurrent(latest);
             }, DispatcherPriority.Input);
     }
@@ -823,7 +883,9 @@ public sealed class DatalogView : UserControl
     {
         _playTimer.Stop();
         _playIndex = -1;
+#if !TUNER_ONLY
         _host.StopPlayback();
+#endif
         Engine.Stop();
         Engine.ClearFrames();
         _loaded = [];
@@ -832,7 +894,9 @@ public sealed class DatalogView : UserControl
         _params.SetRows([]);
         _codeAddrs = [];
         _code.SetRows([]);
+#if !TUNER_ONLY
         _codeSince = 0;
+#endif
         _settingPos = true;
         _pos.Maximum = 0; _pos.Value = 0;
         _settingPos = false;
@@ -849,7 +913,9 @@ public sealed class DatalogView : UserControl
     {
         _playTimer.Stop();
         _playIndex = -1;
+#if !TUNER_ONLY
         _host.StopPlayback();
+#endif
         if (Engine.Running) Engine.Stop();
         var rec = Engine.Frames();
         if (_loaded.Count == 0 && rec.Count > 0)
@@ -880,7 +946,9 @@ public sealed class DatalogView : UserControl
         if (!_playTimer.IsEnabled) return;
         _playTimer.Stop();
         _playIndex = -1;
+#if !TUNER_ONLY
         _host.StopPlayback();
+#endif
         _status.Text = "replay stopped";
     }
 
@@ -932,7 +1000,11 @@ public sealed class DatalogView : UserControl
     public string LoadFile(string path)
     {
         // a log opened while logging live is what gets looked at: the live link stops (its frames are kept), or its values would go on hiding the log's
+#if !TUNER_ONLY
         if (Engine.Running && !UiCheck.Active)
+#else
+        if (Engine.Running)
+#endif
         {
             Task.Run(() => { try { Engine.Stop(); } catch (Exception ex) { AppLog.Error("datalog", "stop failed", ex); } });
             AppLog.Action("datalog", "live logging stopped to look at a log file");
@@ -1001,11 +1073,17 @@ public sealed class DatalogView : UserControl
         _playIndex = from;
         _playWallStart = DateTime.Now;
         _playLogStart = log[from].T;
+#if !TUNER_ONLY
         _codeSince = _host.Sim.Cpu.Cycles;
         if (DriveSimulator && !_compact && _host.LoadedPath != null && !_host.IsRunning) _host.Control("run");
+#endif
         _playShown = -1;
         _playTimer.Start();
+#if !TUNER_ONLY
         _status.Text = $"replaying from frame {from + 1} of {log.Count} at {_rate:0.#}x" + (DriveSimulator && !_compact ? " through the simulator" : "");
+#else
+        _status.Text = $"replaying from frame {from + 1} of {log.Count} at {_rate:0.#}x";
+#endif
         AppLog.Action("datalog", $"play from frame {from}");
     }
 
@@ -1023,7 +1101,9 @@ public sealed class DatalogView : UserControl
         ShowFrame(_playIndex);
         var f = log[_playIndex];
         SetCurrent(f);
+#if !TUNER_ONLY
         if (DriveSimulator && !_compact && _host.LoadedPath != null) _host.ApplyFrame(f);
+#endif
         FrameViews(f, _playIndex);
         if (_playIndex + 1 >= log.Count) { _playTimer.Stop(); _status.Text = $"replay finished ({log.Count} frames)"; }
     }
@@ -1112,7 +1192,9 @@ public sealed class DatalogView : UserControl
         _settingPos = false;
         ShowFrame(i);
         SetCurrent(log[i]);
+#if !TUNER_ONLY
         if (DriveSimulator && !_compact && _host.LoadedPath != null) _host.ApplyFrame(log[i]);
+#endif
     }
 
     void ShowFrame(int i)
@@ -1124,11 +1206,16 @@ public sealed class DatalogView : UserControl
     // ------------------------------------------------------------------ refresh
 
     /// Called on the UI refresh tick (the page is showing, or Tuner mode's side panel).
-    public void Tick(SimHost.Snapshot? s)
+#if !TUNER_ONLY
+    public void Tick(AppHost.Snapshot? s)
+#else
+    public void Tick()
+#endif
     {
         UpdateConnect();
         LogFrame? f = null;
         string source = "";
+#if !TUNER_ONLY
         if (_host.PlaybackActive && _loaded.Count > 0)
         {
             int i = Math.Clamp(_host.PlaybackIndex, 0, _loaded.Count - 1);
@@ -1138,7 +1225,9 @@ public sealed class DatalogView : UserControl
             source = $"playback frame {i + 1}/{_loaded.Count}";
             if (f != Current) SetCurrent(f);
         }
-        else if (Engine.Running && Engine.Latest != null)
+        else
+#endif
+        if (Engine.Running && Engine.Latest != null)
         {
             f = Engine.Latest;
             source = $"live {Engine.Protocol?.Name}";
@@ -1162,7 +1251,9 @@ public sealed class DatalogView : UserControl
             if (at >= 0 && f != null && ReferenceEquals(f, _loaded[at])) { Gauges.Feed(_loaded, _fedIndex, at); _fedIndex = at; }
             else { Gauges.Show(f); _fedIndex = -1; }
         }
+#if !TUNER_ONLY
         if (!_compact && s != null && f != null) _compare.SetRows(CompareRows(f, s, source));
+#endif
         ShowState();
         // the graphs mark where the log is (the replay, the slider) or run live with the logger
         int where = Math.Clamp((int)_pos.Value, 0, Math.Max(0, _loaded.Count - 1));
@@ -1171,17 +1262,23 @@ public sealed class DatalogView : UserControl
             if (_showGraph) _graphPanel?.Follow(where, Engine.Running);
             _graph?.Panel.Follow(where, Engine.Running);
         }
+#if !TUNER_ONLY
         if (!_compact && (DateTime.UtcNow - _lastCode).TotalMilliseconds > 700 && (_host.PlaybackActive || Engine.Running || _codeSince > 0))
         {
             _lastCode = DateTime.UtcNow;
             UpdateCodeList();
         }
+#endif
     }
 
     /// The dot and word at the top of the log card.
     void ShowState()
     {
+#if !TUNER_ONLY
         bool live = Engine.Running, playing = _playTimer.IsEnabled || _host.PlaybackActive;
+#else
+        bool live = Engine.Running, playing = _playTimer.IsEnabled;
+#endif
         _stateDot.Fill = live ? DataList.Good : playing ? DataList.Data : _loaded.Count > 0 ? DataList.Warning : DataList.Dim;
         _stateText.Text = live ? $"logging · {Engine.FramesPerSecond:0.0}/s" + (Engine.Smooth.Enabled ? " · smoothed" : "")
                         : playing ? $"replaying {_rate:0.#}x"
@@ -1192,8 +1289,9 @@ public sealed class DatalogView : UserControl
         _status.IsVisible = !string.IsNullOrEmpty(_status.Text) && _status.Text != "not connected" && _status.Text != Lang.T("not connected");
     }
 
+#if !TUNER_ONLY
     /// The car's readings beside the simulated ECU's, and what each does with them.
-    static List<DataList.Row> CompareRows(LogFrame f, SimHost.Snapshot s, string source)
+    static List<DataList.Row> CompareRows(LogFrame f, AppHost.Snapshot s, string source)
     {
         var o = s.Outputs;
         var inj = o.InjectorMs.Where(v => v > 0).DefaultIfEmpty(0).Average();
@@ -1232,13 +1330,13 @@ public sealed class DatalogView : UserControl
         var (now, exec, _, _) = _host.SimHits();
         ulong since = _codeSince;
         var labels = asm.Symbols.Values
-            .Where(sy => sy.Kind == SymbolKind.Label && sy.Value >= 0x38 && sy.Value < Bus.RomSize && exec[sy.Value] > since)
+            .Where(sy => sy.Kind == SymbolKind.Label && sy.Value >= 0x38 && sy.Value < Chip.RomSize && exec[sy.Value] > since)
             .OrderBy(sy => sy.Value).ToList();
         var rows = new List<DataList.Row>();
         var addrs = new List<int>();
         foreach (var l in labels)
         {
-            double ago = (now - Math.Min(now, exec[l.Value])) / Bus.CpuHz;
+            double ago = (now - Math.Min(now, exec[l.Value])) / Chip.CpuHz;
             bool running = ago < 0.05;
             rows.Add(new([new($"{l.Value:X4}", DataList.Address), new(l.Name, DataList.Label), new(running ? "running" : $"{ago * 1000:0} ms ago", running ? DataList.Good : DataList.Dim)],
                          running ? DataList.Good : DataList.Code, (int)l.Value));
@@ -1247,6 +1345,7 @@ public sealed class DatalogView : UserControl
         _codeAddrs = addrs;
         _code.SetRows(rows);
     }
+#endif
 
     public void Shutdown() => Engine.Dispose();
 }

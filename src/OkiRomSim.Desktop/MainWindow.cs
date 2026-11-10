@@ -14,7 +14,7 @@ using OkiRomSim.Core;
 namespace OkiRomSim.Desktop;
 
 /// The whole window is built in C# rather than XAML: fewer moving parts, and everything the UI does is visible in one place. Left: chip pinout and engine inputs. Centre: the source and the Problems/Trace/Memory/Calibration/Lookup/Breakpoints/Datalog/Hit trace/Debug tabs. Right: CPU, call stack, disassembly, outputs and ports. Tuner mode swaps all of that for the calibration editor with datalogging beside it.
-public sealed class MainWindow : Window
+public sealed class MainWindow : Window, IRestartAfterUpdate
 {
     readonly SimHost _host = new();
     string? _target;                               // .asm that Build assembles
@@ -106,7 +106,7 @@ public sealed class MainWindow : Window
     static TextBlock Mono(TextBlock b) { b.FontFamily = MonoFont; return b; }
     static TextBlock Small(string t) => new() { Text = t, FontSize = 11, Opacity = 0.75, TextWrapping = TextWrapping.Wrap };
     static TextBox Readonly() => Mono(new TextBox { IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.NoWrap, FontSize = 12 });
-    public static readonly FontFamily MonoFont = new("Cascadia Mono,Consolas,DejaVu Sans Mono,Menlo,monospace");
+    public static readonly FontFamily MonoFont = UiFonts.Mono;
     static string Hex(long v, int n = 4) => v.ToString("X" + n);
     static T Tip<T>(T c, string tip) where T : Control { ToolTip.SetTip(c, tip); return c; }
 
@@ -186,8 +186,18 @@ public sealed class MainWindow : Window
             _settings.DetectedLayout = p == null ? null : System.Text.Json.JsonSerializer.Serialize(p);
             _settings.Save();
         };
-        Closing += (_, _) =>
+        Closing += (_, e) =>
         {
+            // unsaved work (calibration changes not in a file, edited sources): ask first, the window staying open until the answer.
+            // The ✕ closed the app straight away before, and the changes were gone (a restore point may be minutes old, or off)
+            if (!_closeConfirmed && !UiCheck.Active && HasUnsavedWork())
+            {
+                e.Cancel = true;
+                if (!_closeAsking) AskBeforeClose();
+                return;
+            }
+            if (_shutDown) return;
+            _shutDown = true;
             SaveLayout();
             _datalog.Gauges.SaveLast();
             _external.Dispose();
@@ -202,7 +212,7 @@ public sealed class MainWindow : Window
             if (text.Length > 0) AppLog.Action("ui", $"pressed '{text}'");
         });
 
-        _buildBtn = ToolButton("Build (Ctrl+B)", () => Build(),
+        _buildBtn = ToolButton("Build (Ctrl+B)", () => BuildAsked(),
             "Assemble the source on screen and load it into the simulator. Enabled only when the source would produce different bytes from what is loaded.");
         _run = ToolButton("▶ Run (F5)", () => Control("run"), "Run the simulator from the current instruction (F5 toggles run/pause).");
         _pause = ToolButton("❚❚ Pause", () => Control("pause"), "Stop the simulator where it is.");
@@ -305,6 +315,54 @@ public sealed class MainWindow : Window
             if (timer.Interval != want) timer.Interval = want;
         };
         timer.Start();
+    }
+
+    bool _closeConfirmed, _closeAsking, _shutDown;
+    /// The source made by disassembling a .bin when it was opened (path -> text): unsaved, but not the user's own work until edited.
+    readonly Dictionary<string, string> _generatedText = new(StringComparer.OrdinalIgnoreCase);
+
+    /// A buffer that still holds exactly the disassembly made when its .bin was opened (nothing the user wrote is in it).
+    bool IsUntouchedDisassembly(string path) =>
+        _generatedText.TryGetValue(path, out var made) && _buffers.TryGetValue(path, out var now)
+        && (SamePath(path, _current) && !_editorParked ? EditorText : now) == made;
+
+    /// Calibration changes not in a file, or a source edited on screen and not saved.
+    bool HasUnsavedWork()
+    {
+        return _host.RomDirty || _dirty.Any(f => _buffers.ContainsKey(f) && !IsUntouchedDisassembly(f));
+    }
+
+    /// Closing with unsaved work: save it, leave it, or stay. The window closes (and shuts down) only after the answer.
+    async void AskBeforeClose()
+    {
+        _closeAsking = true;
+        try
+        {
+            if (_current != null && !_editorParked) _buffers[_current] = EditorText;
+            var dirtyFiles = _dirty.Where(f => _buffers.ContainsKey(f) && !IsUntouchedDisassembly(f)).ToList();
+            bool cal = _host.RomDirty;
+            var what = new List<string>();
+            if (dirtyFiles.Count > 0) what.Add(dirtyFiles.Count == 1 ? Label(dirtyFiles[0]) + " has unsaved edits" : $"{dirtyFiles.Count} source files have unsaved edits");
+            if (cal) what.Add("the ROM has calibration changes that are not in a file yet");
+            var answer = await Dialogs.Ask(this, "Save your changes?",
+                $"Closing Rom Sim Studio, and {string.Join(", and ", what)}.\n\nSave first, close without saving, or stay?",
+                "Save", "Close without saving", "Cancel");
+            if (answer is not ("Save" or "Close without saving")) { SetStatus("not closed: your changes are still here"); return; }
+            if (answer == "Save")
+            {
+                foreach (var f in dirtyFiles)
+                {
+                    try { SafeFile.WriteAllText(f, _buffers[f]); _dirty.Remove(f); }
+                    catch (Exception ex) { SetStatus($"could not save {Label(f)}: {ex.Message} - not closed", sticky: true); AppLog.Error("app", "save before close failed", ex); return; }
+                }
+                if (cal && !await _calibration.SaveRomAsync()) { SetStatus("not closed: the ROM was not saved"); return; }
+            }
+            else AppLog.Action("app", "closed without saving: " + string.Join("; ", what));
+            _closeConfirmed = true;
+            Close();
+        }
+        catch (Exception ex) { AppLog.Error("app", "asking before close failed", ex); }
+        finally { _closeAsking = false; }
     }
 
     /// The first start: what the app is for, which sets the view it opens in.
@@ -1023,9 +1081,17 @@ public sealed class MainWindow : Window
         () => { if (_current != null) _buffers[_current] = EditorText; return _buffers.Select(kv => (kv.Key, kv.Value)).ToList(); },
         m => Dispatcher.UIThread.Post(() => SetStatus(m)),
         () => (_settings.DatalogPort, _settings.DatalogProtocol, _settings.DatalogBaud),
-        (rom, name) => OpenRomImage(rom, name),
-        path => OpenFile(path))
+        (rom, name) => { RefuseIfUnsaved(); OpenRomImage(rom, name); },
+        path => { RefuseIfUnsaved(); OpenFile(path); })
     { SourceTextFn = McpSourceText, SetSourcesFn = McpSetSources };
+
+    /// An MCP client opening another ROM in the app: refused while there is unsaved work here (the File menu asks the user; a client
+    /// cannot, so it is told to have it saved first) - the open also stops a live datalog and disconnects the emulator.
+    void RefuseIfUnsaved()
+    {
+        if (_host.RomDirty || _dirty.Any(f => _buffers.ContainsKey(f) && !IsUntouchedDisassembly(f)))
+            throw new OkiRomSim.Mcp.ToolException("the app has unsaved changes (calibration or source): save them in the app first, then open again");
+    }
 
     /// An MCP server on the app's session, for the UI check (no HTTP: its Handle is called directly).
     internal OkiRomSim.Mcp.McpServer McpServerForCheck(string root) =>
@@ -1422,7 +1488,8 @@ public sealed class MainWindow : Window
 
     async void NewRom()
     {
-        var w = new NewRomWindow();
+        // the base picked in Create sets the processor (a 66207 profile of the user's own - another crystal - is kept for a 66207 base)
+        var w = new NewRomWindow { ProcessorWanted = p => { if (IsP13Part(p) != IsP13Part(_profile)) ApplyProfile(p); } };
         await w.ShowDialog(this);
         if (w.Created is not { } path || !await ConfirmReplaceCurrent(path)) return;
         OpenFileNow(path);
@@ -1498,7 +1565,17 @@ public sealed class MainWindow : Window
                 if (oldDefs == null)
                 {
                     var named = _host.Defs();
-                    if (want.Count > 0 && named.Items.Count(i => want.Contains(i.Name)) >= Math.Max(20, want.Count / 2)) oldDefs = named;
+                    if (want.Count > 0 && named.Items.Count(i => want.Contains(i.Name)) >= Math.Max(20, want.Count / 2))
+                    {
+                        oldDefs = named;
+                        // the code does not match a rebuild of the functions the table names: an older skeleton - or a function the table could
+                        // not record (nitrous, remote control and the trigger log had no number before), which would be left out without a word
+                        await Dialogs.Ask(this, "Change functions: check the list",
+                            "This ROM's code is not what the functions its build-info table names build to today. It may come from an older skeleton, " +
+                            "or it may have a function the table could not record - Nitrous control, Remote control and Trigger log had no number in it " +
+                            "before this version.\n\nThe next window ticks only the functions the table names: tick any of those three the ROM had, or they " +
+                            "are left out of the rebuild.", "OK");
+                    }
                 }
                 if (oldDefs == null)
                 {
@@ -1690,7 +1767,7 @@ public sealed class MainWindow : Window
     {
         var list = _settings.RecentFiles.Where(File.Exists).Take(10).ToList();
         if (list.Count == 0) return [new Toolbar.Entry("", "(nothing yet)", "Files you open appear here.", () => { })];
-        return [.. list.Select((p, i) => new Toolbar.Entry(i < 9 ? $"{i + 1}" : "0", Path.GetFileName(p), p, () => OpenFile(p))),
+        return [.. list.Select((p, i) => new Toolbar.Entry(i < 9 ? $"{i + 1}" : "0", Path.GetFileName(p), p, () => OpenFileAsked(p))),
                 Toolbar.Entry.Line,
                 new Toolbar.Entry(Toolbar.Clear, "Clear the list", "Forget the files opened lately.", () => { _settings.RecentFiles.Clear(); _settings.Save(); })];
     }
@@ -1729,6 +1806,10 @@ public sealed class MainWindow : Window
                 // a source that says which part it is for ("; processor: MSM66911") gets that part, or its SFR names would resolve against whatever profile happened to be active
                 if (ProcessorProfile.Declared(_buffers[path]) is { } declared && !declared.Name.Equals(_profile.Name, StringComparison.OrdinalIgnoreCase))
                     ApplyProfile(declared);
+                // one that does not say is a 66207 source (P30 and the rest): back from the MSM66911 if a P13 was open
+                // last (a 66207 profile of the user's own, another board or crystal, is kept)
+                else if (ProcessorProfile.Declared(_buffers[path]) == null && IsP13Part(_profile))
+                    ApplyProfile(ProcessorProfile.Msm66207());
                 _target = path;
                 Build();
                 _ = AfterOpen(path);
@@ -1865,26 +1946,30 @@ public sealed class MainWindow : Window
     {
         var bytes = File.ReadAllBytes(path);
         // a 64 KB (512) chip image holds two ROMs: open the half the ECU would run
-        if (bytes.Length == Bus.RomSize * 2)
+        if (bytes.Length == Chip.RomSize * 2)
         {
-            bool lowBlank = bytes[..Bus.RomSize].All(b => b == 0xFF) || bytes[..Bus.RomSize].All(b => b == 0);
+            bool lowBlank = bytes[..Chip.RomSize].All(b => b == 0xFF) || bytes[..Chip.RomSize].All(b => b == 0);
             var pick = lowBlank ? "Upper half" : await Dialogs.Ask(this, "64 KB image",
                 $"{Label(path)} is a 64 KB (512) chip image: two 32 KB ROMs, 0000-7FFF and 8000-FFFF. A board with the top address line tied high runs the upper half. Which one?",
                 "Cancel", "Lower half", "Upper half");
             if (pick is null or "Cancel") return;
             bool upper = pick == "Upper half";
-            bytes = upper ? bytes[Bus.RomSize..] : bytes[..Bus.RomSize];
-            var half = Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileNameWithoutExtension(path) + (upper ? "_high" : "_low") + ".bin");
-            SafeFile.WriteAllBytes(half, bytes);
+            bytes = upper ? bytes[Chip.RomSize..] : bytes[..Chip.RomSize];
+            // a half saved beside it before - and perhaps tuned and saved over since - is never written over: if it differs, this one gets a name of its own
+            var half = AppPaths.Unclobbered(Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileNameWithoutExtension(path) + (upper ? "_high" : "_low") + ".bin"), bytes);
+            if (!File.Exists(half)) SafeFile.WriteAllBytes(half, bytes);
             SetStatus($"{Label(path)}: the {(upper ? "upper" : "lower")} half, saved as {Path.GetFileName(half)} and opened" + (lowBlank ? " (the lower half is blank)" : ""));
             path = half;
         }
         ResetForNewRom(path);
         _openedImage = path;
-        if (bytes.Length == Bus.RomSize + 1 && bytes[^1] == 0) bytes = bytes[..Bus.RomSize];
-        if (bytes.Length > Bus.RomSize)
-        { SetStatus($"{Label(path)} is {bytes.Length} bytes; a 66207 ROM image is at most {Bus.RomSize}"); return; }
-        string note = bytes.Length < Bus.RomSize ? $" (short image, padded from {bytes.Length} bytes with FF)" : "";
+        if (bytes.Length == Chip.RomSize + 1 && bytes[^1] == 0) bytes = bytes[..Chip.RomSize];
+        if (bytes.Length > Chip.RomSize)
+        { SetStatus($"{Label(path)} is {bytes.Length} bytes; a 66207 ROM image is at most {Chip.RomSize}"); return; }
+        string note = bytes.Length < Chip.RomSize ? $" (short image, padded from {bytes.Length} bytes with FF)" : "";
+        // the part the image was built for, so it is disassembled and run on the right one (a 66207 profile of the
+        // user's own is kept for a 66207 image)
+        if (ProcessorProfile.ForImage(bytes) is { } part && IsP13Part(part) != IsP13Part(_profile)) ApplyProfile(part);
 
         var asmPath = Path.ChangeExtension(path, ".asm");
         if (File.Exists(asmPath)) asmPath = Path.ChangeExtension(path, ".disasm.asm");
@@ -1909,6 +1994,7 @@ public sealed class MainWindow : Window
         }, names);
         _buffers[asmPath] = dis.Text;
         _dirty.Add(asmPath);
+        _generatedText[asmPath] = dis.Text;
         _target = asmPath;
         ShowBuffer(asmPath);
         Build();
@@ -2108,12 +2194,14 @@ public sealed class MainWindow : Window
         if (path == null) return;
         if (path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase)) { SaveAssembledBin(path); return; }
         var text = EditorText;
+        // written first: if the write fails (a read-only folder, a file in use) the text stays marked unsaved under its old name
+        try { SafeFile.WriteAllText(path, text); }
+        catch (Exception ex) { SetStatus($"could not save {path}: {ex.Message}", sticky: true); AppLog.Error("app", "save as failed", ex); return; }
         _buffers.Remove(_current);
         _dirty.Remove(_current);
         if (SamePath(_target, _current)) _target = path;
         _current = path;
         _buffers[path] = text;
-        SafeFile.WriteAllText(path, text);
         UpdateDocHeader();
         SetStatus($"saved {path} (build to point breakpoints and line tracking at the new file)");
         CheckBuildNeeded();
@@ -2243,6 +2331,27 @@ public sealed class MainWindow : Window
             if (text != null) list.Add(new ProjectSource { Path = f, Text = text, Included = true });
         }
         return list;
+    }
+
+    /// Build, asked for by the user: with calibration changes in the ROM that are in no file, ask first - a full build loads what the
+    /// source assembles to, and those changes go with the old image (Patch live keeps them).
+    async void BuildAsked()
+    {
+        try
+        {
+            if (_host.RomDirty && !UiCheck.Active)
+            {
+                var answer = await Dialogs.Ask(this, "Rebuild and lose the calibration changes?",
+                    "The ROM has calibration changes that are not in its source or in a saved file. A full build loads what the source " +
+                    "assembles to, and those changes are lost.\n\nPatch live (Ctrl+Shift+B) builds and keeps them. Save the ROM first to keep a copy.",
+                    "Patch live instead", "Rebuild anyway", "Cancel");
+                if (answer == "Patch live instead") { PatchLive(false); return; }
+                if (answer != "Rebuild anyway") { SetStatus("build cancelled: the calibration changes are kept"); return; }
+                AppLog.Action("app", "build: calibration changes discarded (asked)");
+            }
+            Build();
+        }
+        catch (Exception ex) { AppLog.Error("app", "build failed", ex); SetStatus("build failed: " + ex.Message); }
     }
 
     void Build()
@@ -2493,7 +2602,7 @@ public sealed class MainWindow : Window
                 MemoryAddress = _memAddr.Text ?? "", DisassemblyAddress = _disAddr.Text ?? "",
                 LookupQuery = _lookupQ.Text ?? "", LookupLines = [.. _lookupLines],
                 SelectedTab = SelectedTab(), SpeedIndex = _settings.SpeedIndex,
-                Package = _chip.CurrentPackage.ToString(), CrystalMHz = Bus.CrystalMHz,
+                Package = _chip.CurrentPackage.ToString(), CrystalMHz = Chip.CrystalMHz,
                 Machine = machine, Ram = ram, Rom = rom, Definitions = _host.Defs(),
                 ProcessorJson = _profile.ToJson(),
                 SettingsJson = System.Text.Json.JsonSerializer.Serialize(_settings.RomScoped(), Indented),
@@ -2778,7 +2887,7 @@ public sealed class MainWindow : Window
     }
 
     /// Restarting after an update: unsaved work is saved or let go first (false: stay).
-    internal Task<bool> ReadyToRestart() => ConfirmReplaceCurrent("the updated program");
+    public Task<bool> ReadyToRestart() => ConfirmReplaceCurrent("the updated program");
     internal List<string> TabNames() => [.. _bottom.Items.OfType<TabItem>().Select(t => t.Tag as string ?? "")];
     internal void ShowTab(string header) => SelectTab(header);
     internal void TunerMode(bool on) => SetTunerMode(on);
@@ -2926,7 +3035,7 @@ public sealed class MainWindow : Window
             var hex = word.EndsWith("h", StringComparison.OrdinalIgnoreCase) ? word[..^1] : word;
             if (!_host.Defs().TryResolve(word, out addr) && !int.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out addr)) addr = -1;
         }
-        bool label = word.Length > 0 && _host.Assembly?.Symbols.TryGetValue(word, out var sym) == true && sym.Kind == SymbolKind.Label && sym.Value < Bus.RomSize;
+        bool label = word.Length > 0 && _host.Assembly?.Symbols.TryGetValue(word, out var sym) == true && sym.Kind == SymbolKind.Label && sym.Value < Chip.RomSize;
         if (label)
         {
             int at = (int)_host.Assembly!.Symbols[word].Value;
@@ -2934,7 +3043,7 @@ public sealed class MainWindow : Window
             if (src != null && !(SamePath(src.File, _current) && src.Line == line)) list.Add(($"Go to the definition of {word}", () => GoToAddress(at)));
             addr = at;
         }
-        if (addr >= 0 && addr < Bus.RomSize && _host.Defs().Items.FirstOrDefault(i => i.Contains(addr)) is { } item)
+        if (addr >= 0 && addr < Chip.RomSize && _host.Defs().Items.FirstOrDefault(i => i.Contains(addr)) is { } item)
             list.Add(($"Go to the table {item.Name}", () => { if (_calibration.ShowAddress(addr)) { SelectTab("Calibration"); SetStatus($"{word} = {Hex(addr)}: opened on the Calibration tab"); } }));
         if (word.Length > 0 && (label || addr >= 0))
         {
@@ -2965,13 +3074,13 @@ public sealed class MainWindow : Window
             var hex = word.EndsWith("h", StringComparison.OrdinalIgnoreCase) ? word[..^1] : word;
             if (!int.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out addr)) return;
         }
-        if (addr < Bus.RomSize && _calibration.ShowAddress(addr))
+        if (addr < Chip.RomSize && _calibration.ShowAddress(addr))
         {
             SelectTab("Calibration");
             SetStatus($"{word} = {Hex(addr)}: opened on the Calibration tab");
             return;
         }
-        if (_host.Assembly?.Symbols.TryGetValue(word, out var sym) == true && sym.Kind == SymbolKind.Label && sym.Value < Bus.RomSize)
+        if (_host.Assembly?.Symbols.TryGetValue(word, out var sym) == true && sym.Kind == SymbolKind.Label && sym.Value < Chip.RomSize)
         {
             var src = _host.Assembly.Lookup((int)sym.Value);
             if (src != null && !(SamePath(src.File, _current) && src.Line == line)) GoToAddress((int)sym.Value);
@@ -3175,6 +3284,14 @@ public sealed class MainWindow : Window
     void OnKeyDown(object? sender, KeyEventArgs e)
     {
         string? action = _hotKeys.FirstOrDefault(kv => kv.Value.Matches(e)).Key;
+        // Tuner mode has no source, run control or breakpoints: their keys do nothing there. Ctrl+B used to rebuild the ROM from its
+        // disassembly in Tuner mode and throw away every calibration change since the last save, with no button on screen to say so
+        if (_tuner && action is "Run / pause" or "Step" or "Step over" or "Step into" or "Step out" or "Reset" or "Build" or "Patch live" or "Toggle breakpoint")
+        {
+            SetStatus($"{action}: not in Tuner mode (File > Simulator mode)");
+            e.Handled = true;
+            return;
+        }
         switch (action)
         {
             case null: return;
@@ -3184,7 +3301,7 @@ public sealed class MainWindow : Window
             case "Step into": Control("stepinto"); break;
             case "Step out": Control("stepout"); break;
             case "Reset": Control("reset"); break;
-            case "Build": Build(); break;
+            case "Build": BuildAsked(); break;
             case "Patch live": PatchLive(false); break;
             case "Open": OpenFileDialog(); break;
             case "Save": SaveCurrent(); break;
@@ -3207,6 +3324,8 @@ public sealed class MainWindow : Window
     }
 
     // ------------------------------------------------------------------ processor, compare, ROM settings
+
+    static bool IsP13Part(ProcessorProfile p) => p.Name.Equals(ProcessorProfile.Msm66911().Name, StringComparison.OrdinalIgnoreCase);
 
     void ApplyProfile(ProcessorProfile p)
     {
@@ -3242,7 +3361,7 @@ public sealed class MainWindow : Window
             try
             {
                 if (_host.LoadedPath == null) return null;
-                var rom = _host.RomBytes(0, Bus.RomSize);
+                var rom = _host.RomBytes(0, Chip.RomSize);
                 var srcs = Dispatcher.UIThread.Invoke(() => _buffers.Select(kv => (kv.Key, kv.Value)).ToList());
                 return _host.Assembly is { } asm ? Mcp.Program66k.FromAssembly(_host.LoadedPath, rom, asm, srcs) : Mcp.Program66k.FromImage(rom, _host.LoadedPath);
             }

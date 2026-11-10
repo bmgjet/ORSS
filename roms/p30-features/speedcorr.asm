@@ -32,7 +32,7 @@ mod_speedcorr:  PUSHS   A
                 CLRB    A
                 LCB     A, speedcorr_factor
                 STB     A, r0
-                LB      A, 0b4h
+                LB      A, ENG_VSS
                 MULB
                 L       A, ACC                 ; word mode: speed x factor
                 SLL     A                      ; / 128: one bit left, the high byte
@@ -41,7 +41,7 @@ mod_speedcorr:  PUSHS   A
                 SJ      speedcorr_store
 speedcorr_max:  LB      A, #0ffh
 speedcorr_store:
-                STB     A, 0b4h
+                STB     A, ENG_VSS
                 POPS    A
                 L       A, ACC
                 ST      A, er0

@@ -35,7 +35,7 @@ endif
 if XP == XP_CODE
 gear_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -44,13 +44,13 @@ gear_tick:
                 PUSHS   A
                 CLRB    A
                 LCB     A, gear_minspeed
-                CMPB    0b4h, A                ; road speed - minimum borrows (C) while below it
+                CMPB    ENG_VSS, A                ; road speed - minimum borrows (C) while below it
                 JLT     gear_zero
                 CLR     A                      ; period x speed / 64, the inverse of rpm per km/h
-                LB      A, 0b4h
+                LB      A, ENG_VSS
                 L       A, ACC
                 ST      A, er0
-                L       A, 0ach
+                L       A, ENG_RPMP
                 MUL
                 MOVB    r7, #006h
 gear_shift:     SRL     er1

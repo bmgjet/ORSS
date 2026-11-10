@@ -46,7 +46,7 @@ endif
 if XP == XP_CODE
 accut_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -58,15 +58,15 @@ accut_tick:
                 CMPB    A, #000h
                 JEQ     accut_release
                 LCB     A, accut_tps
-                CMPB    0b9h, A
+                CMPB    ENG_TPS, A
                 JGE     accut_cut
                 CLR     A
                 LC      A, accut_rpm_hi
-                CMP     0ach, A                ; period at or below the high point's: above that rpm
+                CMP     ENG_RPMP, A                ; period at or below the high point's: above that rpm
                 JLE     accut_cut
                 CLR     A
                 LC      A, accut_rpm_lo
-                CMP     0ach, A                ; period past the low point's: below that rpm
+                CMP     ENG_RPMP, A                ; period past the low point's: below that rpm
                 JGT     accut_cut
                 MOV     DP, #accut_timer       ; none of them: back on once the hold runs out
                 CLRB    A

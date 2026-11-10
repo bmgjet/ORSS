@@ -5,8 +5,8 @@ namespace OkiRomSim.Desktop;
 /// Address hits from real hardware: how often and how recently (wall clock) each ROM address was fetched, and the most recent hits in order.
 public sealed class HitStore
 {
-    public readonly uint[] Count = new uint[OkiRomSim.Core.Bus.RomSize];
-    public readonly long[] Last = new long[OkiRomSim.Core.Bus.RomSize];
+    public readonly uint[] Count = new uint[OkiRomSim.Core.Chip.RomSize];
+    public readonly long[] Last = new long[OkiRomSim.Core.Chip.RomSize];
     public readonly int[] Recent = new int[8192];
     public long Total;
     static readonly System.Diagnostics.Stopwatch Clock = System.Diagnostics.Stopwatch.StartNew();
@@ -43,6 +43,8 @@ public sealed class MoatesTrace : IDisposable
     public string Device { get; private set; } = "";
     /// Baud rate. The Ostrich family speaks 115200 or 921600; a PGMFI RTP speaks 38400.
     public int Baud { get; set; } = 921600;
+    /// The line speed the port was opened at (Connect: Baud, or 38400 for a PGMFI RTP) - how long a frame takes on the wire.
+    int _baud = 921600;
     /// A pause between writing a command and reading its answer. Some USB-serial cables need it.
     public int PostWritePauseMs { get; set; } = 10;
     public int TimeoutMs { get; set; } = 400;
@@ -72,9 +74,27 @@ public sealed class MoatesTrace : IDisposable
     string ConnectLocked(string portName)
     {
         Close();
+        try
+        {
+            return OpenAndIdentify(portName);
+        }
+        catch
+        {
+            // a device that did not identify (or a bank set-up that threw) must not be left open: Connected is "the port is open",
+            // and an open port would let the upload loop write to a device nobody identified
+            Close();
+            Device = "";
+            throw;
+        }
+    }
+
+    string OpenAndIdentify(string portName)
+    {
         // the baud rates the devices accept; a PGMFI RTP is the odd one out at 38400
         int baud = Baud > 0 ? Baud : 921600;
         if (Kind == "PGMFI RTP") baud = 38400;
+        _baud = baud;
+        Device = "";
         _port = new SerialPort(portName, baud, Parity.None, 8, StopBits.One)
         {
             ReadTimeout = Math.Max(50, TimeoutMs), WriteTimeout = 1000, Handshake = Handshake.None,
@@ -179,7 +199,8 @@ public sealed class MoatesTrace : IDisposable
                 if (Kind is not ("auto" or "Ostrich" or "ECU-Tamer" or "Moates1")) return false;
                 return true;
             case (byte)'D': name = "Demon"; return Kind is "auto" or "Demon";
-            case (byte)'C': name = Kind == "CobraRTP" ? "CobraRTP" : "RTP"; return Kind is "auto" or "CobraRTP" or "Demon";
+            // "PGMFI RTP" is offered in Settings and is an RTP ('C'): without it here that choice could never connect. It takes the same path "auto" takes for an RTP (the line at 38400, set in Connect).
+            case (byte)'C': name = Kind == "CobraRTP" ? "CobraRTP" : "RTP"; return Kind is "auto" or "CobraRTP" or "Demon" or "PGMFI RTP";
             case (byte)'1' or (byte)'2': name = "ROMulator"; return Kind is "auto" or "ROMulator";
             default: return false;
         }
@@ -251,6 +272,23 @@ public sealed class MoatesTrace : IDisposable
         }
         if (got < n) throw new TimeoutException($"only {got} of {n} bytes arrived");
         return buf;
+    }
+
+    /// The one-byte answer to a frame just sent. The device answers once it has the whole frame, and a 4 KB frame is on the wire for
+    /// 356 ms at 115200 baud - longer than the usual answer timeout (and the 200 ms a trace leaves behind) - so the wait is the
+    /// frame's time on the line plus the usual timeout. Waiting less timed out while the frame was still going out, and the retry's
+    /// Drain then cut the rest of it off, leaving the device mid-frame.
+    byte ReadAck(int sentBytes)
+    {
+        var port = _port!;
+        int usual = Math.Max(50, TimeoutMs);
+        int wire = (int)Math.Ceiling(sentBytes * 10_000.0 / Math.Max(1200, _baud));
+        try
+        {
+            port.ReadTimeout = usual + wire;
+            return Read(1)[0];
+        }
+        finally { try { port.ReadTimeout = usual; } catch { } }
     }
 
     // ---- the port shared with the datalog (a Demon logs the ECU over the same cable)
@@ -335,7 +373,7 @@ public sealed class MoatesTrace : IDisposable
                             Drain();
                             Send(cmd);
                             Pause();
-                            answer = Read(1)[0];
+                            answer = ReadAck(cmd.Length + 1);
                             if (answer == 'O') break;
                         }
                         catch (TimeoutException) { answer = 0; }
@@ -350,7 +388,10 @@ public sealed class MoatesTrace : IDisposable
             }
             finally
             {
-                if (tracing) StartTrace(romSize, _lastNonRedundant);
+                // a trace that will not start again must not replace the outcome of the transfer (a good upload reported as failed, or the real error lost)
+                if (tracing)
+                    try { StartTrace(romSize, _lastNonRedundant); }
+                    catch (Exception ex) { Status?.Invoke("trace not restarted after the transfer: " + ex.Message); OkiRomSim.Core.AppLog.Warn("emulator", "trace not restarted: " + ex.Message); }
             }
         }
     }
@@ -430,7 +471,10 @@ public sealed class MoatesTrace : IDisposable
             }
             finally
             {
-                if (tracing) StartTrace(size, _lastNonRedundant);
+                // a trace that will not start again must not replace the outcome of the transfer (a good upload reported as failed, or the real error lost)
+                if (tracing)
+                    try { StartTrace(size, _lastNonRedundant); }
+                    catch (Exception ex) { Status?.Invoke("trace not restarted after the transfer: " + ex.Message); OkiRomSim.Core.AppLog.Warn("emulator", "trace not restarted: " + ex.Message); }
             }
         }
     }
@@ -449,6 +493,13 @@ public sealed class MoatesTrace : IDisposable
 
     /// Start streaming address hits. nonRedundant drops repeats of the same address in a row.
     public void StartTrace(int romSize, bool nonRedundant)
+    {
+        // under the port's lock, like every other use of the port: started from the Trace page while an upload holds the port, the
+        // 'T' command would land between two write frames and the trace thread would read the upload's answers as addresses
+        lock (_io) StartTraceLocked(romSize, nonRedundant);
+    }
+
+    void StartTraceLocked(int romSize, bool nonRedundant)
     {
         if (_port == null) throw new InvalidOperationException("not connected");
         _lastNonRedundant = nonRedundant;
@@ -491,17 +542,22 @@ public sealed class MoatesTrace : IDisposable
 
     public void StopTrace()
     {
-        if (_thread == null) return;
-        _stop = true;
-        _thread.Join(600);
-        _thread = null;
-        try
+        lock (_io)
         {
-            _port?.Write(new[] { (byte)'t' }, 0, 1);        // soft stop; the device answers 'O'
-            Thread.Sleep(50);
-            _port?.DiscardInBuffer();
+            if (_thread == null) return;
+            _stop = true;
+            _thread.Join(600);
+            _thread = null;
+            try
+            {
+                _port?.Write(new[] { (byte)'t' }, 0, 1);        // soft stop; the device answers 'O'
+                Thread.Sleep(50);
+                _port?.DiscardInBuffer();
+                // the trace thread reads with a short timeout of its own: the commands after it get the usual one back
+                if (_port != null) _port.ReadTimeout = Math.Max(50, TimeoutMs);
+            }
+            catch { }
         }
-        catch { }
     }
 
     /// Let the port go: after anything using it (an upload, a datalog exchange) has finished, so nothing writes to a port that is half closed.

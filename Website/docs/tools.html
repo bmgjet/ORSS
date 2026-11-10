@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bin tool, Compare, Import maps — Rom Sim Studio guide</title>
+<link rel="icon" href="../favicon.ico">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<header class="topbar"><button class="menu-btn" aria-label="Contents">☰</button><a class="logo" href="index.html">ROM SIM <b>STUDIO</b></a><span class="sp"></span><span class="links"><a href="../">Website</a> &nbsp;·&nbsp; <a href="../#start">Download</a></span></header>
+<div class="frame"><nav class="side"></nav><main>
+
+<h1>Bin tool, Compare, Import maps</h1>
+<p class="lead">Three tools for working across ROMs and chips.</p>
+
+<h2 id="bintool">Bin tool</h2>
+<p><b>File &gt; Bin tool…</b> — 32 KB ROMs and 64 KB chips. The ECU sees 32 KB; a 64 KB chip (27C512, SST27SF512) holds two, and the ECU runs whichever half its top address line picks.</p>
+<ul>
+  <li><b>Make a 64 KB image</b> from one ROM (in the upper half, for a board with A15 tied high) or from two (two tunes on one chip, picked by a switch on that line).</li>
+  <li><b>Split</b> a 64 KB image back into its two 32 KB halves.</li>
+</ul>
+
+<h2 id="compare">Compare</h2>
+<figure><img src="img/compare.png" alt="The compare window"><figcaption>Compare: routines matched by the shape of their code, tables compared cell by cell.</figcaption></figure>
+<p><b>File &gt; Compare…</b> (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd>) sets the ROM open here beside another <span class="path">.bin</span> or <span class="path">.asm</span>. Routines are matched by the shape of their code, so one that <i>moved</i> is not reported as <i>changed</i>; the tables are compared cell by cell. The result says plainly when only calibration data changed.</p>
+
+<h2 id="import">Import maps</h2>
+<figure><img src="img/import-maps.png" alt="The import maps window"><figcaption>Import maps: each table paired with the one here that does the same job, previewed before anything changes.</figcaption></figure>
+<p><b>Tools &gt; Import maps…</b> brings the tune from another ROM — even another ROM family — into this one. Each of its tables is paired with the one here that does the same job (the same page row, the same name, or the fuel / ignition / VE map for the same cam), the values move in real units through each ROM's own formula, and a map whose breakpoints differ is resampled onto these (by breakpoints, stretched end to end, or cell for cell). All three are previewed in the Table, Line and 3D views, and the whole import is one undo step.</p>
+
+<footer>Rom Sim Studio 0.0.0.8 · by bmgjet · <a href="licence.html">Licence</a></footer>
+</main></div>
+<script src="guide.js"></script>
+</body>
+</html>

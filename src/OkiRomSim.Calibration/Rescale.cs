@@ -24,7 +24,7 @@ public static class Rescale
     /// Multiply every cell of `item` by `factor` (1.10 = +10%). Tables with a multiplier row keep their delivered values in range by raising the multiplier of any column that would otherwise clip; other tables clamp, and the report says how many cells hit the end.
     public static ScaleReport ScaleTable(DefinitionSet defs, byte[] rom, ItemDef item, double factor, bool rescaleColumns = true)
     {
-        if (factor <= 0 || double.IsNaN(factor)) return ScaleReport.Nothing("the factor has to be greater than 0");
+        if (!double.IsFinite(factor) || factor <= 0) return ScaleReport.Nothing("the factor has to be a number greater than 0");
         if (item.Type is not (CellType.U8 or CellType.S8 or CellType.U16 or CellType.S16 or CellType.U16BE or CellType.S16BE))
             return ScaleReport.Nothing($"{item.Name} is not a numeric table");
 
@@ -127,6 +127,9 @@ public static class Rescale
         foreach (var (index, v) in values)
         {
             if (index < 0 || index >= item.Count) continue;
+            // NaN or an infinity (typed, pasted, or a formula's) has no place on the scale: NaN came out of the rounding below as 00h - no
+            // fuel in that cell - and an infinity raised the column's multiplier to 255 and re-quantised every cell in it
+            if (!double.IsFinite(v)) continue;
             asked.Add(index);
             // `want` is in effective raw units - the stored byte times the column's multiplier. A raw write (the +/- nudge keys, or "r120" typed into a cell) names the stored byte, so it has to be multiplied up to get there; taking it as an effective value instead divided every nudge by the multiplier, which is why adding fuel did next to nothing.
             want[index] = raw ? v * Math.Max(1, (int)rom[(mrow + (index % item.Cols)) & (rom.Length - 1)])

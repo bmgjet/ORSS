@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Datalogging — Rom Sim Studio guide</title>
+<link rel="icon" href="../favicon.ico">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<header class="topbar"><button class="menu-btn" aria-label="Contents">☰</button><a class="logo" href="index.html">ROM SIM <b>STUDIO</b></a><span class="sp"></span><span class="links"><a href="../">Website</a> &nbsp;·&nbsp; <a href="../#start">Download</a></span></header>
+<div class="frame"><nav class="side"></nav><main>
+
+<h1>Datalogging</h1>
+<p class="lead">Read what the ECU sees as the car runs — or the simulated ROM — record it, play it back over the maps, and let it tell you what the fuel wants.</p>
+
+<h2>Connecting to a car</h2>
+<ol class="steps">
+  <li>Plug the datalog cable into the ECU's CN2 header and the laptop; note the serial port it gets.</li>
+  <li><b>Settings &gt; Emulator &amp; datalog</b>: pick the port and the protocol (or leave it on auto-detect).</li>
+  <li>Press <b>Connect</b> on the Datalog panel. The dot on the Datalogging menu goes green; it blinks orange while a lost link is being rebuilt, and is red when there is none.</li>
+</ol>
+<table>
+  <tr><th>Protocol</th><th>ROMs</th></tr>
+  <tr><td>HTS / ISR (10h, 20h, C0h+n, 40h packets)</td><td>HTS, the skeleton's <b>Datalogging: HTS / ISR frame</b> module, and most tuned ROMs of that family</td></tr>
+  <tr><td>Channel stream (version 3)</td><td>The skeleton's <b>Datalogging: channel stream</b> module: only the channels you tick</td></tr>
+  <tr><td>Crome / QD3</td><td>Crome ROMs and the skeleton's <b>Datalogging: QD3 frame</b> module</td></tr>
+  <tr><td>HTS single byte, raw 10h</td><td>Older and simpler loggers</td></tr>
+  <tr><td>P13 46h / 20h</td><td>The MSM66911 (P13 / P14) ECUs</td></tr>
+</table>
+<p>A stock ROM does not stream a datalog: its tester link is not something the usual tools read. Build a datalogging module into a <a href="new-rom.html">skeleton ROM</a> to log it.</p>
+<p><b>Detect layout</b> works out an unknown ROM's datalog format by asking the simulated ROM and reading what it answers.</p>
+
+<h2>Logging the simulator</h2>
+<p>Choose <b>SIMULATOR</b> as the port: the simulated ROM answers on a serial port of its own, exactly as the ECU would, so a datalog setup can be tried without a car. Its timeouts run in the simulated ECU's time, so a slow PC still finds the right protocol (HTS115 and HTS120 answer the 20h frame). Or the other way round — <b>Drive the simulator with the car's readings</b> (Settings &gt; Emulator &amp; datalog) feeds a car's log into the simulated engine.</p>
+
+<h2>The Datalog panel</h2>
+<figure><img src="img/tuner.png" alt="Tuner mode with the datalog on the right"><figcaption>In Tuner mode the datalog is on the right: the gauges above, the graph or the parameters below.</figcaption></figure>
+<ul>
+  <li><b>Connect</b> — start logging the car (or the simulator). Every frame is kept as it comes.</li>
+  <li><b>▶ Play / ❚❚ Pause / ■ Stop</b>, <b>◀ ▶</b> a frame at a time, and the slider — play a loaded log back in real time; the live cell and trail follow it over the maps exactly as when it was recorded. In the simulator, Play runs the simulated ROM through the log.</li>
+  <li><b>Graph / Parameters</b> — the toggle beside the slider switches between the scrolling graph and the frame's values.</li>
+  <li><b>Load log… / Save log…</b> — an <span class="path">.rlog</span> (the log, the ROM it ran on and the tuning settings in one file, so all three open together), a CSV, or the binary formats other loggers write. Saved as CSV with every channel and the raw frame. An HTS log gives all of its values: where the engine is in the maps, the fuel and ignition corrections, every input and output bit, the HTS features' states, the boost controller, the analog and emulator inputs, the wideband and the EGT and pressure channels. Opening a log while logging live stops the live log so the file is what is shown.</li>
+  <li>Values are shown in the units picked in <b>Settings &gt; Units</b> (°F, mph, psi...): the values list, the graph and the gauges alike.</li>
+  <li><b>Pick several values</b> in the values list: <kbd>Ctrl</kbd>+click adds or takes one, <kbd>Shift</kbd>+click a run of them, drag a box over the ones you want (<kbd>Ctrl</kbd> held adds to those picked), <kbd>Ctrl</kbd>+<kbd>A</kbd> all, <kbd>Esc</kbd> none. <b>Right-click</b> for gauges of them: <b>Add gauges</b> (a lamp for an on / off value, a dial for the rpm, a bar for the rest), or all as dials, bars, numbers, rolling graphs or lamps, laid out under the gauges already there; <b>Float them in a widget</b>; or copy their names, values and units.</li>
+  <li><b>Graph…</b> — the whole log as a graph in a window of its own: any channels against time, each on its own scale, with a cursor that reads them all.</li>
+</ul>
+
+<h2 id="channels">Channels</h2>
+<p><b>Datalog &gt; Channels…</b> (on a ROM with the channel stream): tick what the car has — no A/C, no knock sensor — so the frame stays short and fast. Mark the readings that change slowly (temperatures, battery, codes) <b>slow</b>: they take turns, one a frame, instead of riding in every frame. Every byte the ECU sends costs it about a tenth of a millisecond, and at high rpm its main loop &mdash; where it works out the spark &mdash; has little time to spare. So a ROM made here paces what it sends by its spark calculation: a few bytes each time it works the spark out, fewer the higher the rpm (32 under 1,500 rpm, 8 to 3,500, 4 to 5,000, 2 to 6,500, then 1). Logging never takes the engine code&#39;s time &mdash; in the simulator the spark is worked out as often as with no logging at all, and never two calculations missed in a row &mdash; at the cost of data at high rpm: about 900 bytes a second at idle, 400 at cruise, 150 at 5,000 rpm and 50&ndash;80 past 6,500. A shorter frame really is more frames, more so at high rpm; the window says how many a second you will get. With the engine stopped the ECU sends as fast as the line goes. A ROM made here can run its datalog line at <b>62,500 baud</b> instead (<b>Serial port</b> page, <b>62,500 baud instead of 38,400</b>): each frame comes in sooner, and more of them with the engine stopped (running, the pacing above sets the amount). It needs a cable that can be set to exactly 62,500 — an FTDI one can; 57,600 will not do — and <b>Settings &gt; Datalog &gt; Baud rate</b> set to 62500 to match. HTS and other loggers, and a Demon, want 38400, so leave it off for them. Other loggers on these ROMs are paced the same way: at the rev limit a 52-byte HTS frame takes a second or two. Rpm, injector time and the other two-byte values are read in one go, so they are never half one reading and half the next. Change the channels while logging and the ECU is sent the new list at once — the values and the graph follow it. A channel the ROM connected cannot send (its table is shorter, without <b>Datalogging: every channel</b>) is greyed in the window and named on the datalog page with how to add it, rather than left out quietly; picking channels while logging with another protocol offers to switch to the channel stream.</p>
+<h3>Every channel</h3>
+<p>Build the ROM with <b>Datalogging: every channel</b> (in Default) and the list grows from 53 channels to 188. The window has a search box, and <b>Everything</b> ticks them all: rpm, MAP, throttle, injector time, advance, speed and the cut and limiter states in every frame, and the rest taking turns as slow channels. The new channels are:</p>
+<table>
+  <tr><th>Group</th><th>Channels</th></tr>
+  <tr><td>Limiters and cuts</td><td><b>rev_limit</b> (the rev limiter, or any limiter module, is cutting), overrun_cut, fuel_cut, and which module wants a cut: limit_revlimit, limit_launch, limit_fts, limit_boostcut, limit_ectpro, limit_traction and the rest.</td></tr>
+  <tr><td>Fuel corrections</td><td>The fuel map's value before any correction, then each correction: warm-up (six), intake air, coolant, baro (three), acceleration and its scales, tip-in, post-start, knock, and the injector dead time in ms.</td></tr>
+  <tr><td>Ignition corrections</td><td>Intake air, throttle, cold, rpm retard, rpm correction, knock retard (degrees), knock against coolant, and dwell.</td></tr>
+  <tr><td>Idle</td><td>The idle target in rpm, and its corrections.</td></tr>
+  <tr><td>VTEC</td><td>VTEC engaged, past the stock points, and the load it needs.</td></tr>
+  <tr><td>Engine state</td><td>The map rpm and load indexes, time since start, and the engine's flag bytes, each bit a channel of its own under the name of what it means, worked out from the stock code: <b>cranking</b>, <b>cold_start</b>, <b>o2_ready</b>, <b>o2_rich</b>, <b>knock_window_closed</b>, <b>overrun_cut_armed</b>, <b>throttle_open</b>, <b>crank_sync_lost</b>... The switch inputs (<b>sw_brake</b>, <b>sw_park_neutral</b>, <b>sw_ac_request</b>...) and the board's options (<b>opt_knock_sensor</b>, <b>opt_automatic</b>, <b>opt_vtec_pressure_switch</b>...). Hover a value on the datalog page for what it is.</td></tr>
+  <tr><td>Functions (debug)</td><td>Every byte the functions in the ROM keep their state in (module RAM), named as in their source from the build open: rolling idle's <b>rollidle_injectors</b> (the injectors it left out last, as digits — 14 is injectors 1 and 4, 0 a spark) and <b>rollidle_drops</b> (how many it has left out), the trim traction control, the wideband loop or the fuel trim is giving, a GIO's delay counting, the serial inputs. Two-byte values come as the word and its two bytes. The Channels window says what each byte holds in this build.</td></tr>
+  <tr><td>Your RAM addresses</td><td>Eight RAM bytes of your choice, set on the ROM's <b>Datalog: RAM addresses</b> page (80h–47Fh). Each is logged under its address and what the memory map says is there — <b>ram_0b4_road_speed</b> — and the Channels window shows both.</td></tr>
+</table>
+<p>With that many channels the slow ones are sent as a range: every channel from the first slow one to the last comes round in turn, so each slow value updates every second or two. Up to 13 bytes still go in every frame; picks past that come round with the slow ones.</p>
+<p>Every frame starts with A5h, carries the ECU's own clock and ends in a checksum. Out of step (the start, or a byte spoilt on the line) a frame is only taken when the one after it lines up too and the clock has moved on, so a noisy cable loses frames but never shows wrong ones. The HTS 20h frame is asked for one at a time; after a late or spoilt answer the line is let go quiet before the next question.</p>
+
+<h2>Serial inputs</h2>
+<p>The datalog cable works both ways. With the <b>serial inputs</b> module in the ROM, the laptop — or any small board wired to the ECU's datalog receive line — can send values <i>to</i> the ECU, and the ROM uses them like extra sensor inputs. The idea: things the ECU has no spare pin for, or that the laptop already knows, become inputs a module can act on.</p>
+<ul>
+  <li><b>What is sent:</b> three bytes for each value — <code>FFh</code>, the input's number (<code>00h</code>–<code>FDh</code>, so 254 inputs), the value (<code>00h</code>–<code>FEh</code>). No answer comes back, and a running channel stream carries on through them. <code>FFh</code> is never a number or a value, so a lost byte is over at the next <code>FFh</code>.</li>
+  <li><b>What the ROM keeps:</b> eight of them — the <b>Serial inputs</b> page says which input number goes in each of the eight (a device may send many; the rest are ignored), what each reads as before any arrives, and how long without any before they all go back to those defaults (a cable pulled out leaves nothing stuck on).</li>
+  <li><b>Where they are used:</b> as an <b>analog input</b> — closed loop, lean protection and flex fuel can read serial input 1–8 instead of a pin (input 4–11 in their lists); and as a <b>switch</b> — every module with an input list (launch, full throttle shift, the GIO outputs, the map switch…) offers serial input 1–8, on while its value is not 0.</li>
+  <li><b>Sending them from the laptop:</b> <b>Datalog &gt; Channels… &gt; Send to the ECU</b>: pick the input number and the log channel it comes from, with a scale and offset — the wideband's <code>afr</code> × 10 sends 14.7 as 147. They go 20 times a second while the stream runs. The stream logs what the ECU holds (Serial input 1–8, and the time since one came).</li>
+</ul>
+<p>Example: a wideband read by the laptop, sent as serial input 1, picked as closed loop's input — the ECU runs closed loop on a wideband with no wire to its analog pins. Or a switch on a small board sending input 2 as 0 or 1, picked as launch control's input.</p>
+<p><b>Memory read</b> (its own module): any 32 bytes of the ECU's RAM read while the engine runs, in Codes and service &gt; ECU memory — a module's state on the car, not just what a channel sends. The ROM itself is never sent, so a tune stays in the chip.</p>
+
+<h2>Codes and service</h2>
+<figure><img src="img/codes-service.png" alt="Codes and service window with big buttons"><figcaption>Codes and service: big buttons, because it is used with one hand.</figcaption></figure>
+<p>The codes the ECU has stored and whether the lamp is lit, read from the datalog; <b>Clear codes</b>. On a skeleton ROM with the service commands module: <b>Injectors off</b> (a compression test), <b>Lock timing</b> (for a timing light), the maps chosen, GIO 1–4 forced on. The check-engine lamp flashes quickly while injectors are off or timing is locked.</p>
+<h3 id="cylinder-test">The cylinder test</h3>
+<p>An engine running rough on three cylinders: which one is dead? <b>Cut cylinder 1</b> to <b>4</b> cut one cylinder's injector at a time, the others firing. Cut each in turn and listen (or watch the rpm): cutting a good cylinder makes the engine worse; cutting the dead one makes no difference. Then look at that cylinder's injector, plug, lead and compression. Only one is ever cut — cutting another puts the one before back first — and the check-engine lamp flashes while it is. <b>All cylinders firing</b>, <b>All back to normal</b> or a key cycle ends it.</p>
+
+<h2 id="trigger-pattern">Trigger pattern</h2>
+<p><b>Datalogging &gt; Trigger pattern…</b> shows the distributor's three signals as the ECU sees them, one cam revolution (two crank turns) at a time, for a car that misfires, cuts out or will not start and a sensor is suspected. It needs the <b>Trigger pattern log</b> function in the ROM (File &gt; Change functions; it comes with the channel stream) and the datalog connected.</p>
+<figure><img src="img/trigger-pattern.png" alt="The trigger pattern window: 24 crank-tooth bars, one twice as tall and red, the TDC and cylinder pulses under them, and what each sensor shows"><figcaption>A crank pulse missed: tooth 11 took twice as long as the others, and the window says what to check. (The simulator's own fault, put on the signals to show it.)</figcaption></figure>
+<ul>
+  <li>Each <b>bar</b> is a crank (CKP) tooth: how long since the tooth before. At a steady speed a healthy engine gives <b>24 bars the same height</b>, with the usual height as a dashed line and its time in milliseconds.</li>
+  <li>A bar about <b>twice as tall</b> is a crank pulse missed: a gap at the sensor, a loose connector, a damaged reluctor, a weak signal at low rpm. A missed pulse can show twice in one capture.</li>
+  <li><b>Two short bars</b> where one should be are an extra pulse: noise on the CKP line — its shield, a coil lead or plug wire next to it, a bad ground.</li>
+  <li>The <b>TDC</b> row should have a pulse every sixth tooth (four in all); the <b>CYP</b> row one pulse, three teeth after cylinder 1's TDC. Missing, extra or out of place, and the window names it. The bars start from cylinder 1's TDC.</li>
+</ul>
+<p><b>Capture</b> takes one revolution (the datalog pauses for a moment). To catch a fault that comes and goes — over bumps, or once the engine is hot — pick <b>Every 2 s</b>, <b>Every 1 s</b> or <b>Real time</b> (one revolution straight after another, about three a second; the datalog's other channels pause meanwhile). A capture lost on the line leaves the last good one up and is counted as missed beside the list; the repeat carries on. It works cranking too: a no-start with no crank pulse at all says so. Logging the simulator, <b>Simulate</b> puts a sensor fault on the signals so you can see what each looks like.</p>
+<p>With the <b>remote control commands</b> module, a <b>Remote control</b> section adds the fan on or off, popcorn mode, a rev and a speed limit, boost cut and VTEC steps, and the anti-start password — the same commands a phone or button box sends. Every byte the ECU understands, and how to build such a panel: <a href="remote.html">Remote control and serial commands</a>.</p>
+
+<h2>Smoothing</h2>
+<p><b>Smooth values</b> takes the noise out of a reading: the last few frames are looked at together, a reading far from their median (6000, 28, 6000 rpm — a spike on the line, not the engine) is dropped, and the rest are blended. A real change gets through as soon as the next frame agrees. The raw frame is always kept as it came. Settings &gt; Emulator &amp; datalog &gt; Smoothing sets how many frames and how far is too far.</p>
+
+<h2>Widebands and extra readings</h2>
+<p>A wideband on its own serial port (AEM, Zeitronix, TechEdge, PLX, Innovate, 14Point7 and others), or on one of the ECU's analog inputs; and <b>aux channels</b> worked out from the raw frame bytes with an expression of your own. Both in Settings &gt; Emulator &amp; datalog.</p>
+
+<h2>Fixing the fuel from a log</h2>
+<p>Set the AFR you want in <b>Settings &gt; Targets</b> (a grid shaped like the fuel map). The measured AFR is averaged into every cell the engine sat in, and the correction to reach the target is worked out cell by cell; <b>Settings &gt; Corrections</b> sets how it is applied. Nothing changes until you apply it, and it is one undo step.</p>
+
+<h2>Moates Demon onboard logging</h2>
+<figure><img src="img/demon.png" alt="Demon onboard logging window"><figcaption>Demon onboard logging: set up, switch on, read back.</figcaption></figure>
+<p>A Demon can ask the ECU for the datalog itself and keep it in its memory, with no laptop in the car. Set what it asks for, every how-many-th packet to keep and the triggers that start a session; switch it on; later read the sessions back into the Datalog panel or a CSV.</p>
+
+<footer>Rom Sim Studio 0.0.0.8 · by bmgjet · <a href="licence.html">Licence</a></footer>
+</main></div>
+<script src="guide.js"></script>
+</body>
+</html>

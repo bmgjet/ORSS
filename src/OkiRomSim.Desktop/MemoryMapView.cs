@@ -98,7 +98,7 @@ public sealed class MemoryMapView : UserControl
         int size = Math.Max(1, e?.Size ?? 1);
         var ram = _host.ReadMemory(0, RamMap.RamEnd);
         var (raw, text) = e != null ? RamMap.Read(defs, e, ram) : (ram[addr], "");
-        var box = new TextBox { Text = text.Length > 0 ? text.Split(' ')[0] : ((int)raw).ToString(), Width = 160, FontFamily = MainWindow.MonoFont };
+        var box = new TextBox { Text = text.Length > 0 ? text.Split(' ')[0] : ((int)raw).ToString(), Width = 160, FontFamily = UiFonts.Mono };
         var held = _host.IsHeld(addr);
         var w = new Window
         {
@@ -169,8 +169,8 @@ public sealed class MemoryMapView : UserControl
         const double RowH = 20, Top = 22;
         static readonly double[] Cols = [0, 64, 320, 420, 560, 960];      // address, name, raw, value, written by, writes
         static readonly string[] Heads = ["Address", "Name", "Raw", "Value", "Written by (newest first)", "Writes"];
-        static readonly Typeface Mono = new(MainWindow.MonoFont);
-        static readonly Typeface Bold = new(MainWindow.MonoFont, FontStyle.Normal, FontWeight.Bold);
+        static readonly Typeface Mono = new(UiFonts.Mono);
+        static readonly Typeface Bold = new(UiFonts.Mono, FontStyle.Normal, FontWeight.Bold);
         static readonly IBrush HeadBg = AppTheme.Brush(Color.FromRgb(0x2b, 0x2e, 0x35));
         static readonly IBrush Alt = AppTheme.Brush(Color.FromArgb(18, 255, 255, 255));
         static readonly IBrush Sel = AppTheme.Brush(Color.FromArgb(70, 0x3a, 0x8d, 0xff));

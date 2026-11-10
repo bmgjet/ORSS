@@ -39,15 +39,19 @@ ifndef NEED_SERIAL_TX
 define NEED_SERIAL_TX
 endif
 ; RAM (bank 6Fh = 378h-37Fh is the one stock P30 gave its serial link)
-DL_STATE        EQU     00378h          ; r0: receive state: 0 command, 1 count, 2 addresses, 3 checksum (the stream's list)
-DL_RXCNT        EQU     00379h          ; r1: address bytes received
-DL_MODE         EQU     0037ah          ; r2: what is being sent: 0 nothing, 1 frame 20h, 2 stream, 3 one stream frame,
-                                        ;     4 packet 40h, 5 ident, 6 QD3 frame, 7 a memory block
-DL_POS          EQU     0037bh          ; r3: position in what is being sent
-DL_SUM          EQU     0037ch          ; r4: running checksum
-DL_NCH          EQU     0037dh          ; r5: channels in the stream list
-DL_SEQ          EQU     0037eh          ; r6: stream frame counter
-                                        ; (37Fh, r7 of this bank, is not free: a pointer register set lives there)
+DL_BANK         EQU     0006fh
+DL_STATE        EQU     00378h
+DL_KEEP         EQU     00376h          ; word: a word's high byte kept between its two bytes (and the stream's tick)
+DL_LOW          EQU     00374h          ; the first of datalog RAM below the bank (374h-377h, dlstream.asm)
+                                        ; r0: receive state: 0 command, 1 count, 2 addresses, 3 checksum (the stream's list)
+DL_RXCNT        EQU     DL_STATE + 1    ; r1: address bytes received
+DL_MODE         EQU     DL_STATE + 2    ; r2: what is being sent: 0 nothing, 1 frame 20h, 2 stream, 3 one stream frame,
+                                        ;     4 packet 40h, 5 ident, 6 QD3 frame, 7 a memory block, 8 the trigger log
+DL_POS          EQU     DL_STATE + 3    ; r3: position in what is being sent
+DL_SUM          EQU     DL_STATE + 4    ; r4: running checksum
+DL_NCH          EQU     DL_STATE + 5    ; r5: channels in the stream list
+DL_SEQ          EQU     DL_STATE + 6    ; r6: stream frame counter
+                                        ; (r7 of this bank is not free: P30, a pointer register set; P13, a timer)
 DL_BUDGET       EQU     MODRAM_NEXT     ; module RAM: bytes that may still go before the next spark calculation
 undef MODRAM_NEXT
 define MODRAM_NEXT (DL_BUDGET + 1)
@@ -90,7 +94,8 @@ if XP == XP_CODE
 ; The baud rate is the machine clock (2.5 MHz) / 8 / (256 - the reload): F8h 39,063 (the "38400" every logger uses,
 ; 1.7 % off, well inside what a UART takes), FBh 62,500 exactly. FCh 78,125 and FDh 104,167 work too, but with the
 ; byte budget (below) setting how much goes, a faster line only makes each byte arrive sooner.
-dl_init:        LCB     A, dl_fast
+dl_init:
+                LCB     A, dl_fast
                 LB      A, ACC                 ; (byte mode: LCB leaves the mode as it was)
                 JEQ     dl_init_38k
                 LB      A, #0fbh               ; 62,500 baud (DatalogFast)
@@ -113,10 +118,11 @@ dl_init_clear:  MOVB    [DP], #000h            ; 374h-37Eh
                 RT
 
 ; ------------------------------------------------------------------ receive interrupt
-mod_serial_rx:  L       A, 0f4h
+mod_serial_rx:
+                L       A, 0f4h
                 ST      A, IE
                 MOV     PSW, #00102h
-                MOV     LRB, #0006fh           ; r0-r6 = 378h-37Eh
+                MOV     LRB, #DL_BANK          ; r0-r6 = 378h-37Eh
                 L       A, DP
                 PUSHS   A
                 CLR     A
@@ -157,6 +163,23 @@ if defined(FEAT_DLMEMREAD)
                 JNE     dl_rx_notmem
                 J       dl_rx_memcmd
 dl_rx_notmem:
+endif
+if defined(FEAT_DLSERVICE)
+                CMPB    A, #063h               ; 63h-67h: the cylinder test (dlservice.asm)
+                JLT     dl_rx_notcyl
+                CMPB    A, #068h
+                JGE     dl_rx_notcyl
+                J       dl_rx_cylcut
+dl_rx_notcyl:
+endif
+if defined(FEAT_TRIGLOG)
+                CMPB    A, #061h               ; 61h / 62h: the trigger pattern log (triglog.asm)
+                JNE     dl_rx_nottrg1
+                J       dl_rx_trgarm
+dl_rx_nottrg1:  CMPB    A, #062h
+                JNE     dl_rx_nottrg2
+                J       dl_rx_trgread
+dl_rx_nottrg2:
 endif
 if defined(FEAT_DATALOG)
                 CMPB    A, #010h               ; the HTS / ISR frame
@@ -258,10 +281,11 @@ endif
 endif
 
 ; ------------------------------------------------------------------ transmit-complete interrupt
-mod_serial_tx:  L       A, 0f4h
+mod_serial_tx:
+                L       A, 0f4h
                 ST      A, IE
                 MOV     PSW, #00102h
-                MOV     LRB, #0006fh
+                MOV     LRB, #DL_BANK
                 L       A, DP
                 PUSHS   A
                 MOV     DP, #DL_BUDGET         ; the byte budget (below): spent, and the line rests until the next
@@ -292,7 +316,7 @@ dl_tx_any:      CAL     dl_next
 ; either line speed.
 dl_budget:      L       A, DP
                 PUSHS   A
-                L       A, 0ach                ; the crank period: larger is slower
+                L       A, ENG_RPMP                ; the crank period: larger is slower
                 CMP     A, #004e2h             ; under 1500 rpm (FFFFh, no reading, too): 32 bytes, the CPU mostly free
                 JGE     dl_budget_32
                 CMP     A, #00218h             ; 1500-3500 rpm: 8
@@ -325,7 +349,7 @@ dl_budget_set:  MOV     DP, #DL_BUDGET
                 SUBB    A, #001h
                 STB     A, [DP]
                 PUSHS   LRB
-                MOV     LRB, #0006fh
+                MOV     LRB, #DL_BANK
                 CAL     dl_next                ; the byte; the transmit interrupt sends the rest
                 POPS    LRB
 dl_budget_on:   POPS    A
@@ -336,7 +360,7 @@ dl_budget_ret:  POPS    A
 ; The engine stopped (or cranking under 400 rpm, or no reading): the spark is not worked out, so the main loop's
 ; every pass gives the budget instead - the CPU has time to spare, and the logger still hears the ECU with the key on.
 dl_budget_stopped:
-                L       A, 0ach
+                L       A, ENG_RPMP
                 CMP     A, #01250h             ; (400 rpm)
                 JLT     dl_budget_none
                 J       dl_budget
@@ -366,6 +390,12 @@ if defined(FEAT_DLMEMREAD)
                 J       dl_next_mem            ; dlmemread.asm
 dl_next_notmem:
 endif
+if defined(FEAT_TRIGLOG)
+                CMPB    A, #008h
+                JNE     dl_next_nottrg
+                J       dl_next_trg            ; triglog.asm
+dl_next_nottrg:
+endif
 if defined(FEAT_DLSTREAM)
                 J       dl_next_stream         ; 2, 3, 5: dlstream.asm
 else
@@ -394,7 +424,7 @@ dl_next_packet: LB      A, r3
                 JNE     dl_next_ptps
                 LB      A, off(0024fh)
                 SJ      dl_next_put
-dl_next_ptps:   LB      A, 0b9h
+dl_next_ptps:   LB      A, ENG_TPS
                 SJ      dl_next_put
 dl_next_zero:   CLRB    A
                 SJ      dl_next_put
@@ -457,7 +487,7 @@ dl_fb_word:     CMP     A, #04000h
                 AND     A, #01fffh
                 MOV     DP, A
                 L       A, [DP]                ; the word, in one read
-                MOV     DP, #00376h
+                MOV     DP, #DL_KEEP
                 ST      A, [DP]                ; 377h: its high byte
                 MOVB    [DP], #000h            ; 376h: kept
                 LB      A, ACC                 ; its low byte
@@ -465,7 +495,7 @@ dl_fb_word:     CMP     A, #04000h
 ; a word's high byte: the one kept with its low byte (once), else read now
 dl_fb_whigh:    AND     A, #01fffh
                 PUSHS   A                      ; its address (word mode)
-                MOV     DP, #00376h
+                MOV     DP, #DL_KEEP
                 LB      A, [DP]
                 JNE     dl_fb_wread
                 MOVB    [DP], #0ffh            ; used: nothing kept now

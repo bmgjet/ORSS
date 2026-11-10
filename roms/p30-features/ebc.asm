@@ -9,7 +9,8 @@
 ;> about: Drives a boost control solenoid on P4.3 (the stock A/T lock-up output) at 19.5 Hz: a base duty
 ;>        against rpm, corrected towards a target boost against rpm (closed loop, set the gain to 0 for
 ;>        open loop). Below a throttle opening the solenoid is off and the wastegate holds its spring
-;>        pressure. Off until enabled.
+;>        pressure. With gear detection, a cap on the duty in each gear: less boost in the low gears.
+;>        Off until enabled.
 ; ==================================================================================================
 ifdef FEAT_EBC
 
@@ -47,12 +48,17 @@ ebc_maxduty:            DB  05ah                 ; 90 %
 ebc_duty:               DB  000h, 000h, 000h, 000h, 000h, 000h, 000h, 000h, 000h
 ;@ EBCTarget type=u8 count=9 formula=map_mbar category="Electronic boost control" slot=ebc.target colvalues=0,1024,2048,3072,4096,5120,6144,7168,8192 colunit=rpm desc="Target boost against rpm (closed loop)."
 ebc_target:             DB  0d8h, 0d8h, 0d8h, 0d8h, 0d8h, 0d8h, 0d8h, 0d8h, 0d8h
+;@ EBCGearMax type=u8 count=6 category="Electronic boost control" slot=ebc.gearmax formula=x unit=% decimals=0 colvalues=0,1,2,3,4,5 colunit=gear desc="The most duty in each gear (needs gear detection; gear 0 is neutral or not known): less boost in the low gears. 100 = no cap in that gear."
+ebc_gearmax:            DB  064h, 064h, 064h, 064h, 064h, 064h
 endif
 
 if XP == XP_CODE
+ebc_off:        MOV     DP, #MOD_PWMDUTY       ; off, or the throttle under the point: no duty (ahead of the tick: in
+                MOVB    [DP], #000h            ; reach of its short jumps)
+                J       mod_tick_exit
 ebc_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -64,7 +70,7 @@ ebc_tick:
                 CMPB    A, #000h
                 JEQ     ebc_off
                 LCB     A, ebc_tps
-                CMPB    0b9h, A                ; throttle - minimum borrows while below it
+                CMPB    ENG_TPS, A                ; throttle - minimum borrows while below it
                 JLT     ebc_off
                 CAL     mod_rpmbyte
                 MOV     DP, #ebc_rpm
@@ -78,7 +84,7 @@ ebc_tick:
                 MOV     X1, #ebc_target
                 CAL     mod_lookup9            ; the target
                 STB     A, r4
-                LB      A, 0a3h
+                LB      A, ENG_MAP
                 STB     A, r5
                 CLRB    A
                 LCB     A, ebc_gain
@@ -122,16 +128,30 @@ ebc_clamp:      ST      A, er3
                 CMP     A, er3                 ; maximum - duty borrows when the duty is past it
                 JLT     ebc_duty_ok
                 L       A, er3
-ebc_duty_ok:    ADD     A, #00002h             ; percent to 25 steps
+ebc_duty_ok:
+if defined(FEAT_GEAR)
+                ST      A, er3                 ; the duty so far; the gear's cap on it
+                MOV     DP, #MOD_GEAR
+                CLR     A
+                LB      A, [DP]
+                CMPB    A, #006h
+                JGE     ebc_gear_any           ; (a gear past the table: no cap)
+                L       A, ACC
+                MOV     X1, A
+                CLR     A
+                LCB     A, ebc_gearmax[X1]
+                CMP     A, er3                 ; cap - duty: borrows when the duty is past it
+                JLT     ebc_gear_capped
+ebc_gear_any:   L       A, er3
+ebc_gear_capped:
+endif
+                ADD     A, #00002h             ; percent to 25 steps
                 SRL     A
                 SRL     A
                 ST      A, er3
                 MOV     DP, #MOD_PWMDUTY
                 LB      A, r6
                 STB     A, [DP]
-                J       mod_tick_exit
-ebc_off:        MOV     DP, #MOD_PWMDUTY
-                MOVB    [DP], #000h
                 J       mod_tick_exit
 endif
 

@@ -115,7 +115,7 @@ public sealed class GaugeControl : Control
         if (Layouts.TryGetValue(key, out var ft)) return ft;
         if (Layouts.Count > 600) Layouts.Clear();
         return Layouts[key] = new FormattedText(text, System.Globalization.CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-            new Typeface(MainWindow.MonoFont, FontStyle.Normal, bold ? FontWeight.Bold : FontWeight.Normal), size, brush);
+            new Typeface(UiFonts.Mono, FontStyle.Normal, bold ? FontWeight.Bold : FontWeight.Normal), size, brush);
     }
 
     static IPen PenOf(IBrush brush, double width)

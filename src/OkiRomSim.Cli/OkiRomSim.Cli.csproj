@@ -9,6 +9,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\OkiRomSim.Core\OkiRomSim.Core.csproj" />
+    <ProjectReference Include="..\OkiRomSim.Sim\OkiRomSim.Sim.csproj" />
     <ProjectReference Include="..\OkiRomSim.Assembler\OkiRomSim.Assembler.csproj" />
     <ProjectReference Include="..\OkiRomSim.Calibration\OkiRomSim.Calibration.csproj" />
   </ItemGroup>

@@ -28,11 +28,31 @@ public sealed class FeatureFile
     {
         var f = JsonSerializer.Deserialize<FeatureFile>(json, Json) ?? throw new InvalidDataException("empty feature file");
         if (f.Format != "okirom-features") throw new InvalidDataException($"not a feature file (format '{f.Format}')");
+        // everything checked here, where a bad file says so once with where it is wrong - not later, when a ROM is checked against it
+        // (a bad address or a pattern whose patch runs past its match threw out of the window that lists the features)
         foreach (var feat in f.Features)
+        {
             foreach (var v in feat.Variants)
                 foreach (var s in v.Sites)
-                    if (FeaturePatches.Hex(s.Original).Length != FeaturePatches.Hex(s.Patched).Length)
-                        throw new InvalidDataException($"{feat.Id} / {v.Rom} @ {s.Address}: original and patched are different lengths");
+                {
+                    try
+                    {
+                        if (FeaturePatches.Hex(s.Original).Length != FeaturePatches.Hex(s.Patched).Length)
+                            throw new InvalidDataException("original and patched are different lengths");
+                        FeaturePatches.ParseAddress(s.Address);
+                    }
+                    catch (Exception ex) when (ex is FormatException or OverflowException or InvalidDataException)
+                    { throw new InvalidDataException($"{feat.Id} / {v.Rom} @ {s.Address}: {ex.Message}"); }
+                }
+            foreach (var p in feat.Patterns)
+            {
+                int findLength, patchLength;
+                try { findLength = p.Find.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length; patchLength = FeaturePatches.Hex(p.Patched).Length; }
+                catch (FormatException ex) { throw new InvalidDataException($"{feat.Id}: pattern '{p.Find}': {ex.Message}"); }
+                if (p.Offset < 0 || p.Offset + patchLength > findLength)
+                    throw new InvalidDataException($"{feat.Id}: pattern '{p.Find}': the patch (offset {p.Offset}, {patchLength} bytes) runs past the {findLength} bytes it is found by");
+            }
+        }
         return f;
     }
 
@@ -93,7 +113,10 @@ public static class FeaturePatches
         return Convert.FromHexString(t);
     }
 
-    static int Addr(string s) => int.Parse(s.Trim().TrimEnd('h', 'H').Replace("0x", ""), NumberStyles.HexNumber);
+    static int Addr(string s) => ParseAddress(s);
+
+    /// A site's address: hex, with or without "0x" in front or "h" after.
+    public static int ParseAddress(string s) => int.Parse(s.Trim().TrimEnd('h', 'H').Replace("0x", "").Replace("0X", ""), NumberStyles.HexNumber);
 
     static bool Matches(byte[] rom, int at, byte[] bytes) =>
         at >= 0 && at + bytes.Length <= rom.Length && rom.AsSpan(at, bytes.Length).SequenceEqual(bytes);

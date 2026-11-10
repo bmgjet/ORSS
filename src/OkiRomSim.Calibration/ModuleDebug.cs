@@ -33,7 +33,7 @@ public static class ModuleDebug
         ["fueltrim_value"] = "Fuel trim: the trim it is giving", ["gearfuel_value"] = "Fuel by gear: the trim for the gear now",
         ["gearign_value"] = "Timing by gear: the trim for the gear now", ["gio1_timer"] = "GIO 1: its on / off delay counting", ["gio2_timer"] = "GIO 2: its on / off delay counting",
         ["gio3_timer"] = "GIO 3: its on / off delay counting", ["gio4_timer"] = "GIO 4: its on / off delay counting",
-        ["icm_trimword"] = "Ignition cut modifier: the trim it applies", ["leanpro_count"] = "Lean protection: how long it has seen it lean",
+        ["icm_trimword"] = "Ignition cut modifier: the trim it applies", ["leanpro_count"] = "Lean protection: how long it has seen it lean", ["sensorpro_count"] = "Sensor protection: how long the reading has been past the level",
         ["mapsw_ftrim"] = "Map switch: the fuel trim of the second tune", ["mapsw_itrim"] = "Map switch: the timing trim of the second tune",
         ["mapsw_rpm"] = "Map switch: the rpm row it is on", ["rollidle_hold"] = "Rolling idle: time left holding a spark out",
         ["rollidle_last"] = "Rolling idle: the tick of the last spark interrupt", ["rollidle_cyl"] = "Rolling idle: what it left out last (injector bits, E0h a spark)",
@@ -51,7 +51,7 @@ public static class ModuleDebug
         ["rc_fuel"] = "Remote control: popcorn mode's fuel trim", ["rc_ign"] = "Remote control: valet mode's and popcorn's timing trim",
     };
 
-    static readonly HashSet<string> NotVariables = new(StringComparer.OrdinalIgnoreCase) { "MOD_RAM_BASE", "MOD_RAM_END", "MODRAM_NEXT" };
+    static readonly HashSet<string> NotVariables = new(StringComparer.OrdinalIgnoreCase) { "MOD_RAM_BASE", "MOD_RAM_END", "MODRAM_NEXT", "MOD_LIB_END" };
 
     /// Take the names from a build's equates (not code labels): every one inside module RAM is a variable, sized up to the next one.
     public static void Name(IEnumerable<(string Name, long Value)>? symbols)
@@ -63,7 +63,9 @@ public static class ModuleDebug
         if (baseSym.Name != null)
         {
             long b = baseSym.Value;
-            var inside = syms.Where(s => s.Value >= b && s.Value < b + Bytes && !NotVariables.Contains(s.Name) && (About.ContainsKey(s.Name) || s.Value >= b + 10))
+            // the module library's own bytes come first: 10 on the P30, the P13 says where they end (MOD_LIB_END)
+            long libEnd = syms.FirstOrDefault(s => s.Name.Equals("MOD_LIB_END", StringComparison.OrdinalIgnoreCase)) is { Name: not null } le ? le.Value : b + 10;
+            var inside = syms.Where(s => s.Value >= b && s.Value < b + Bytes && !NotVariables.Contains(s.Name) && (About.ContainsKey(s.Name) || s.Value >= libEnd))
                              .GroupBy(s => s.Value).Select(g => g.OrderByDescending(s => About.ContainsKey(s.Name)).First())
                              .OrderBy(s => s.Value).ToList();
             for (int i = 0; i < inside.Count; i++)

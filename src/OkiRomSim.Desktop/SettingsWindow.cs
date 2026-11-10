@@ -27,12 +27,19 @@ public sealed class SettingsWindow : Window
     readonly Func<(double[] Rpm, double[] Load)>? _mapAxes;
 
     public SettingsWindow(AppSettings current, Func<string> mcpStatus, ProcessorProfile profile,
+#if !TUNER_ONLY
                           Func<(double[] Rpm, double[] Load)>? mapAxes = null, PluginManager? plugins = null)
     {
         _plugins = plugins;
+#else
+                          Func<(double[] Rpm, double[] Load)>? mapAxes = null)
+    {
+#endif
         _mapAxes = mapAxes;
         _s = current.Clone();
+#if !TUNER_ONLY
         _s.McpPassword = current.McpPassword;
+#endif
         _mcpStatus = mcpStatus;
         _profile = profile;
         _profileJson = profile.ToJson();
@@ -94,10 +101,13 @@ public sealed class SettingsWindow : Window
             Reopen(tabs, "Targets", Targets());
         }));
         tabs.Items.Add(Page("Processor", Processor(), out var procBar));
+#if !TUNER_ONLY
         tabs.Items.Add(Page("MCP server", Mcp()));
         tabs.Items.Add(Page("Plugins", PluginsPage()));
+#endif
         tabs.Items.Add(Page("Updates", UpdatesPage()));
         tabs.Items.Add(Page("About", AboutPage.Build()));
+#if !TUNER_ONLY
         // the settings pages plugins add
         foreach (var (title, build) in plugins?.SettingsPages ?? [])
         {
@@ -105,6 +115,7 @@ public sealed class SettingsWindow : Window
             try { content = build(); } catch (Exception ex) { content = Note($"{title} could not be shown: {ex.Message}"); }
             tabs.Items.Add(Page(title, content));
         }
+#endif
         _procBar = procBar;
         FillProcessorBar();
 
@@ -140,7 +151,9 @@ public sealed class SettingsWindow : Window
     }
 
     readonly WrapPanel _procBar;
+#if !TUNER_ONLY
     readonly PluginManager? _plugins;
+#endif
 
     /// Settings > Updates: where they come from, whether to look at start-up, and Check now.
     Control UpdatesPage()
@@ -158,11 +171,12 @@ public sealed class SettingsWindow : Window
         p.Children.Add(Row("Website", site, "Where updates come from: always the author's website, so an update can only come from there. Click to open it."));
         p.Children.Add(Check("Check for updates when the program starts", _s.CheckUpdatesAtStart, v => _s.CheckUpdatesAtStart = v,
             "Look at the website when the program starts and say on the status line if anything is newer. Nothing is downloaded without asking."));
-        p.Children.Add(Row("Installed in", new SelectableTextBlock { Text = Updater.Home, FontFamily = MainWindow.MonoFont, FontSize = 11.5, TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 420 },
+        p.Children.Add(Row("Installed in", new SelectableTextBlock { Text = Updater.Home, FontFamily = UiFonts.Mono, FontSize = 11.5, TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 420 },
             "The folder the program and its Templates are updated in."));
         return Grouped(p);
     }
 
+#if !TUNER_ONLY
     /// Settings > Plugins: the .dlls to load, each switched on or off, with what it says it is.
     Control PluginsPage()
     {
@@ -253,6 +267,7 @@ public sealed class SettingsWindow : Window
         return page;
     }
     readonly TextBlock _pluginNote = new() { Foreground = Brushes.OrangeRed, FontSize = 11, TextWrapping = TextWrapping.Wrap };
+#endif
     readonly TabControl _tabs;
 
     /// Open on this page ("Hot keys"...).
@@ -280,7 +295,9 @@ public sealed class SettingsWindow : Window
     {
         if (!TakeProfile()) return;
         var copy = _s.Clone();
+#if !TUNER_ONLY
         copy.McpPassword = _s.McpPassword;
+#endif
         Applied?.Invoke(copy, ResultProfile);
     }
 
@@ -557,22 +574,41 @@ public sealed class SettingsWindow : Window
         _dlDemon.IsVisible = demon;
         if (_dlBaud != null) _dlBaud.IsEnabled = !demon;
         if (_dlDetect != null) _dlDetect.IsEnabled = !demon;
+        // "emulator" (logging through the emulator's own port) only where the device can ask the ECU itself: a Demon, or "auto",
+        // which may turn out to be one. A setting already made stays shown and picked either way.
+        bool relay = demon || _s.EmulatorType == "auto";
+        string[] viaEmulator = relay ? ["emulator"] : [];
+#if !TUNER_ONLY
         var list = demon ? new List<string> { "emulator", "simulator" }
-                         : new[] { "simulator", "emulator" }.Concat(SerialLink.Ports()).ToList();
+                         : new[] { AutoPort, "simulator" }.Concat(viaEmulator).Concat(SerialLink.Ports()).ToList();
         string keep = demon && _s.DatalogPort != "simulator" ? "emulator" : _s.DatalogPort;
+#else
+        var list = demon ? new List<string> { "emulator" }
+                         : new[] { AutoPort }.Concat(viaEmulator).Concat(SerialLink.Ports()).ToList();
+        // (no simulator in this build to log: a "simulator" setting from Rom Sim Studio is taken as the automatic choice)
+        string keep = demon ? "emulator" : _s.DatalogPort == "simulator" ? "" : _s.DatalogPort;
+#endif
         if (keep.Length > 0 && !list.Contains(keep)) list.Insert(0, keep);
         _dlPort.ItemsSource = list;
         _dlPort.SelectedItem = keep.Length > 0 ? keep : list.FirstOrDefault();
-        if (_dlPort.SelectedItem is string now) _s.DatalogPort = now;
+        // the automatic choice leaves the setting as it is (no port): opening Settings and saving used to turn "" into the first port
+        // listed - "simulator" in Rom Sim Studio, so the datalog of a car in Tuner mode moved onto the simulator without a word
+        if (_dlPort.SelectedItem is string now && now != AutoPort) _s.DatalogPort = now;
     }
 
-    static ComboBox PortBox(string current, IEnumerable<string>? extra, Action<string> set)
+    /// The choice that leaves the port to be picked when it is wanted, stored as "": the datalog takes the first serial port that is
+    /// not the emulator's, the emulator the last one that is not the datalog's.
+    const string AutoPort = "(automatic)";
+
+    /// A serial port picker. With `auto`, the automatic choice is offered (and kept when nothing was set); without, an empty setting
+    /// takes the first port listed, as it always has.
+    static ComboBox PortBox(string current, IEnumerable<string>? extra, Action<string> set, bool auto = false)
     {
-        var list = (extra ?? []).Concat(SerialLink.Ports()).ToList();
-        if (current.Length > 0 && !list.Contains(current)) list.Insert(0, current);
+        var list = (auto ? [AutoPort] : Array.Empty<string>()).Concat(extra ?? []).Concat(SerialLink.Ports()).ToList();
+        if (current.Length > 0 && !list.Contains(current)) list.Insert(auto ? 1 : 0, current);
         var box = new ComboBox { ItemsSource = list, SelectedItem = current.Length > 0 ? current : list.FirstOrDefault(), Width = 180 };
-        if (box.SelectedItem is string s0 && current.Length == 0) set(s0);
-        box.SelectionChanged += (_, _) => set(box.SelectedItem as string ?? "");
+        if (box.SelectedItem is string s0 && current.Length == 0 && !auto) set(s0);
+        box.SelectionChanged += (_, _) => set(box.SelectedItem is string s && s != AutoPort ? s : "");
         return box;
     }
 
@@ -581,7 +617,7 @@ public sealed class SettingsWindow : Window
     Control General()
     {
         var p = new StackPanel();
-        var version = new TextBlock { Text = BuildInfo.Version, VerticalAlignment = VerticalAlignment.Center, FontFamily = MainWindow.MonoFont, IsHitTestVisible = true };
+        var version = new TextBlock { Text = BuildInfo.Version, VerticalAlignment = VerticalAlignment.Center, FontFamily = UiFonts.Mono, IsHitTestVisible = true };
         p.Children.Add(Row("Version", version, "Which build of " + BuildInfo.Product + " this is. Quote it when reporting something so the version can be matched."));
 
         var langs = Lang.Available();
@@ -613,6 +649,7 @@ public sealed class SettingsWindow : Window
             "The language the app is shown in. Each one is a .json file in the lang folder beside the program (and in yours): English text and its translation, " +
             "easy to edit by hand. Text not in a file stays English. Takes full effect when the app starts again."));
 
+#if !TUNER_ONLY
         string[] starts = ["simulator", "tuner", "last"];
         var startIn = new ComboBox
         {
@@ -627,6 +664,7 @@ public sealed class SettingsWindow : Window
         welcome.Click += (_, _) => { _s.FirstRunDone = false; welcome.Content = "The welcome screen shows at the next start ✓"; welcome.IsEnabled = false; };
         if (!_s.FirstRunDone) { welcome.Content = "The welcome screen shows at the next start ✓"; welcome.IsEnabled = false; }
         p.Children.Add(Row("Welcome screen", welcome, "Show the first-start screen again - what the app is for, Simulator or Tuner - the next time the app starts."));
+#endif
         var cores = Environment.ProcessorCount;
         var ramGb = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / (1024.0 * 1024 * 1024);
         p.Children.Add(Check("Low performance mode", _s.LowPerformance ?? Perf.Suggested, v => _s.LowPerformance = v,
@@ -667,28 +705,36 @@ public sealed class SettingsWindow : Window
         scaleRow.Children.Add(scale); scaleRow.Children.Add(scaleText); scaleRow.Children.Add(fit);
         p.Children.Add(Row("UI scale", scaleRow, "Size of everything in the app, on top of the display scaling. Each panel also zooms on its own with Ctrl + mouse wheel."));
 
+#if !TUNER_ONLY
         var font = new NumericUpDown { Minimum = 8, Maximum = 32, Increment = 1, Value = (decimal)_s.EditorFontSize, Width = 120, FormatString = "0" };
         font.ValueChanged += (_, e) => { if (e.NewValue is decimal d) _s.EditorFontSize = (double)d; };
+#endif
         p.Children.Add(Row("Let the desktop draw the title bar",
             Check("", _s.SystemTitleBar, v => _s.SystemTitleBar = v, "Ticked: the window manager's own title bar (light on most Linux desktops). Unticked: the dark bar drawn here. Takes effect next time the program starts."),
             "Only needed on a Linux desktop whose window manager ignores the request to drop its title bar - if you end up with two bars, tick this."));
 
+#if !TUNER_ONLY
+        // (the tuning-only build keeps no restore points and has no source editor: neither setting is offered there)
         var auto = new NumericUpDown { Minimum = 0, Maximum = 120, Increment = 1, Value = _s.AutoSaveMinutes, Width = 120, FormatString = "0" };
         auto.ValueChanged += (_, e) => { if (e.NewValue is decimal d) _s.AutoSaveMinutes = (int)d; };
         p.Children.Add(Row("Restore point every (minutes)", auto,
             "Save a restore point of the whole session in the background this often, so a crash costs at most this many minutes. 0 turns it off. File > Restore last auto save opens the newest one."));
 
         p.Children.Add(Row("Source editor font size", font, "Font size of the assembly source (Ctrl + wheel over the editor zooms it on top of this)."));
+#endif
 
         p.Children.Add(Check("Touch screen mode (big buttons for the tables instead of the keys; bigger controls for a finger)", _s.TouchMode, v => _s.TouchMode = v,
             "For a tablet or a touch screen laptop: a pad of big buttons beside the table (up and down a step, 1 % and 5 %, move the selection, " +
             "interpolate, smooth, a keypad for a value, undo), larger cells, taller buttons and list rows, and zoom buttons and pinch-to-zoom on the 3D view."));
+#if !TUNER_ONLY
         p.Children.Add(Check("Tuner mode (the calibration editor as the main page, datalogging beside it)", _s.TunerMode, v => _s.TunerMode = v,
             "A simpler layout for tuning: no source, simulator or assembly panels. The live trace on the maps comes from the datalog."));
+#endif
         p.Children.Add(Check("Reopen the last file at start", _s.ReopenLastFile, v => _s.ReopenLastFile = v, "Open the .asm/.bin/project you had open last time."));
         p.Children.Add(Check("Offer to run Detect when a ROM is created or opened", _s.AskDetectOnOpen, v => _s.AskDetectOnOpen = v,
             "Detect finds the tables and settings of the ROM (by lining it up with the known ROMs and following the code that reads them), so the calibration list and the feature pages fill themselves in."));
 
+#if !TUNER_ONLY
         p.Children.Add(Section("Simulation"));
         var speed = new ComboBox { ItemsSource = new[] { "0.1x", "0.5x", "real time", "4x", "unlimited" }, SelectedIndex = Math.Clamp(_s.SpeedIndex, 0, 4), Width = 160 };
         speed.SelectionChanged += (_, _) => _s.SpeedIndex = speed.SelectedIndex;
@@ -698,6 +744,11 @@ public sealed class SettingsWindow : Window
             "in no real time. The simulated clock, timers and crank signal still advance by exactly that time."));
         p.Children.Add(Check("Live trace on the Calibration page", _s.LiveTrace, v => _s.LiveTrace = v, "Colour the table cells the program reads."));
         p.Children.Add(Check("Follow reads when stepping", _s.FollowReads, v => _s.FollowReads = v, "When a step reads a defined table or setting, switch the Calibration page to it."));
+#else
+        // (no simulator here: the trace on the maps is the datalog's)
+        p.Children.Add(Section("Trace on the maps"));
+        p.Children.Add(Check("Live trace on the Calibration page", _s.LiveTrace, v => _s.LiveTrace = v, "Colour the table cells where the engine is, from the datalog."));
+#endif
         var trail = new NumericUpDown { Minimum = 0.1m, Maximum = 10, Increment = 0.1m, Value = (decimal)_s.TrailSeconds, Width = 120, FormatString = "0.0" };
         trail.ValueChanged += (_, e) => { if (e.NewValue is decimal d) _s.TrailSeconds = (double)d; };
         p.Children.Add(Row("Trace trail (seconds)", trail, "How long a table cell stays highlighted (fading) after the program read it, in simulated seconds."));
@@ -859,7 +910,7 @@ public sealed class SettingsWindow : Window
 
         TextBox KeyBox(Func<string> get, Action<string> set)
         {
-            var box = new TextBox { Text = Pretty(get()), Width = 170, IsReadOnly = true, FontFamily = MainWindow.MonoFont };
+            var box = new TextBox { Text = Pretty(get()), Width = 170, IsReadOnly = true, FontFamily = UiFonts.Mono };
             box.AddHandler(KeyDownEvent, (_, e) =>
             {
                 e.Handled = true;
@@ -1015,13 +1066,16 @@ public sealed class SettingsWindow : Window
 
     static string WriteNamed(IEnumerable<NamedCurve> curves) =>
         string.Join("\n", curves.Where(c => c.Name.Length > 0)
-            .Select(c => c.Name + ": " + string.Join(", ", LookupCurve.Parse(c.Text).Points.Select(pt => $"{pt.In:0.###}={pt.Out:0.###}"))));
+            // invariant: the text is read back with ',' between the points and '.' as the decimal mark. Written in the PC's own format, a
+            // decimal-comma system made "2,5=50" of 2.5, which reads back as the points 2 and 5=50 - the wrong values on that channel
+            .Select(c => c.Name + ": " + string.Join(", ", LookupCurve.Parse(c.Text).Points.Select(pt =>
+                pt.In.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + "=" + pt.Out.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)))));
 
     /// A correction as a table: the reading along the top, what it means in the one row underneath.
     Control CurveTable(Func<string> get, Action<string> set, string inUnit, string outUnit, int decimals, string tip)
     {
         var grid = new GridBox { Step = 0.1, Height = 86 };
-        var points = new TextBox { Width = 260, FontFamily = MainWindow.MonoFont, FontSize = 11.5, Watermark = "0, 2.5, 5" };
+        var points = new TextBox { Width = 260, FontFamily = UiFonts.Mono, FontSize = 11.5, Watermark = "0, 2.5, 5" };
         var block = new StackPanel { Margin = new Thickness(0, 2, 0, 8) };
 
         void Draw()
@@ -1069,8 +1123,8 @@ public sealed class SettingsWindow : Window
     Control TargetTable(Func<string> get, Action<string> set, string tip)
     {
         var grid = new GridBox { Step = 0.1 };
-        var rpmBox = new TextBox { Width = 250, FontFamily = MainWindow.MonoFont, FontSize = 11.5, Watermark = "800, 2000, 4000, 6000" };
-        var loadBox = new TextBox { Width = 250, FontFamily = MainWindow.MonoFont, FontSize = 11.5, Watermark = "20, 40, 60, 80, 100" };
+        var rpmBox = new TextBox { Width = 250, FontFamily = UiFonts.Mono, FontSize = 11.5, Watermark = "800, 2000, 4000, 6000" };
+        var loadBox = new TextBox { Width = 250, FontFamily = UiFonts.Mono, FontSize = 11.5, Watermark = "20, 40, 60, 80, 100" };
         var count = new TextBlock { FontSize = 11, Opacity = 0.75, VerticalAlignment = VerticalAlignment.Center };
 
         double[] Rpm() => GridBox.ParseAxis(rpmBox.Text);
@@ -1192,7 +1246,11 @@ public sealed class SettingsWindow : Window
     {
         var p = new StackPanel();
         p.Children.Add(Section("Datalogging"));
-        var dlPort = _dlPort = PortBox(_s.DatalogPort, new[] { "simulator", "emulator" }, v => _s.DatalogPort = v);
+#if !TUNER_ONLY
+        var dlPort = _dlPort = PortBox(_s.DatalogPort, new[] { "simulator", "emulator" }, v => _s.DatalogPort = v, auto: true);
+#else
+        var dlPort = _dlPort = PortBox(_s.DatalogPort == "simulator" ? "" : _s.DatalogPort, new[] { "emulator" }, v => _s.DatalogPort = v, auto: true);
+#endif
         var dlFound = FoundText();
         var dlDetect = new Button { Content = "Detect", Margin = new Thickness(6, 0, 0, 0) };
         ToolTip.SetTip(dlDetect, "Try every serial port with every datalog protocol (each at its own baud rate) and pick the port and protocol the ECU answers on. Takes a few seconds a port; the ignition must be on.");
@@ -1226,14 +1284,14 @@ public sealed class SettingsWindow : Window
             "3 °C...) so small readings are not dropped for moving a little."));
         p.Children.Add(Check("Blend the good readings", _s.DatalogSmoothBlend, v => _s.DatalogSmoothBlend = v,
             "On: the good readings are averaged (smoother). Off: the newest good reading is shown - spikes dropped, nothing averaged."));
-        var skip = new TextBox { Text = _s.DatalogSmoothSkip, Width = 260, FontFamily = MainWindow.MonoFont, Watermark = "o2_v, knock" };
+        var skip = new TextBox { Text = _s.DatalogSmoothSkip, Width = 260, FontFamily = UiFonts.Mono, Watermark = "o2_v, knock" };
         skip.TextChanged += (_, _) => _s.DatalogSmoothSkip = skip.Text ?? "";
         p.Children.Add(Row("Leave these alone", skip,
             "Channels passed through as they come, comma separated: a narrowband O2 switching rich-lean is meant to jump about."));
         p.Children.Add(Section("External readings"));
         var feeds = new TextBox
         {
-            AcceptsReturn = true, MinHeight = 90, MinWidth = 200, MaxWidth = 460, FontFamily = MainWindow.MonoFont, FontSize = 11.5,
+            AcceptsReturn = true, MinHeight = 90, MinWidth = 200, MaxWidth = 460, FontFamily = UiFonts.Mono, FontSize = 11.5,
             Text = string.Join("\n", _s.ExternalFeeds.Select(f =>
                 $"{f.Name} = {f.Source}" + (f.IntervalMs != 1000 ? $" | {f.IntervalMs}ms" : "") + (f.Path.Length > 0 ? " | " + f.Path : ""))),
             Watermark = "dyno = http://192.168.1.50/data.json | 500ms | result",
@@ -1279,8 +1337,10 @@ public sealed class SettingsWindow : Window
         var keep = new NumericUpDown { Minimum = 1000, Maximum = 5_000_000, Increment = 10000, Value = _s.DatalogKeepFrames, Width = 140, FormatString = "0" };
         keep.ValueChanged += (_, e) => { if (e.NewValue is decimal d) _s.DatalogKeepFrames = (int)d; };
         p.Children.Add(Row("Frames kept in memory", keep, "Older frames are dropped (save the log to keep everything)."));
+#if !TUNER_ONLY
         p.Children.Add(Check("Drive the simulator with the car's readings", _s.DatalogDrivesSimulator, v => _s.DatalogDrivesSimulator = v,
             "Feed each frame's rpm, MAP, TPS, temperatures, O2, battery and speed into the simulated engine, to see which code the car's conditions run."));
+#endif
 
         p.Children.Add(Section("Wideband"));
         var wbType = new ComboBox { ItemsSource = WidebandReader.Types, SelectedItem = WidebandReader.Types.Contains(_s.WidebandType) ? _s.WidebandType : "none", Width = 180 };
@@ -1310,7 +1370,7 @@ public sealed class SettingsWindow : Window
             foreach (var ch in _s.AuxChannels.ToList())
             {
                 var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(0, 2) };
-                TextBox T(string v, double w, string wm, Action<string> set) { var t = new TextBox { Text = v, Width = w, Watermark = wm, FontFamily = MainWindow.MonoFont }; t.TextChanged += (_, _) => set(t.Text ?? ""); return t; }
+                TextBox T(string v, double w, string wm, Action<string> set) { var t = new TextBox { Text = v, Width = w, Watermark = wm, FontFamily = UiFonts.Mono }; t.TextChanged += (_, _) => set(t.Text ?? ""); return t; }
                 row.Children.Add(T(ch.Name, 110, "name", v => ch.Name = v));
                 row.Children.Add(T(ch.Source, 110, "byte:24", v => ch.Source = v));
                 row.Children.Add(T(ch.Expr, 170, "x * 5 / 255", v => ch.Expr = v));
@@ -1331,9 +1391,14 @@ public sealed class SettingsWindow : Window
     StackPanel Emulator()
     {
         var p = new StackPanel();
+#if !TUNER_ONLY
         p.Children.Add(Note("An emulator in the ECU's ROM socket: the Calibration page uploads the ROM to it (and every edit as it is made), and the " +
                             "Trace page (Hit trace ticked) streams the addresses the ECU fetches. Tell it which device is fitted - the version query answers " +
                             "differently on each, and the baud rate is not the same either."));
+#else
+        p.Children.Add(Note("An emulator in the ECU's ROM socket: the Calibration page uploads the ROM to it (and every edit as it is made). " +
+                            "Tell it which device is fitted - the version query answers differently on each, and the baud rate is not the same either."));
+#endif
         p.Children.Add(Section("Emulator"));
         var kind = new ComboBox { ItemsSource = MoatesTrace.Kinds, SelectedItem = MoatesTrace.Kinds.Contains(_s.EmulatorType) ? _s.EmulatorType : "auto", Width = 180 };
         var ebaud = new ComboBox { ItemsSource = new[] { 38400, 115200, 921600 }, SelectedItem = _s.EmulatorBaud, Width = 180 };
@@ -1350,7 +1415,7 @@ public sealed class SettingsWindow : Window
             "Which device is in the socket. 'auto' takes whatever answers the version query: an Ostrich answers 'O', a Demon 'D', " +
             "an RTP 'C', a ROMulator '1' or '2'. Naming it means a wrong answer is reported instead of half-working."));
         p.Children.Add(Row("Baud rate", ebaud, "921600 for an Ostrich 2.0 or a Demon (115200 also works); 38400 for a PGMFI RTP."));
-        var emPort = PortBox(_s.MoatesPort, null, v => _s.MoatesPort = v);
+        var emPort = PortBox(_s.MoatesPort, null, v => _s.MoatesPort = v, auto: true);
         var emFound = FoundText();
         var emDetect = new Button { Content = "Detect", Margin = new Thickness(6, 0, 0, 0) };
         ToolTip.SetTip(emDetect, "Ask every serial port, at each baud rate the devices use, for an emulator's version, and set the port, the device and the baud rate from the one that answers. Disconnect the emulator first if it is connected.");
@@ -1388,13 +1453,16 @@ public sealed class SettingsWindow : Window
         };
         p.Children.Add(Check("Upload every calibration change as it is made", _s.EmulatorAutoUpload, v => _s.EmulatorAutoUpload = v,
             "The default for the Calibration page's 'Upload on changes'. Only the 256-byte blocks that changed are sent."));
-        var bse = new TextBox { Text = _s.MoatesBase, Width = 180, FontFamily = MainWindow.MonoFont };
+#if !TUNER_ONLY
+        // (the address-hit trace is Rom Sim Studio's Trace page: the tuning-only build has none, so these are not offered there)
+        var bse = new TextBox { Text = _s.MoatesBase, Width = 180, FontFamily = UiFonts.Mono };
         bse.TextChanged += (_, _) => _s.MoatesBase = bse.Text ?? "78000";
         p.Children.Add(Row("Trace window base (hex)", bse, "Emulator address of ECU address 0000 for the Trace command. A 32 KB image at the top of the 64 KB bank of chip bank 7 is 78000 (the Ostrich Address Tracer uses 70000 + 8000)."));
         p.Children.Add(Check("Skip repeated addresses", _s.HitSkipRepeats, v => _s.HitSkipRepeats = v,
             "Ask the emulator to report an address only when it differs from the previous hit (a loop still shows every pass through it)."));
         p.Children.Add(Check("Colour the source with hits", _s.HitColourSource, v => _s.HitColourSource = v,
             "Tint executed source lines green and data lines read blue, brightest for the most recent hits."));
+#endif
 
         p.Children.Add(_sharedTiming = Section("Serial timing"));
         p.Children.Add(Note("These apply to the car's datalog cable as well as the emulator. The defaults are what the established tuning software uses; " +
@@ -1424,7 +1492,7 @@ public sealed class SettingsWindow : Window
         var n = new NumericUpDown
         {
             Value = Math.Clamp(value, min, max), Minimum = min, Maximum = max, Increment = step,
-            Width = 140, FormatString = "0", FontFamily = MainWindow.MonoFont,
+            Width = 140, FormatString = "0", FontFamily = UiFonts.Mono,
         };
         n.ValueChanged += (_, e) => { if (e.NewValue is decimal d) set((int)d); };
         return n;
@@ -1458,7 +1526,7 @@ public sealed class SettingsWindow : Window
                             "is described by editing it. The simulator's peripherals stay the MSM66207's."));
         _procText = new TextBox
         {
-            Text = _profileJson, AcceptsReturn = true, FontFamily = MainWindow.MonoFont, FontSize = 11, TextWrapping = TextWrapping.NoWrap, Height = 380,
+            Text = _profileJson, AcceptsReturn = true, FontFamily = UiFonts.Mono, FontSize = 11, TextWrapping = TextWrapping.NoWrap, Height = 380,
         };
         _procText.TextChanged += (_, _) => { _profileJson = _procText.Text ?? ""; _procError.Text = ""; };
         p.Children.Add(_procText);
@@ -1466,6 +1534,7 @@ public sealed class SettingsWindow : Window
         return p;
     }
 
+#if !TUNER_ONLY
     Control Mcp()
     {
         var p = new StackPanel();
@@ -1480,7 +1549,7 @@ public sealed class SettingsWindow : Window
         p.Children.Add(Check("Allow remote connections (listen on all network interfaces)", _s.McpRemote, v => _s.McpRemote = v,
             "Off: only this computer can connect. On: other machines can too - a password of 8+ characters is then required. " +
             "The connection is plain HTTP: use it on a trusted network or behind a VPN / SSH tunnel / HTTPS reverse proxy."));
-        var pw = new TextBox { Text = _s.McpPassword, Width = 220, PasswordChar = '•', FontFamily = MainWindow.MonoFont };
+        var pw = new TextBox { Text = _s.McpPassword, Width = 220, PasswordChar = '•', FontFamily = UiFonts.Mono };
         pw.TextChanged += (_, _) => _s.McpPassword = pw.Text ?? "";
         var gen = new Button { Content = "Generate", Margin = new Thickness(6, 0) };
         gen.Click += (_, _) => { pw.Text = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(18)).Replace('/', '_').Replace('+', '-'); pw.PasswordChar = '\0'; };
@@ -1510,17 +1579,19 @@ public sealed class SettingsWindow : Window
 
         p.Children.Add(Note("Status: " + _mcpStatus()));
 
-        var exe = Environment.ProcessPath ?? "RomSimStudio.exe";
+        var (exe, first) = Program.SelfCommand();
         string root = _s.McpRoots.FirstOrDefault() ?? "<your ROM folder>";
-        string stdio = JsonSerializer.Serialize(new { mcpServers = new { okirom = new { command = exe, args = new[] { "--mcp", "--root", root } } } }, McpJson);
+        string stdio = JsonSerializer.Serialize(new { mcpServers = new { okirom = new { command = exe, args = (string[])[.. first, "--mcp", "--root", root] } } }, McpJson);
+        string run = string.Join(" ", new[] { exe }.Concat(first).Select(a => "\"" + a + "\""));
         string http = JsonSerializer.Serialize(new
         {
             mcpServers = new { okirom = new { type = "http", url = $"http://{(_s.McpRemote ? Environment.MachineName : "127.0.0.1")}:{_s.McpPort}/mcp", headers = new Dictionary<string, string> { ["Authorization"] = "Bearer <password>" } } },
         }, McpJson);
-        p.Children.Add(Code("Local clients over stdio (the client starts the server itself: run \"" + exe + "\" --mcp --root <folder>)", stdio));
+        p.Children.Add(Code("Local clients over stdio (the client starts the server itself: run " + run + " --mcp --root <folder>)", stdio));
         p.Children.Add(Code("Clients connecting to this app's HTTP server (they work on the ROM open here)", http));
         return Grouped(p);
     }
+#endif
 
     /// A heading with its Copy button beside it, then the text (the button used to sit under the text where the scroll bar covered it).
     Control Code(string title, string text)
@@ -1535,7 +1606,7 @@ public sealed class SettingsWindow : Window
         DockPanel.SetDock(copy, Dock.Right);
         head.Children.Add(copy);
         head.Children.Add(new TextBlock { Text = title, FontSize = 11, Opacity = 0.8, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center });
-        var box = new TextBox { Text = text, IsReadOnly = true, AcceptsReturn = true, FontFamily = MainWindow.MonoFont, FontSize = 11, TextWrapping = TextWrapping.Wrap };
+        var box = new TextBox { Text = text, IsReadOnly = true, AcceptsReturn = true, FontFamily = UiFonts.Mono, FontSize = 11, TextWrapping = TextWrapping.Wrap };
         var sp = new StackPanel();
         sp.Children.Add(head); sp.Children.Add(box);
         return sp;

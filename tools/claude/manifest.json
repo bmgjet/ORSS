@@ -1,0 +1,275 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/mcpb/main/dist/mcpb-manifest-v0.3.schema.json",
+  "manifest_version": "0.3",
+  "name": "romsim-studio",
+  "display_name": "Rom Sim Studio",
+  "version": "0.1.0",
+  "description": "Let Claude use Rom Sim Studio: assemble, disassemble, simulate and tune OKI MSM66207 Honda OBD1 ECU ROMs.",
+  "long_description": "Connects Claude to **Rom Sim Studio** (Rom Sim Studio), the toolchain for OKI MSM66207 / 66201 Honda OBD1 ECU ROMs such as the P28.\n\n**With the desktop app open** (Settings > MCP server switched on), Claude works on the ROM that is open in the app: every calibration edit shows up live, and it can drive the simulator, the Moates Ostrich / Demon ROM emulator and datalogging to tune a car from its logs.\n\n**Without the app**, point the extension at `romsim-mcp.exe` (or `RomSimStudio.exe`) and pick workspace folders; Claude then works on .asm / .bin files there: the architecture and opcode reference, assembler, disassembler, code explorer, cross references, table detection, calibration editing, XDF export and ROM comparison.\n\nIn **auto** mode (the default) the extension uses the app when it is running and falls back to the local server otherwise.",
+  "author": {
+    "name": "bmgjet",
+    "url": "https://github.com/bmgjet"
+  },
+  "icon": "icon.png",
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/server/index.js",
+        "${user_config.workspace}"
+      ],
+      "env": {
+        "OKIROM_MODE": "${user_config.mode}",
+        "OKIROM_APP_URL": "${user_config.app_url}",
+        "OKIROM_APP_PASSWORD": "${user_config.app_password}",
+        "OKIROM_EXECUTABLE": "${user_config.executable}",
+        "OKIROM_READ_ONLY": "${user_config.read_only}"
+      }
+    }
+  },
+  "user_config": {
+    "mode": {
+      "type": "string",
+      "title": "Connection mode",
+      "description": "auto: use the desktop app when it is running, otherwise the local server below. app: always the desktop app. local: always the local server (files only).",
+      "default": "auto",
+      "required": false
+    },
+    "app_url": {
+      "type": "string",
+      "title": "Desktop app MCP address",
+      "description": "Where Rom Sim Studio serves MCP (Settings > MCP server). Change the port to match, or use http://<other-pc>:<port>/mcp when the app runs on another computer with remote connections allowed.",
+      "default": "http://127.0.0.1:8765/mcp",
+      "required": false
+    },
+    "app_password": {
+      "type": "string",
+      "title": "Desktop app MCP password",
+      "description": "The password set in Rom Sim Studio > Settings > MCP server. Leave empty if none is set (only allowed for local connections).",
+      "sensitive": true,
+      "required": false
+    },
+    "executable": {
+      "type": "file",
+      "title": "Local server (romsim-mcp.exe or RomSimStudio.exe)",
+      "description": "Used when the desktop app is not running (auto) or always (local). romsim-mcp.exe is built from src/OkiRomSim.McpHost; RomSimStudio.exe works too (it is started with --mcp).",
+      "required": false
+    },
+    "workspace": {
+      "type": "directory",
+      "title": "Workspace folders (local server)",
+      "description": "The folders the local server may read and write (.asm, .bin, definitions, logs). Paths outside them are refused. The desktop app uses its own list from its settings.",
+      "multiple": true,
+      "default": [
+        "${DOCUMENTS}"
+      ],
+      "required": false
+    },
+    "read_only": {
+      "type": "boolean",
+      "title": "Read only (local server)",
+      "description": "Refuse every write: Claude can study ROMs but not change files.",
+      "default": false,
+      "required": false
+    }
+  },
+  "tools": [
+    {
+      "name": "help",
+      "description": "List every tool with its arguments, and the recommended workflow."
+    },
+    {
+      "name": "arch",
+      "description": "Architecture guide for the OKI MSM66207 (66K / nX-8/200) and the Honda P28 board."
+    },
+    {
+      "name": "opcode",
+      "description": "Every encoding of an instruction: bytes, length, cycles and DD requirements, from a mnemonic, operand form or hex bytes."
+    },
+    {
+      "name": "file_list",
+      "description": "List files in a workspace directory (non-recursive unless recursive=true)."
+    },
+    {
+      "name": "file_read",
+      "description": "Read a text file a page at a time, with line numbers."
+    },
+    {
+      "name": "file_search",
+      "description": "Search a file (or every .asm/.inc in a directory) with a regular expression; returns matching lines with numbers."
+    },
+    {
+      "name": "file_write",
+      "description": "Create or overwrite a text file (set overwrite=true to replace an existing file)."
+    },
+    {
+      "name": "workspace_roots",
+      "description": "The folders this server can reach, on the machine it runs on."
+    },
+    {
+      "name": "workspace_allow",
+      "description": "Ask the user, in the desktop app, to let a folder on that machine into the workspace for this session."
+    },
+    {
+      "name": "transfer_dir",
+      "description": "The folder on the simulator's machine that this server can always write to, and the path to give file_upload when you have nowhere else to put a file."
+    },
+    {
+      "name": "app_open",
+      "description": "Open a file on the simulator's machine in the desktop app, as the File menu would (.asm, .bin/.rom or project .zip)."
+    },
+    {
+      "name": "file_download",
+      "description": "Read any file as base64, in chunks - how an agent on another machine gets a .bin, a log or a project out of the workspace."
+    },
+    {
+      "name": "file_upload",
+      "description": "Write base64 into a file, in chunks - how an agent on another machine puts a .bin, .asm or definitions into the workspace."
+    },
+    {
+      "name": "rom_download",
+      "description": "The ROM image the desktop app has open (with every calibration edit), as base64 - for an agent running on another machine."
+    },
+    {
+      "name": "rom_upload",
+      "description": "Send a ROM image (base64) to the desktop app and open it there, as if it had been opened from disk."
+    },
+    {
+      "name": "file_edit",
+      "description": "Replace text in a file."
+    },
+    {
+      "name": "file_edit_lines",
+      "description": "Replace lines start_line..end_line (inclusive) with new text; end_line = start_line - 1 inserts before start_line without removing anything."
+    },
+    {
+      "name": "assemble",
+      "description": "Assemble a .asm (syntax plus include/if/module...) into a byte-exact .bin."
+    },
+    {
+      "name": "disassemble",
+      "description": "Disassemble a .bin/.rom image into an editable .asm."
+    },
+    {
+      "name": "disassemble_range",
+      "description": "Show a few instructions at an address or label, with bytes, labels and source line (works on .asm and .bin)."
+    },
+    {
+      "name": "symbols",
+      "description": "Find labels/equates by name (substring or regex) or what is at an address (nearest label, source line, bytes)."
+    },
+    {
+      "name": "xref",
+      "description": "Every instruction that reads, writes, calls or jumps to an address or label."
+    },
+    {
+      "name": "explore",
+      "description": "Follow the code from a label/address like the CPU would and report what it touches and a guess at its purpose."
+    },
+    {
+      "name": "detect_tables",
+      "description": "Find the fuel/ignition/VE maps from the code that looks them up."
+    },
+    {
+      "name": "run",
+      "description": "Boot the ROM in the MSM66207 simulator with a simulated engine and report what it drives."
+    },
+    {
+      "name": "compare_bins",
+      "description": "Byte differences between two images, grouped into ranges and named by label (checks a patch changed only what was intended)."
+    },
+    {
+      "name": "session_info",
+      "description": "What the desktop app has open (ROM, build, unsaved edits, emulator, datalog)."
+    },
+    {
+      "name": "cal_list",
+      "description": "List the calibration definitions (settings, tables, axes, switches) with address, size, type and formula."
+    },
+    {
+      "name": "cal_read",
+      "description": "Read a setting or table."
+    },
+    {
+      "name": "cal_write",
+      "description": "Change calibration values."
+    },
+    {
+      "name": "cal_scale",
+      "description": "Scale a whole section instead of cell by cell."
+    },
+    {
+      "name": "cal_define",
+      "description": "Add or edit a calibration definition."
+    },
+    {
+      "name": "cal_delete",
+      "description": "Remove a definition (the ROM bytes are not touched)."
+    },
+    {
+      "name": "cal_detect",
+      "description": "Find calibration data from the code."
+    },
+    {
+      "name": "cal_explain",
+      "description": "Which code reads a setting or table, what that code appears to do, and the axes."
+    },
+    {
+      "name": "cal_formulas",
+      "description": "List scaling formulas (name, expression in x, inverse, unit), or add/replace one with name + expr."
+    },
+    {
+      "name": "cal_save",
+      "description": "Save the ROM (.bin), the definitions, or a TunerPro XDF."
+    },
+    {
+      "name": "cal_features",
+      "description": "Code patches from a feature file (roms/features.json by default)."
+    },
+    {
+      "name": "compare",
+      "description": "What changed between two ROMs (.bin or .asm; 'session' = the app's)."
+    },
+    {
+      "name": "datalog",
+      "description": "Datalogging in the desktop app: status, start, stop, latest, frames, clear, load."
+    },
+    {
+      "name": "emulator",
+      "description": "Moates Ostrich 2.0 / Demon ROM emulator in the desktop app: status, connect, upload, disconnect, auto upload."
+    },
+    {
+      "name": "simulator",
+      "description": "The desktop app's simulator: run, pause, reset, step and set engine inputs."
+    }
+  ],
+  "tools_generated": true,
+  "keywords": [
+    "oki",
+    "msm66207",
+    "66k",
+    "honda",
+    "obd1",
+    "p28",
+    "ecu",
+    "rom",
+    "tuning",
+    "disassembler",
+    "assembler",
+    "emulator",
+    "moates"
+  ],
+  "license": "Proprietary",
+  "compatibility": {
+    "platforms": [
+      "win32",
+      "darwin",
+      "linux"
+    ],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  }
+}

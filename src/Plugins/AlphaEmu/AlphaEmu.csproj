@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    ALPHAemu for Rom Sim Studio: the ALPHA NextGEN emulator workflow (link, multi-map manager, analog inputs,
+    real-time update, datalog feed, snapshots, insights) as a plugin. See README.md.
+
+    It is built against the app's own RomSimStudio.dll where it is already built, so the app is not rebuilt:
+    Private=false keeps the reference at compile time only, and at run time the app hands the plugin its own
+    loaded copy of every type (see PluginManager.PluginLoadContext). Point OkiRomSim at a different build
+    folder with -p:OkiRomSim="C:\path\to\net10.0" if yours lives elsewhere.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>RomSim.AlphaEmu</AssemblyName>
+    <RootNamespace>AlphaEmuPlugin</RootNamespace>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <Version>1.0.0</Version>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <OkiRomSim Condition="'$(OkiRomSim)' == ''">D:\PublicOkiRomSim\src\OkiRomSim.Desktop\bin\Release\net10.0</OkiRomSim>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- the app and the libraries it already has: compile-time only, the app's copies are used at run time -->
+    <Reference Include="RomSimStudio" HintPath="$(OkiRomSim)\RomSimStudio.dll" Private="false" />
+    <Reference Include="OkiRomSim.Core" HintPath="$(OkiRomSim)\OkiRomSim.Core.dll" Private="false" />
+    <Reference Include="OkiRomSim.Calibration" HintPath="$(OkiRomSim)\OkiRomSim.Calibration.dll" Private="false" />
+    <Reference Include="OkiRomSim.Assembler" HintPath="$(OkiRomSim)\OkiRomSim.Assembler.dll" Private="false" />
+    <Reference Include="Avalonia" HintPath="$(OkiRomSim)\Avalonia.dll" Private="false" />
+    <Reference Include="Avalonia.Base" HintPath="$(OkiRomSim)\Avalonia.Base.dll" Private="false" />
+    <Reference Include="Avalonia.Controls" HintPath="$(OkiRomSim)\Avalonia.Controls.dll" Private="false" />
+    <Reference Include="Avalonia.Layout" HintPath="$(OkiRomSim)\Avalonia.Controls.dll" Private="false" />
+    <Reference Include="Avalonia.Desktop" HintPath="$(OkiRomSim)\Avalonia.Desktop.dll" Private="false" />
+    <Reference Include="Avalonia.Themes.Fluent" HintPath="$(OkiRomSim)\Avalonia.Themes.Fluent.dll" Private="false" />
+    <Reference Include="System.IO.Ports" HintPath="$(OkiRomSim)\System.IO.Ports.dll" Private="false" />
+  </ItemGroup>
+
+  <!-- README: "build it and the .dll lands beside the app's Plugins folder if you add the copy step."
+       It shows up there with a one-click Add in Settings > Plugins, so there is no chance of picking the
+       wrong copy (the tiny ref assembly under obj\ has the same name but cannot be loaded). Point
+       PluginOutput at a different app to drop it into that build's Plugins folder instead. -->
+  <Target Name="CopyToPluginsFolder" AfterTargets="Build;Publish">
+    <ItemGroup>
+      <_PluginFiles Include="$(TargetDir)RomSim.AlphaEmu.dll" />
+      <_PluginFiles Include="$(TargetDir)RomSim.AlphaEmu.pdb" />
+      <_PluginFiles Include="$(TargetDir)RomSim.AlphaEmu.deps.json" Condition="Exists('$(TargetDir)RomSim.AlphaEmu.deps.json')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_PluginFiles)" DestinationFolder="$(OkiRomSim)\Plugins" SkipUnchangedFiles="true"
+          Condition="Exists('$(OkiRomSim)')" />
+    <Message Importance="high" Text="ALPHAemu copied to $(OkiRomSim)\Plugins (Settings > Plugins > Add)" Condition="Exists('$(OkiRomSim)')" />
+  </Target>
+</Project>

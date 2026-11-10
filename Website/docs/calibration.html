@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Definitions, Detect and tools — Rom Sim Studio guide</title>
+<link rel="icon" href="../favicon.ico">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<header class="topbar"><button class="menu-btn" aria-label="Contents">☰</button><a class="logo" href="index.html">ROM SIM <b>STUDIO</b></a><span class="sp"></span><span class="links"><a href="../">Website</a> &nbsp;·&nbsp; <a href="../#start">Download</a></span></header>
+<div class="frame"><nav class="side"></nav><main>
+
+<h1>Definitions, Detect and tools</h1>
+<p class="lead">How the program knows where a ROM's maps are and what their numbers mean, and the tools on the calibration editor's Tools menu.</p>
+
+<h2>Definitions</h2>
+<p>A <b>definition</b> names a table or a setting: where it is in the ROM, what each cell is (a byte, a word, signed or not, a single bit), its size, the <b>formula</b> that turns the stored number into real units (ms, degrees, rpm, kPa, °C…), its axes, and what it does. They come from:</p>
+<ul>
+  <li><b>The source's annotations</b> — a <span class="path">.asm</span> with <code>;@</code> lines (HTS120, the skeleton and its modules) arrives with every map and setting named.</li>
+  <li><b>Detect</b> — for a ROM without them (a <span class="path">.bin</span>, a stock ROM), see below.</li>
+  <li><b>A definitions file</b> — <b>Tools &gt; Import…</b> reads one; a <span class="path">.bin</span>'s definitions are kept in a file beside it, and in a project.</li>
+  <li><b>By hand</b> — <b>Tools &gt; Add</b>, and the Definition form under a table.</li>
+</ul>
+
+<h2>Detect</h2>
+<p><b>Tools &gt; Detect</b> finds the maps by <i>reading the code</i>, not by looking at fixed addresses: it follows the routines that look tables up and reads their shapes, axes and scalings from the instructions. It also lines an unknown ROM up against the labelled reference ROMs in <span class="path">Templates/References</span> (P30, P13, P72, P08 and HTS115; a P13 ROM against the P13 only, as it runs on another processor): Honda ECUs of one generation share most of their code, so the instruction that reads a table in one reads the same table in the other, at a different address. Settings &gt; General can offer Detect whenever a ROM is opened.</p>
+
+<h2>Formulas</h2>
+<p>The built-in formulas are the scalings the established tuning software uses, named for what they convert (<code>rpm_period_word</code>, <code>ign_advance</code>, <code>map_mbar</code>, <code>honda_temp_c</code>, <code>tps_pct</code>…). A definition can also carry its own expression in <code>x</code> (the stored number), with its inverse.</p>
+
+<h2>The Tools menu</h2>
+<table>
+  <tr><th>Entry</th><th>Does</th></tr>
+  <tr><td>Detect</td><td>Find the maps and settings by reading the code (above).</td></tr>
+  <tr><td>Injector size…</td><td>New injectors: the old size and the new one, the injector offset, the <b>dead time against battery voltage</b> — pick the injector from 138 presets (its size fills in too) or type its 7 points from the data sheet, and <b>Save as my own</b> to pick it again on any ROM and in the Set-up wizard — and the fuel trims. The size change is made once, the way the ROM does it: a skeleton ROM's injector size setting, an HTS ROM's multiplier (the maps take anything past the x2 it holds), or the fuel maps rescaled when the ROM has neither. A preview says what changes; one undo step.</td></tr>
+  <tr><td>MAP sensor size…</td><td>A 2, 2.5 or 3 bar sensor: the load scaling changed so the maps read the new sensor right.</td></tr>
+  <tr><td>Scale…</td><td>Rescale a map's axis or a fuel map's column multipliers, keeping what the engine gets.</td></tr>
+  <tr><td>O2 / knock tables…</td><td>The datalog's O2 and knock readings averaged into grids shaped like the fuel map, and the corrections they ask for.</td></tr>
+  <tr><td>Add / Delete</td><td>Define a table or setting by hand, or remove a definition (never the bytes).</td></tr>
+  <tr><td>Import… / Export definitions (JSON)…</td><td>Definitions in and out as a file of their own.</td></tr>
+  <tr><td>Export TunerPro XDF…</td><td>The definitions as an XDF, for TunerPro.</td></tr>
+  <tr><td>Save .bin…</td><td>The ROM as a 32 KB image with its checksum right, ready for a chip or an emulator.</td></tr>
+  <tr><td>Compare…</td><td>This ROM against another: see <a href="tools.html#compare">Compare</a>.</td></tr>
+  <tr><td>Import maps…</td><td>The tune from another ROM into this one: see <a href="tools.html#import">Import maps</a>.</td></tr>
+</table>
+<figure><img src="img/injectors.png" alt="The injector size window"><figcaption>Injector size: nothing changes until Apply, and the whole change is one undo step.</figcaption></figure>
+
+<h2>Feature patches</h2>
+<p>Changes that add or remove a <i>behaviour</i> rather than a value — a trouble code off, the lamp off, known fixes to a base ROM. Every patch carries the bytes it expects and writes only where it finds them, and taking one away puts back exactly what was there.</p>
+
+<footer>Rom Sim Studio 0.0.0.8 · by bmgjet · <a href="licence.html">Licence</a></footer>
+</main></div>
+<script src="guide.js"></script>
+</body>
+</html>

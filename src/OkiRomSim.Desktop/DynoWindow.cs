@@ -54,7 +54,7 @@ public sealed class DynoWindow : Window
     readonly Button _go = new() { Content = "▶ Start run (Space)", MinWidth = 150, FontWeight = FontWeight.SemiBold, Padding = new Thickness(12, 5) };
     readonly TextBlock _waiting = new() { FontSize = 12.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(10, 0, 10, 2) };
     readonly TextBlock _state = new() { FontWeight = FontWeight.Bold, VerticalAlignment = VerticalAlignment.Center, FontSize = 14, Margin = new Thickness(8, 0), MinWidth = 76 };
-    readonly TextBlock _readout = new() { FontFamily = MainWindow.MonoFont, FontSize = 12, Opacity = 0.9, Margin = new Thickness(10, 0, 10, 4), TextTrimming = TextTrimming.CharacterEllipsis };
+    readonly TextBlock _readout = new() { FontFamily = UiFonts.Mono, FontSize = 12, Opacity = 0.9, Margin = new Thickness(10, 0, 10, 4), TextTrimming = TextTrimming.CharacterEllipsis };
     readonly ComboBox _xAxis = new() { ItemsSource = new[] { "rpm", "time", "speed" }, SelectedIndex = 0, Width = 84 };
     readonly StackPanel _runList = new() { Spacing = 1 };
     readonly TextBlock _note = new() { FontSize = 11, Opacity = 0.75, TextWrapping = TextWrapping.Wrap };
@@ -428,7 +428,7 @@ public sealed class DynoWindow : Window
         {
             grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
             var a = new TextBlock { Text = rows[i].What, Opacity = 0.75, Margin = new Thickness(0, 2, 14, 2), FontSize = 12.5 };
-            var b = new SelectableTextBlock { Text = rows[i].Value, FontFamily = MainWindow.MonoFont, Margin = new Thickness(0, 2), FontSize = 12.5, TextWrapping = TextWrapping.Wrap };
+            var b = new SelectableTextBlock { Text = rows[i].Value, FontFamily = UiFonts.Mono, Margin = new Thickness(0, 2), FontSize = 12.5, TextWrapping = TextWrapping.Wrap };
             Grid.SetRow(a, i); Grid.SetRow(b, i); Grid.SetColumn(b, 1);
             grid.Children.Add(a); grid.Children.Add(b);
         }
@@ -1139,7 +1139,7 @@ public sealed class DynoWindow : Window
             string what = pr.Mode == DynoMode.Strip ? $"strip, {pr.Car} {Units.Format(pr.VehicleKg + pr.DriverKg + pr.FuelKg, "kg", "0")}" : $"inertia dyno, roller {Units.Format(pr.RollerInertia, "kg·m²", "0.#")}";
             lines.Children.Add(new TextBlock
             {
-                Foreground = AppTheme.Brush(s.Style?.Colour is { Length: > 0 } c && Color.TryParse(c, out var col) ? col : s.Colour), FontSize = 14, FontFamily = MainWindow.MonoFont,
+                Foreground = AppTheme.Brush(s.Style?.Colour is { Length: > 0 } c && Color.TryParse(c, out var col) ? col : s.Colour), FontSize = 14, FontFamily = UiFonts.Mono,
                 Text = $"{s.Name}:  {VirtualDyno.ToPower((units.ShowCrank ? s.Result.PeakW / loss : s.Result.PeakW) * f, units.PowerUnit):0.0} {units.PowerUnit} @ {s.Result.PeakWRpm:0} rpm, " +
                        $"{VirtualDyno.ToTorque((units.ShowCrank ? s.Result.PeakNm / loss : s.Result.PeakNm) * f, units.TorqueUnit):0.0} {tu} @ {s.Result.PeakNmRpm:0} rpm  ({what}, {w.Correction} x {s.Result.Correction:0.000}{(run != null ? $", {run.When:yyyy-MM-dd HH:mm}" : "")})",
             });

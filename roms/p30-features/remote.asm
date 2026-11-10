@@ -422,7 +422,7 @@ rc_vp_ret:      RT
 ; ------------------------------------------------------------------ the tick: the lock, the limits, popcorn, the fan
 ; Tick context, bank 3Fh. r3 the speed limit, r4 the rev limit, r5 valet mode (1), r6 the margin, r7 a flag.
 rc_tick:        PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -496,7 +496,7 @@ rc_no_rev:      CLRB    A
                 SUBB    A, r6
                 JLT     rc_no_speed
                 JEQ     rc_no_speed
-                CMPB    0b4h, A                ; speed - limit: no borrow at or over it
+                CMPB    ENG_VSS, A                ; speed - limit: no borrow at or over it
                 JLT     rc_no_speed
                 MOVB    r7, #001h
 rc_no_speed:    CLRB    A
@@ -515,7 +515,7 @@ rc_lim_done:    J       mod_tick_exit
 
 ; The second half, on a slot of its own (each half alone is a tick's worth): popcorn, the timing and the fan.
 rc_tick2:       PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -551,10 +551,10 @@ rc_tick2_on:
                 JGE     rc_pop_set
                 CLRB    A
                 LCB     A, rc_pop_tps
-                CMPB    A, 0b9h                ; limit - throttle: borrows while the throttle is over it
+                CMPB    A, ENG_TPS                ; limit - throttle: borrows while the throttle is over it
                 JLT     rc_pop_set
                 LC      A, rc_pop_rpm
-                CMP     0ach, A                ; the period at or under it: at or over the rpm
+                CMP     ENG_RPMP, A                ; the period at or under it: at or over the rpm
                 JGT     rc_pop_set
                 MOVB    r7, #001h
 rc_pop_set:     MOV     DP, #rc_flags          ; (bit 5: popping now - r7 does not last past mod_cut)
@@ -576,7 +576,7 @@ rc_pop_fuel_set:
                 CLRB    A
                 LB      A, r7
                 JEQ     rc_pop_nocut
-                LB      A, 0feh                ; every other slot: the sparks cut, then back
+                LB      A, SVC_TICK                ; every other slot: the sparks cut, then back
                 ANDB    A, #010h
                 JEQ     rc_pop_nocut
                 L       A, #MB_POPCORN
@@ -636,7 +636,7 @@ rc_fan_forced:  MB      C, [DP].0
                 SC
                 CAL     mod_output
                 SJ      rc_tick_ret
-rc_fan_off:     MOV     DP, #003dch            ; off: P0.3 taken and held high, whatever the stock code says
+rc_fan_off:     MOV     DP, #SVC_OVR           ; off: P0.3 taken and held high, whatever the stock code says
                 LB      A, [DP]
                 ANDB    A, #0f7h
                 STB     A, [DP]

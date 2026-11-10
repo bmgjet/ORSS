@@ -17,7 +17,7 @@ public sealed class CodeEditor : UserControl
     readonly TextEditor _ed = new()
     {
         ShowLineNumbers = true,
-        FontFamily = MainWindow.MonoFont,
+        FontFamily = UiFonts.Mono,
         FontSize = 13,
         WordWrap = false,
     };

@@ -158,18 +158,19 @@ public sealed class HitTraceView : UserControl
 
     void StartStop()
     {
-        try
+        // off the UI thread: starting or stopping the trace waits for the emulator's port, which an upload may be holding for a few seconds
+        if (_moates.Tracing) { RunOffThread("stopping the trace…", () => { _moates.StopTrace(); return $"trace stopped after {_moates.Hits:N0} hits"; }); return; }
+        if (int.TryParse(_base, System.Globalization.NumberStyles.HexNumber, null, out var b)) _moates.Base = b;
+        bool nonRedundant = _nonRedundant;
+        RunOffThread("starting the trace…", () =>
         {
-            if (_moates.Tracing) { _moates.StopTrace(); _status.Text = $"trace stopped after {_moates.Hits:N0} hits"; }
-            else
+            try
             {
-                if (int.TryParse(_base, System.Globalization.NumberStyles.HexNumber, null, out var b)) _moates.Base = b;
-                _moates.StartTrace(Bus.RomSize, _nonRedundant);
-                _status.Text = $"tracing {_moates.Base:X5}-{_moates.Base + Bus.RomSize - 1:X5}";
+                _moates.StartTrace(Chip.RomSize, nonRedundant);
+                return $"tracing {_moates.Base:X5}-{_moates.Base + Chip.RomSize - 1:X5}";
             }
-        }
-        catch (Exception ex) { _status.Text = "trace failed: " + ex.Message; }
-        UpdateButtons();
+            catch (Exception ex) { return "trace failed: " + ex.Message; }
+        });
     }
 
     static readonly Regex DataLine = new(@"^\s*([A-Za-z_][\w]*\s*:)?\s*(DB|DW)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -185,13 +186,13 @@ public sealed class HitTraceView : UserControl
         if (!Hardware)
         {
             var (now, exec, data, count) = _host.SimHits();
-            double Heat(ulong at) => at == 0 ? 0 : Math.Clamp(1 - ((now - Math.Min(now, at)) / Bus.CpuHz / 2.0), 0, 1);
+            double Heat(ulong at) => at == 0 ? 0 : Math.Clamp(1 - ((now - Math.Min(now, at)) / Chip.CpuHz / 2.0), 0, 1);
             foreach (var e in entries)
             {
-                if (e.Address >= Bus.RomSize) continue;
+                if (e.Address >= Chip.RomSize) continue;
                 if (exec[e.Address] > 0) { result[e.Line] = (true, Heat(exec[e.Address])); continue; }
                 ulong last = 0;
-                for (int i = 0; i < e.Length && e.Address + i < Bus.RomSize; i++)
+                for (int i = 0; i < e.Length && e.Address + i < Chip.RomSize; i++)
                     if (count[e.Address + i] > 0) last = Math.Max(last, data[e.Address + i]);
                 if (last > 0) result[e.Line] = (false, Heat(last));
             }
@@ -204,7 +205,7 @@ public sealed class HitTraceView : UserControl
             foreach (var e in entries)
             {
                 long last = 0;
-                for (int i = 0; i < e.Length && e.Address + i < Bus.RomSize; i++)
+                for (int i = 0; i < e.Length && e.Address + i < Chip.RomSize; i++)
                     if (hits.Count[e.Address + i] > 0) last = Math.Max(last, hits.Last[e.Address + i]);
                 if (last == 0) continue;
                 bool data = text != null && e.Line - 1 < text.Length && DataLine.IsMatch(text[e.Line - 1]);

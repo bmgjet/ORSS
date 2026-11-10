@@ -350,6 +350,6 @@ public sealed class DynoGraph : Control
     }
 
     static FormattedText Formatted(string s, double size, IBrush brush) =>
-        new(s, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, new Typeface(MainWindow.MonoFont), size, brush);
+        new(s, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, new Typeface(UiFonts.Mono), size, brush);
     static void Text(DrawingContext c, string s, Point at, double size, IBrush brush) => c.DrawText(Formatted(s, size, brush), at);
 }

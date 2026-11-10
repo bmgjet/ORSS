@@ -13,6 +13,37 @@ public static class AppPaths
     /// ROMs read out of the emulator and new ROMs built from the skeleton.
     public static string Roms => Moved(Path.Combine(Documents, "ROMs"), Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "OkiRomSim ROMs"));
 
+    /// Where to write `content` as `path` without losing anything: `path` itself when there is no file there yet (or it already holds
+    /// exactly these bytes), else the first free "name-2.bin", "name-3.bin"... beside it. A half of a 64 KB image saved earlier may have
+    /// been tuned since: writing the half out again must never quietly replace it.
+    public static string Unclobbered(string path, byte[] content)
+    {
+        try
+        {
+            if (!File.Exists(path) || File.ReadAllBytes(path).AsSpan().SequenceEqual(content)) return path;
+        }
+        catch { }
+        string dir = Path.GetDirectoryName(path) ?? "", stem = Path.GetFileNameWithoutExtension(path), ext = Path.GetExtension(path);
+        for (int n = 2; n < 10_000; n++)
+        {
+            var candidate = Path.Combine(dir, $"{stem}-{n}{ext}");
+            try { if (!File.Exists(candidate) || File.ReadAllBytes(candidate).AsSpan().SequenceEqual(content)) return candidate; }
+            catch { }
+        }
+        return Path.Combine(dir, $"{stem}-{DateTime.Now:yyyyMMdd-HHmmss}{ext}");
+    }
+
+    /// The Templates folder: beside the app, or (running from a source checkout) the one at the repository root.
+    public static string? Templates()
+    {
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir != null; dir = dir.Parent)
+        {
+            var t = Path.Combine(dir.FullName, "Templates");
+            if (Directory.Exists(t)) return t;
+        }
+        return null;
+    }
+
     /// `now`, after moving `old` there when only the old one exists.
     static string Moved(string now, string old)
     {

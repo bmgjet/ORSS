@@ -42,7 +42,7 @@ endif
 if XP == XP_CODE
 iab_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -58,12 +58,12 @@ iab_tick:
                 ANDB    A, #001h
                 JNE     iab_is_on
                 LC      A, iab_engage     ; off: on once the period is down to the engage point
-                CMP     0ach, A
+                CMP     ENG_RPMP, A
                 JGT     iab_drive
                 SB      off(MOD_OUTSTATE).0
                 SJ      iab_drive
 iab_is_on: LC      A, iab_disengage  ; on: off once the period is past the disengage point
-                CMP     0ach, A
+                CMP     ENG_RPMP, A
                 JGT     iab_turn_off
                 SJ      iab_drive
 iab_turn_off:

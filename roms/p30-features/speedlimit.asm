@@ -39,7 +39,7 @@ endif
 if XP == XP_CODE
 speedlim_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -64,14 +64,14 @@ speedlim_tick:
                 JNE     speedlim_cutting
                 CLRB    A
                 LB      A, r4
-                CMPB    0b4h, A                ; speed - limit: no borrow at or above it
+                CMPB    ENG_VSS, A                ; speed - limit: no borrow at or above it
                 JLT     speedlim_off
                 SJ      speedlim_on
 speedlim_cutting:
                 CLRB    A
                 LB      A, r4
                 SUBB    A, #002h
-                CMPB    0b4h, A
+                CMPB    ENG_VSS, A
                 JLT     speedlim_off
 speedlim_on:    MOV     X1, #speedlim_block
                 L       A, #MB_SPEEDLIMIT

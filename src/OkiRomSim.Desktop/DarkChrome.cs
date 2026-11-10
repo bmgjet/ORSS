@@ -17,12 +17,15 @@ public static class DarkChrome
     public static readonly Color Accent = Color.FromRgb(0x4e, 0xa1, 0xff);
     public static readonly Color Text = Color.FromRgb(0xd7, 0xda, 0xe0);
 
+    /// The icon in this program's own resources: avares://RomSimStudio/... in the full build, avares://RomSimTuner/... in the tuning-only one.
+    static Uri IconUri => new($"avares://{typeof(DarkChrome).Assembly.GetName().Name}/Assets/icon.png");
+
     /// Loads the embedded app icon; returns null if the asset is missing so a packaging slip cannot stop the window opening.
     public static Bitmap? LoadIconBitmap()
     {
         try
         {
-            using var s = AssetLoader.Open(new Uri("avares://RomSimStudio/Assets/icon.png"));
+            using var s = AssetLoader.Open(IconUri);
             return new Bitmap(s);
         }
         catch { return null; }
@@ -32,7 +35,7 @@ public static class DarkChrome
     {
         try
         {
-            using var s = AssetLoader.Open(new Uri("avares://RomSimStudio/Assets/icon.png"));
+            using var s = AssetLoader.Open(IconUri);
             return new WindowIcon(s);
         }
         catch { return null; }
@@ -87,6 +90,10 @@ public static class DarkChrome
             FontSize = 12,
             FontWeight = FontWeight.SemiBold,
         };
+#if TUNER_ONLY
+        // the tuner's title names the ROM open (● for changes not saved): the bar follows the window's title
+        titleText.Bind(TextBlock.TextProperty, w.GetObservable(Window.TitleProperty));
+#endif
         left.Children.Add(titleText);
         Grid.SetColumn(left, 0);
         bar.Children.Add(left);

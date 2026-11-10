@@ -52,7 +52,7 @@ public sealed class DatalogGraphPanel : UserControl
     readonly StackPanel _channelList = new();
     readonly TextBlock _readout = new()
     {
-        FontFamily = MainWindow.MonoFont, FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(8, 4),
+        FontFamily = UiFonts.Mono, FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(8, 4),
     };
     readonly TextBlock _status = new() { FontSize = 11, Opacity = 0.8, Margin = new Thickness(8, 2), TextWrapping = TextWrapping.Wrap };
     readonly List<DatalogGraphWindow.Channel> _channels = [];
@@ -291,7 +291,7 @@ public sealed class DatalogGraphPanel : UserControl
         var box = new TextBox
         {
             Text = Fmt(min ? c.Lo : c.Hi), Width = 58, FontSize = 10.5, Padding = new Thickness(3, 0),
-            FontFamily = MainWindow.MonoFont,
+            FontFamily = UiFonts.Mono,
         };
         ToolTip.SetTip(box, min ? "Bottom of this channel's scale." : "Top of this channel's scale.");
         box.LostFocus += (_, _) =>
@@ -630,7 +630,7 @@ public sealed class GraphCanvas : Control
                                    : v.ToString("0.###", CultureInfo.InvariantCulture);
 
     static FormattedText Formatted(string s, double size, IBrush brush) =>
-        new(s, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, new Typeface(MainWindow.MonoFont), size, brush);
+        new(s, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, new Typeface(UiFonts.Mono), size, brush);
 
     /// The shown channel whose line passes nearest the pointer (within a few pixels), and the frame under it.
     (DatalogGraphWindow.Channel Ch, int Frame)? HitLine(Point pos)
@@ -660,7 +660,7 @@ public sealed class GraphCanvas : Control
 
     static void Text(DrawingContext c, string s, Point at, double size, IBrush brush) =>
         c.DrawText(new FormattedText(s, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-                                     new Typeface(MainWindow.MonoFont), size, brush), at);
+                                     new Typeface(UiFonts.Mono), size, brush), at);
 
     int FrameAt(double x)
     {

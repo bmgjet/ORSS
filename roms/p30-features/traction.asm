@@ -56,7 +56,7 @@ endif
 if XP == XP_CODE
 tc_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -79,10 +79,10 @@ tc_climb:       STB     A, r4
                 CMPB    A, #000h
                 JEQ     tc_off
                 LCB     A, tc_speed
-                CMPB    0b4h, A
+                CMPB    ENG_VSS, A
                 JLT     tc_decay_it
                 LCB     A, tc_tps
-                CMPB    0b9h, A
+                CMPB    ENG_TPS, A
                 JLT     tc_decay_it
                 MOV     DP, #MOD_GEAR          ; this gear's limit
                 CLR     A

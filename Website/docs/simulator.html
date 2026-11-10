@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The workbench — Rom Sim Studio guide</title>
+<link rel="icon" href="../favicon.ico">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<header class="topbar"><button class="menu-btn" aria-label="Contents">☰</button><a class="logo" href="index.html">ROM SIM <b>STUDIO</b></a><span class="sp"></span><span class="links"><a href="../">Website</a> &nbsp;·&nbsp; <a href="../#start">Download</a></span></header>
+<div class="frame"><nav class="side"></nav><main>
+
+<h1>The workbench</h1>
+<p class="lead">Simulator mode: the ROM's source in the middle, the simulated chip and engine on the left, the CPU on the right.</p>
+
+<figure><img src="img/simulator.png" alt="The workbench"><figcaption>The three columns can be resized by dragging the splitters between them; <kbd>Ctrl</kbd>+<kbd>E</kbd> gives the lower tabs the whole window.</figcaption></figure>
+
+<h2>The toolbar</h2>
+<table>
+  <tr><th>Button</th><th>Does</th></tr>
+  <tr><td>File</td><td>New ROM, Open, Recent, Save, Save as, projects, Bin tool, Compare, Tuner mode, Settings.</td></tr>
+  <tr><td>Build <kbd>Ctrl</kbd>+<kbd>B</kbd></td><td>Assemble the source and load it. The button is lit (●) only when the source on screen would build to different bytes from what is loaded: an edit to a comment leaves it dark.</td></tr>
+  <tr><td>⚡ Patch live <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd></td><td>Assemble and put only the bytes that changed into the running ROM — no reset. RAM, the crank phase and everything else carry on. With the emulator uploading, the car gets the change too. It asks first if the CPU is inside code that moved.</td></tr>
+  <tr><td>Run / Pause / Step / Over / Into / Out / Reset</td><td>See <a href="debugging.html">Running, stepping and breakpoints</a>.</td></tr>
+</table>
+
+<h2>Left: the chip and the engine</h2>
+<h3>Pinout</h3>
+<p>The MSM66207 drawn as its 64-pin shrink DIP or QFP, every pin live: green outputs, blue inputs, purple on-chip peripherals, orange analog (brighter is higher). Point at a pin for its level, how often it changes, when it last went high and low, and which routine drove it. Click an input to force it; dial an analog pin's voltage.</p>
+<p>Behind the little <b>▸</b> tab on the processor's right edge is the board's <b>8255</b>, the GPIO expander that drives the outputs: hover the tab for what it does, click it to bring the 8255 out beside the processor with the traces from P0 and P1 to its ports B and C (lit while the output is on), and click again to tuck it away. The ROM writes each output to the processor's P0 / P1 latch and to the 8255, and reads it back:</p>
+<table>
+  <tr><th>Latch</th><th>8255</th><th>On the car</th></tr>
+  <tr><td>P0.0</td><td>PB0</td><td>A/C compressor clutch relay (pin A15, low = on)</td></tr>
+  <tr><td>P0.1</td><td>PB1</td><td>EVAP purge solenoid (pin A20)</td></tr>
+  <tr><td>P0.2</td><td>PB2</td><td>AltC</td></tr>
+  <tr><td>P0.3</td><td>PB3</td><td>Radiator fan</td></tr>
+  <tr><td>P0.4</td><td>PB4</td><td>A/T lock-up</td></tr>
+  <tr><td>P0.5</td><td>PB5</td><td>Alternator control (pin A16)</td></tr>
+  <tr><td>P0.7</td><td>PB7</td><td>Fuel pump relay (low = on)</td></tr>
+  <tr><td>P1.0</td><td>PC0</td><td>VTEC solenoid (high = on)</td></tr>
+  <tr><td>P1.2</td><td>PC2</td><td>O2 sensor heater (pin A6)</td></tr>
+  <tr><td>P1.4</td><td>PC4</td><td>Check-engine lamp (pin A13)</td></tr>
+  <tr><td>P1.5</td><td>PC5</td><td>The LED on the ECU board</td></tr>
+  <tr><td>P4.2 (processor pin)</td><td>-</td><td>EGR (PWM0)</td></tr>
+  <tr><td>P4.3 (processor pin)</td><td>-</td><td>Boost solenoid of the EBC (stock: A/T lock-up PWM)</td></tr>
+</table>
+<p>P0.6, P1.1, P1.3, P1.6 and P1.7 are not traced yet. Port A reads the switches (knock detector, power-steering pressure, VTEC and O2 heater feedback, the service-check connector): click one of its pins to toggle it.</p>
+<h3>Engine inputs</h3>
+<p>Sliders for what the sensors report: RPM, MAP, throttle, coolant, intake air, O2, battery, road speed, barometric pressure, electrical load, EGR lift and the battery while cranking, plus switches for the starter, oil pressure and A/C. Each is held to what its sensor can report. <b>Reset defaults</b> puts a warm idle back; <b>Check engine…</b> opens the <a href="#mil">check-engine lamp</a>.</p>
+
+<h2>Middle: the source and the tabs</h2>
+<p>The editor holds the source of the ROM being simulated, with the line the CPU is on marked. <kbd>F9</kbd> toggles a breakpoint on the caret's line. Below it:</p>
+<table>
+  <tr><th>Tab</th><th>Holds</th></tr>
+  <tr><td>Problems</td><td>Build errors and warnings, the worst first; click one to go to its line. On a ROM built from the skeleton it also lists <b>output clashes</b>: two functions switched on and set to drive the same ECU pin, or a pin a built-in stock function drives too.</td></tr>
+  <tr><td>Trace</td><td>The last instructions executed. Tick <b>Hit trace</b> for every ROM byte fetched, from the simulator or a real ECU through an Ostrich or Demon. See <a href="memory.html">Memory, trace and hit trace</a>.</td></tr>
+  <tr><td>Memory</td><td>RAM and ROM in hex, and the <b>Map</b>: every RAM byte named and scaled, with the instruction that wrote it last.</td></tr>
+  <tr><td>Calibration</td><td>The maps and settings. See <a href="tuning.html">Tables and settings</a>.</td></tr>
+  <tr><td>Lookup &amp; breakpoints</td><td>Find a label, setting or address and every instruction that reads or writes it; set, switch off and remove breakpoints.</td></tr>
+  <tr><td>Datalog</td><td>Log a car or the simulated ROM. See <a href="datalogging.html">Datalogging</a>.</td></tr>
+  <tr><td>Debug</td><td>Everything that happened: actions, errors, serial traffic and MCP calls, with where they came from and how long they took.</td></tr>
+</table>
+<p>Every panel zooms on its own with <kbd>Ctrl</kbd> + mouse wheel; Settings &gt; Panel zoom puts them back.</p>
+
+<h2>Right: the CPU</h2>
+<ul>
+  <li><b>CPU</b> — the PC and the routine it is in, the registers (orange when the last step changed them), the flags, and the interrupt request and enable masks.</li>
+  <li><b>Call stack</b> — routines entered with CAL / VCAL and the interrupt handlers, innermost first. Double-click to go there.</li>
+  <li><b>Disassembly</b> — around the PC or from any address or label typed. Click a line to see its source; double-click to toggle a breakpoint.</li>
+  <li><b>Outputs</b> — what the ROM drives: fuel pump, VTEC, each injector's pulse, rate and duty, the ignition timer, the watchdog, PWM.</li>
+  <li><b>Ports</b> — every port pin's level, direction, rate, last high and low, its job on the board, and the routine that last wrote it.</li>
+</ul>
+
+<h2 id="mil">The check-engine lamp</h2>
+<figure><img src="img/check-engine.png" alt="The check-engine lamp window"><figcaption>Check engine: the flashes being decoded, the stored codes and what the ECU sees wrong now.</figcaption></figure>
+<p>The lamp is simulated as the ROM drives it: the stored-code array, long and short flashes at the real rate, the ROM's own renumbering, the service-check connector jumper and the backup-fuse clear.</p>
+<h3>Hard disable</h3>
+<p>Each code detected now or stored has a <b>Hard disable…</b> button. It lists every instruction in the ROM's code that sets that code's fault bit, and on your say-so replaces each with NOPs of the same length: the check still runs, but can never set the fault, and nothing after it moves. With the ROM's source open, those lines are changed to match (marked <i>hard-disabled</i>), so a rebuild keeps it; a <span class="path">.bin</span> keeps it when saved. Undo puts the bytes back. Unlike switching a code off on the error codes page, nothing in the calibration can bring it back: use it for a fault you know is the wiring or a sensor that is not fitted.</p>
+
+<footer>Rom Sim Studio 0.0.0.8 · by bmgjet · <a href="licence.html">Licence</a></footer>
+</main></div>
+<script src="guide.js"></script>
+</body>
+</html>

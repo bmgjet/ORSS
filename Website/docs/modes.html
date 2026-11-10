@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simulator and Tuner modes — Rom Sim Studio guide</title>
+<link rel="icon" href="../favicon.ico">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<header class="topbar"><button class="menu-btn" aria-label="Contents">☰</button><a class="logo" href="index.html">ROM SIM <b>STUDIO</b></a><span class="sp"></span><span class="links"><a href="../">Website</a> &nbsp;·&nbsp; <a href="../#start">Download</a></span></header>
+<div class="frame"><nav class="side"></nav><main>
+
+<h1>Simulator and Tuner modes</h1>
+<p class="lead">One program, two layouts. The ROM, its definitions and the datalog are the same in both: switching only changes what is on screen.</p>
+
+<h2>Simulator mode — the workbench</h2>
+<figure><img src="img/simulator.png" alt="Simulator mode"><figcaption>Simulator mode: pins and engine inputs, source and tabs, CPU and disassembly.</figcaption></figure>
+<p>For writing and changing the ROM. The source is in the middle with the tabs below it (Problems, Trace, Memory, Calibration, Lookup &amp; breakpoints, Datalog, Debug); the chip and the engine inputs are on the left; the CPU, call stack, disassembly, outputs and ports on the right. See <a href="simulator.html">the workbench</a>.</p>
+
+<h2>Tuner mode — the calibration editor</h2>
+<figure><img src="img/tuner.png" alt="Tuner mode"><figcaption>Tuner mode: the maps and settings fill the window, the datalog on the right.</figcaption></figure>
+<p>For tuning a car. The calibration editor fills the window with its Tools, Emulator and Datalogging menus on the top line, and the datalog (gauges, graph, parameters) sits on the right. The source, the disassembly and the debugger are put away, and what they held is let go so a small laptop has its memory for the datalog. See <a href="tuning.html">tables and settings</a>.</p>
+<p>In Tuner mode the program puts datalogging first: the frames are read on a thread of their own at a higher priority, and the live cell on the map is drawn from the same frame the gauges show, so the cell you are editing is the cell the engine is in.</p>
+
+<h2>Switching</h2>
+<ul>
+  <li><b>File &gt; Tuner mode</b> or <b>File &gt; Simulator mode</b>, or <kbd>Ctrl</kbd>+<kbd>T</kbd>.</li>
+  <li><b>Settings &gt; General &gt; Tuner mode</b> sets which one the program opens in.</li>
+</ul>
+
+<h2 id="romsimtuner">RomSimTuner — Tuner mode on its own</h2>
+<p><span class="path">romsimtuner.zip</span> on the website is a second program, <b>RomSimTuner</b>: what Tuner mode shows, built from the same source files, with no simulator, MCP server or plugins. It opens a .bin or a build file, finds the maps, datalogs, drives the emulator, checks the checksum and saves, like Tuner mode. It needs only the .NET 10 runtime and keeps its own settings (<span class="path">tuner-settings.json</span>; the first time it starts it takes Rom Sim Studio's). Its updates come from their own list on the website: <b>Settings &gt; Updates</b>, and a check a few seconds after it opens.</p>
+
+<h2>Touch screen mode</h2>
+<figure><img src="img/touch.png" alt="Tuner mode in touch screen mode, with a pad of big buttons beside the table"><figcaption>Touch screen mode: bigger controls, and a pad of buttons for what the keys do on a table.</figcaption></figure>
+<p>For a tablet or a touch screen beside the car: <b>Settings &gt; General &gt; Touch screen mode</b> sizes the controls for a finger across the whole program and puts a pad of big buttons beside the tables: up and down one or ten steps or by 1 % and 5 %, a keypad for a value, arrows to move and grow the selection, interpolate across or down, smooth, copy, undo and redo. Every button does exactly what its key does, so a keyboard still works too.</p>
+
+<h2>Low performance mode</h2>
+<p><b>Settings &gt; General &gt; Low performance mode</b> is for an old laptop (it is suggested on a machine with two cores or little memory). The side panels refresh less often, the drawing effects are dropped, and in Tuner mode the source text is parked out of the editor. The datalog and the live cell keep their full rate.</p>
+
+<footer>Rom Sim Studio 0.0.0.8 · by bmgjet · <a href="licence.html">Licence</a></footer>
+</main></div>
+<script src="guide.js"></script>
+</body>
+</html>

@@ -19,8 +19,8 @@
 ifdef FEAT_DLMEMREAD
 
 if XP == XP_DEFS
-DL_MSUM         EQU     00375h          ; the request's sum while it comes in (the stream's list checksum)
-DL_MADDR        EQU     00376h          ; its address (the stream's tick latch: no frame is being sent)
+DL_MSUM         EQU     DL_LOW + 1          ; the request's sum while it comes in (the stream's list checksum)
+DL_MADDR        EQU     DL_LOW + 2          ; its address (the stream's tick latch: no frame is being sent)
 endif
 
 if XP == XP_CODE

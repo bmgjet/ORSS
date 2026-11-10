@@ -1,14 +1,11 @@
 ;==================================================================================================
-; p13.asm -- fully annotated listing (labels/comments only; firmware bytes unchanged)
-;  1) manual pass (this header, and comments tagged [flow]/[info]): p13 itself was followed from the
-;     vectors through the supervisor, background tasks and map engines. Untagged/[flow] comments are
-;     verified against THIS ROM; claims taken from p13info.txt are quoted with their [info] tags and
-;     marked (p13info ...) -- two of them needed corrections (652E vs 642E; 2EAC is an immediate).
-; Assembles to the original image byte for byte.
-; Naming: this is an MSM66911. SFRs, vectors and the labels built from them use the 66911 names
-;   (OkiRomSim ProcessorProfile.Msm66911), declared as EQUs below so the bytes do not depend on the
-;   assembler's built-in SFR set. Comments tagged [H]/[CG]/[C1]/[C2]/[P30]/[P08] were carried over from
-;   66207 ROMs; where one names a 66207 register or pin (P4.1, ADCR6, SRSTAT...), the code is right.
+; p13.asm -- the stock P13 (MSM66911), every ROM address a label; assembles to the original image byte for byte.
+; The tables the code reads are annotated (;@): the app shows and edits them with their axes and scales - the maps,
+; the VE slope/offset, the fuel and timing corrections, idle, tip-in, decel, knock, the rev limit, VTEC (its points
+; are immediates in the code, annotated where they sit). Those whose role was not traced are under Internal
+; (Stock_<label>). What each was found to do, and how it was checked in the simulator: roms/p13-skeleton.md.
+; Naming: SFRs, vectors and the labels built from them use the 66911 names (ProcessorProfile.Msm66911), declared as
+;   EQUs below so the bytes do not depend on the assembler's built-in SFR set.
 ;
 ; RAM map (verified uses; raw addresses stay numeric in the code):
 ;   09Bh      output latch: bit0 MIL(CEL), bit1 shift-light-style output [p13info CEL @1A4B]
@@ -18,11 +15,27 @@
 ;   0C6h/0CAh/0CCh  interpolated scalars: 0C6 MAP column, 0CA lo-cam RPM, 0CC hi-cam RPM
 ;   0D8h      IAT scaled (fault default 086h)      [HTS115-equiv]
 ;   0D9h      ECT scaled (fault default 062h; hot flags vs 61h/65h) [p13info 0D9 ?? -> confirmed]
-;   0DBh      temperature-ish byte (MIL warm-up gate 07Dh) ; raw = 03D7h
-;   0DCh      battery voltage (raw ADCR2H copy; "ADCR6h" in 66207 naming)
+;   0DBh      battery voltage (ADCR0 mux position 7, 03D7h): the injector dead time, the dwell, the code 17/20 gates
+;   0DCh      ADCR2H copy (the idle's electrical-load compensation reads it; the simulator puts the battery there)
+;   0DDh      electrical load detector (ADCR1 mux position 0, 03D8h; 25h fixed without the ELD, 220h bit 2)
 ;   0DFh      VSS km/h                             [p13info 0DF]
 ;   0EAh/0ECh/0EDh/0EEh/0EFh  table indices: 0ED=column(MAP), 0EE=row lo-cam, 0EF=row hi-cam
-;   0E3h/0E5h/0E6h/0E8h/0E9h/0E0h  sensor deltas / defaults region
+;   0E0h      barometric pressure, smoothed from 03D3h, on the map load's scale (fault default 0F9h); stands in
+;             for the load while MAP has a fault
+;   0E3h      the fuel map's load (288h with the tip-in prediction)  0E5h/0E6h/0E8h/0E9h sensor deltas
+;   0FFh      time since start (the VTEC and other gates compare it with 32h)
+;   0288h     the map load byte: (MAP word 0A4h - 1800h) >> 7, the ignition map's load (fuel: 0E3h)
+;   0370h-037Ah  the last six CKP teeth's times (4 us); 0AEh = their sum / 4, worked out in the main loop;
+;             037Ch the reading before 0AEh
+;   0382h     the final injector pulse (4 us ticks, the dead time 0142h added); 0384h-038Ah the four cylinders'
+;   02B8h/02B9h  the final advance bytes the spark timers are built from ((x - 24) / 4 degrees)
+;   011Ah     fuel-cut flags: .0 cut, .2 overrun cut, .4 the rev limiter's
+;   0224h/0227h  the 82C55's port A (8000h ^ C2h) and the second input buffer (1000h ^ 30h): 224h.0 A/C switch
+;   0225h/0226h  copies of the 82C55's ports B (written inverted to A000h) and C (XOR 24h, C000h): B0 A/C clutch,
+;             B1 fuel pump, B2 fan, B3 alternator, B7 purge; C2 A/T, C3 the lamp, C6/C7 VTEC
+;   0214h.0   the starter signal (P4.5)  022Ch.2 power steering pressure (P4.6)
+;   03F1h-03F6h  the stock serial link's poke values, copied by the main loop to 03F9h-03FEh
+;   countdown timers (DP walks, decremented when not 0): 1A0h-1AAh, 1DCh-1FAh, 2CDh-2FFh, 3B7h-3B8h
 ;   0110h-0115h  CEL words er0-er3 (0110h.3, 0111h.7 read by rev limiter) [p13info 0110..]
 ;   016Ah     rev cut word    [p13info 016A]       016Ch rev resume word [p13info 016C]
 ;   0178h     TPS percent   0179h RPM byte         [p13info 0179]
@@ -33,54 +46,10 @@
 ;   022Eh.5   A/C request flag                     0289h RPM byte copy (VTEC pts 8Dh/93h) [p13info 0289]
 ;   02D0h     rev-limit hot/cold recheck timer
 ;   03A0h-03DFh raw ADC result area (03D0 O2, 03D2 IAT, 03D3 baro, 03D7 sens, 03DA ECT [p13info])
-; ROM map / tweak points (see [info] block comments at the addresses):
+; ROM map (the annotations at each address give the detail):
 ;   0C1E/0C23 rev-limit boot defaults (immediates @0C21 FAh resume, @0C26 F4h cut) [p13info]
-;  [info/p13info+verified] checksum watchdog. The loop at 0D06 adds ROM words (X1) into 00000h[X2],
-;    result stored via 0D12, pass counter 03A6h counts 0200h sweeps; after the last pass this
-;    reads LCB A,07FF1h. 0x7FF1 is BEYOND the programmed ROM (image ends 07FF0) so it reads 0.
-;    p13info patch: replace bytes 909DF17F (@0D22) with 03360D00 (= J 0D36 + NOP) to skip the
-;    flag test entirely and disable checksum enforcement. Same 0x7FF0/7FF1/7FF2 'factory/debug'
-;    flags' are read at 0F6F/0F76/0A1D/1918/1962/19E7/19F5/1A32... (all read 0 on a stock EPROM).
-;   0D22  checksum flag read LCB A,07FF1h; p13info patch 909DF17F -> 03360D00 disables checksum
-;  [flow] rev-limit source select. 0218h.5 mirrors (0D9h ECT >= 61h/65h) hot/cold. Two limit-word
-;    pairs feed the engage code at 2E7A: pair @5403/5407 (012Ah/0120h, selected when 0212h.5 set)
-;    and pair @540B/540F (00FAh/00F4h, the default; also the boot immediates). Words go through
-;    add24_clamp_neg1 (CAL 4983), results land in 016Ch (resume) and 016Ah (cut) as 16-bit words.
-;    p13info names these low-cam(5403/5407) / high-cam(540B/540F); 02D0h is a 1Eh-tick recheck timer.
-;   1520  rev-limit pair select (ECT hot/cold + 0212h.5); p13info '2-step @157D' = the store path
-;  [flow] MIL / shift-light condition mixers (p13info 'CEL stuff @1A4B' -> this block).
-;    Output-latch byte 09Bh: bit0 and bit1 are written from combinations of fault flag bits
-;    (0216h.1, 0213h.0/.1, 02Fh.3/.4), A/C input 0224h.3, all gated by 0DBh < 07Dh (warm-up inhibit).
-;    09Bh.2 is written by the ign code (280C) and consumed at 7023.
-;   1A3F  MIL/shift-light mixers (p13info 'CEL @1A4B')    1B4D A/C cut (p13info 'AC @1B4D')
-;  [flow] MAP sensor limit check (p13info 'Map sensor check @1F57'). 0A4h is the MAP ADC word;
-;    SWAP takes the HIGH byte: > A1h sets 098h.0 (boost-range/high-pressure side -> boost-code hook),
-;    < 0Bh = below atmospheric (vacuum side). 0ABh raw TPS is scaled to TPS% via the 2-word scale
-;    pair tbl_tps_5736 (VCAL 2) -> 0178h. 0E5h/0E6h latch TPS-delta limits; 370h..37Ch[USP] summed
-;    at 1FAD is the injector-duty/pulse accumulator.
-;   1F57  MAP boost-range check (p13info 'boost @1F57')   2EA9 speed limiter (immediate @2EAC=FFh off)
-;   5403/5407, 540B/540F  rev-limit word pairs           5441h knock handler pointer words
-;  [info] ===== calibration map area (ROM) =====  (p13info ROM list, checked against the code)
-;    6000  tbl_rpm_scalar_lo40   40 x 16b  low-cam RPM/rev scalar row (p13info 'Low Cam Rev Scalar')
-;    6028  tbl_rpm_scalar_hi40   40 x 16b  high-cam row; scalar -> 0CCh, row index -> 0EFh
-;    6050  tbl_map_axis_mbar10   10 x  8b  MAP column axis raw-ADC scale (p13info 6050 mBar) -> 0EDh
-;    605A/6082  40 x 16b each    low/high cam fuel row multipliers (p13info 605A/6082, 'multiplier?')
-;    60AA  tbl_fuel_lo_cam       200 B     low-cam fuel map 10 col x 20 row -> base fuel 0193h
-;    6172  tbl_fuel_hi_cam       200 B     high-cam fuel map
-;    623A/62A8  110 B each       80h-based correction maps (p13info 'extra tables', real dips to 77h)
-;    6316/6384  110 B each       all-80h correction maps (disabled, p13info 'all 80s')
-;    63F8  tbl_ign_lo_cam        200 B     low-cam ignition map  (p13info 63F8)
-;    64C0/652E  100 B each       alt low-cam ign tables (p13info said 64C0 & 642E -- 652E in code)
-;    659C  tbl_ign_hi_cam        200 B     high-cam ignition map (p13info 659C)
-;    6664/66D2  100 B each       alt high-cam ign tables (p13info 6664 & 66D2)
-;    681C/688A  all-00 tables    disabled correction maps (p13info 'all 00s')
-;    6911  2-word (voltage, value) pairs used as injector pw-vs-battery lookup at 2C44
-;    6923/6937  all-FF tables    used as pass-through correction when 011Ch.4/.5 flags set
-;    69C6  VTEC duty table  6A46/6A9F knock retard  6AB7 knock handler pointers (== 5441 words)
-;    6A77/6A8B  20 B each        80h-based per-cam correction applied to base fuel
-;    ====================================================================
-;   6000..6B00 calibration maps -- see the [info] table at 6000
-;   7FF0h-7FF3h factory/debug flags past the image end (read 0; p13info 'debug @7FF1')
+;   0D06  the ROM checksum sweep (0200h passes, counter 03A6h); 0D22 reads 07FF1h - past the image, 0 on a stock
+;         EPROM - so the check is enforced; the factory/debug bytes 07FF0h-07FF2h read 0 the same way
 ; Datalogging: serial interrupt Int12, vector 0020h -> int_serial (0043h); STBUF=07Ch, SRBUF=07Dh,
 ;   SRSTAT=07Eh. The background task chain is entered at 00DBh from the same handler.
 ;==================================================================================================
@@ -190,15 +159,6 @@ code_start:     DB  004h,03Ch,05Ch,000h
 int_NMI_set_sbycon_bit0:     SB      SBYCON.0
                 NOP
                 J       int_start
-;  [flow] int_serial: the serial interrupt (Int12, vector 0020h; RX and TX share it - the 66207 name
-;    "int_a2d_finished" this listing used to carry is that slot on the other part). It is also the
-;    main background-task kick-off.
-;    bit 0a0h.7 selects the path: path A (004B, LRB->088) is the small result-collector: it hands the
-;    just-converted ACCH channel to the table at 03F0h[X1] and pushes the byte result into STBUF 07Ch
-;    (SRBUF is 07Dh, both at 004B path; p13info datalogging note confirmed against this code).
-;    path B (00DB, LRB->3B0) runs the background task chain that contains all fuel/ignition math
-;    (LRB 100/200/280/3B0 contexts below are all these tasks).
-;    Boot normally ends up jumping into this chain via 0040.
 int_serial: MB      C, 0a0h.7
                 JGE     int_serial_load_ie
                 J       int_serial_load_ie_2
@@ -400,7 +360,7 @@ int_crank_task_load_ram0bc:     MOVB    0bch, #000h
                 ADDB    A, #006h
                 CMPB    A, #018h
                 JLT     crank_tooth_count_store
-                LB      A, #003h  ; [HTS120] >= 24) ACCL = 3
+                LB      A, #003h
 crank_tooth_count_store:     STB     A, off(0013ch)
                 RB      P3.3
                 CAL     crank_tooth_count_store_sub_clear_ram0a0_bit6
@@ -972,12 +932,8 @@ crank_cycle_er2_store_load_ram11a:     L       A, off(0011ah)
                 RB      PSWH.0
                 ST      A, IE
                 RTI
-; [flow] int_spurious_irq_trap: every interrupt vector this ROM never enables points here. It stamps
-;    trap reason 047h in 0D4h and goes through fault_retry_check (retry budget, then BRK -> int_break).
 int_spurious_irq_trap:  MOVB    0d4h, #047h
                 SJ      fault_retry_check
-;  [flow] int_WDT: watchdog vector. Stamps 0D4h=48h then fault_retry_check: 0D6h counts retries,
-;    exhausted -> latch 09Eh.0 and BRK (full re-init through int_break). Same framework as HTS115.
 int_WDT:        MOVB    0d4h, #048h
 fault_retry_check:     LB      A, 0d6h
                 JEQ     fault_retry_check_set_ram09e_bit0
@@ -988,9 +944,6 @@ fault_retry_check_nop_acc:     NOP
                 NOP
                 NOP
                 BRK
-;  [flow] int_NMI: latch-and-standby. Tests 09Fh.7 edge bit, optional DP snapshot, then reprograms
-;    the port/timer/ADC control registers, runs the STPACP unlock sequence (5, then 10) and sets
-;    SBYCON to enter STOP/HALT. Reached from int_break when P4.4 reads low.
 int_NMI:        MOV     LRB, #00041h
                 RB      09fh.7
                 JEQ     int_NMI_load_carry_pwm1con_bit4
@@ -1007,15 +960,10 @@ int_NMI_load_carry_pwm1con_bit4:     MB      C, PWM1CON.4
                 SLLB    A
                 STB     A, STPACP
                 J       int_NMI_set_sbycon_bit0
-;  [flow] int_start: reset vector. Clears the fault flags 09Eh.0/.5 and 0D4h, then BRK to enter the
-;    supervisor at int_break -- all real init runs from there.
 int_start:      RB      09eh.0
                 RB      09eh.5
 int_start_clear_ram0d4:     CLRB    0d4h
                 BRK
-;  [flow] int_break: supervisor/re-init. USP supervisor stack=047Fh; P4.4 low -> NMI standby;
-;    otherwise dispatches on the 0D4h reason byte (63h->49h 'retry' path via fault_retry_check) and
-;    otherwise runs the full boot/init below (LRB->088, ADC config, default RAM image from 0B9B on).
 int_break:      MOV     SSP, #0047fh
                 MB      C, PWM1CON.4
                 JGE     int_NMI
@@ -1312,7 +1260,7 @@ int_break_clear_acc_3:     CLR     A
                 JGE     int_break_cmp_acc
                 CMP     A, #00094h
                 JEQ     int_break_set_ieh_bit4
-int_break_cmp_acc:     CMP     A, #00043h
+int_break_cmp_acc:     CMP     A, #int_serial      ; (the stock serial handler: the vector must still point at it)
                 JEQ     int_break_set_ieh_bit4
                 MOVB    0d4h, #052h
                 J       fault_retry_check_nop_acc
@@ -1424,7 +1372,7 @@ int_break_load_imm:     L       A, #0ffffh
                 ST      A, (00304h-00380h)[USP]
                 ST      A, (00308h-00380h)[USP]
                 ST      A, (0030ch-00380h)[USP]
-                LC      A, 0555ah
+                LC      A, rom_555a
                 ST      A, (0030eh-00380h)[USP]
                 SB      off(0022ah).7
                 MOVB    (0032fh-00380h)[USP], #078h
@@ -1497,10 +1445,6 @@ clamp_result_store:     STB     A, 0e8h
                 NOP
                 NOP
                 NOP
-;  [flow] init defaults (runs from the int_break boot path). Note the rev-limit defaults:
-;    0C1E: resume-word 016Ch = 00FAh   (p13info: 'High Cam Rev Limit Reset' patched as immediate @0C21)
-;    0C23: cut-word   016Ah = 00F4h     (p13info: 'High Cam Rev Limit Set'   patched as immediate @0C26)
-;    0C2B: RPM word 0ACh = FFFFh = 'no speed sensor yet'. The same FA/F4 pair lives @540B/540F.
 clamp_result_store_load_ram2e2:     MOVB    off(002e2h), #032h
                 MOVB    off(0028ch), #078h
                 MOVB    off(0028bh), #053h
@@ -2095,7 +2039,7 @@ warmcold_tm2_check_if_ram220_bit0_clr:     JBR     off(00220h).0, warmcold_tm2_c
                 RB      off(0022ah).7
                 JEQ     warmcold_tm2_check_load_adcr5h
                 CLR     A
-                LC      A, 05558h
+                LC      A, rom_5558
                 MOV     DP, #0030eh
                 ST      A, [DP]
 warmcold_tm2_check_load_adcr5h:     LB      A, ADCR5H
@@ -2112,7 +2056,7 @@ warmcold_tm2_check_store_carry_ram22f_bit3:     MB      off(0022fh).3, C
 warmcold_tm2_check_store_carry_ram22f_bit4:     MB      off(0022fh).4, C
                 JBS     off(00215h).0, warmcold_tm2_check_if_ram221_bit0_clr
                 L       A, 0aeh
-                CMPC    A, 01123h
+                CMPC    A, warmcold_tm2_check_load_imm+1
                 NOP
                 JGE     warmcold_tm2_check_load_imm_2
                 JBS     off(0022fh).3, warmcold_tm2_check_load_imm_2
@@ -2243,12 +2187,12 @@ ect_fault_delta_check_load_r1:     LB      A, r1
                 STB     A, [DP]
 ect_simulate_ramp_load_ram2de:     MOVB    off(002deh), #005h
 ect_simulate_ramp_load_ram0d9_2:     LB      A, 0d9h
-                MOV     X1, #05086h
-                MOV     X2, #05094h
+                MOV     X1, #rom_5086
+                MOV     X2, #rom_5094
                 CMPB    A, #028h
                 JLT     ect_simulate_ramp_store_carry_ram230_bit6
-                MOV     X1, #050a2h
-                MOV     X2, #050b0h
+                MOV     X1, #rom_50a2
+                MOV     X2, #rom_50b0
 ect_simulate_ramp_store_carry_ram230_bit6:     MB      off(00230h).6, C
                 VCAL    0
                 STB     A, r3
@@ -2258,7 +2202,7 @@ ect_simulate_ramp_store_carry_ram230_bit6:     MB      off(00230h).6, C
                 STB     A, r2
                 MOV     off(00278h), er1
                 LB      A, 0d9h
-                MOV     X1, #05072h
+                MOV     X1, #rom_5072
                 VCAL    0
                 STB     A, off(002b1h)
                 JBR     off(0021fh).0, overrev_hardcap_compare_load_ram2ce
@@ -2297,41 +2241,41 @@ overrev_hardcap_compare_load_r0:     LB      A, r0
 overrev_hardcap_compare_vcal_4:     VCAL    4
                 LB      A, 0d9h
                 STB     A, r2
-                MOV     X1, #051c1h
+                MOV     X1, #rom_51c1
                 VCAL    0
                 STB     A, (0017ah-00180h)[USP]
                 LB      A, r2
-                MOV     X1, #051cfh
+                MOV     X1, #rom_51cf
                 VCAL    0
                 STB     A, (0017bh-00180h)[USP]
                 LB      A, r2
-                MOV     X1, #051ddh
+                MOV     X1, #rom_51dd
                 VCAL    0
                 STB     A, (0017ch-00180h)[USP]
                 LB      A, r2
-                MOV     X1, #051ebh
+                MOV     X1, #rom_51eb
                 VCAL    0
                 STB     A, (0017dh-00180h)[USP]
                 LB      A, r2
-                MOV     X1, #051f9h
+                MOV     X1, #rom_51f9
                 VCAL    0
                 STB     A, (0017eh-00180h)[USP]
                 VCAL    4
                 LB      A, 0d9h
                 STB     A, r2
-                MOV     X1, #05207h
+                MOV     X1, #rom_5207
                 VCAL    0
                 STB     A, (0017fh-00180h)[USP]
                 LB      A, r2
-                MOV     X1, #0534ah
+                MOV     X1, #rom_534a
                 VCAL    0
                 STB     A, (00185h-00180h)[USP]
                 LB      A, r2
-                MOV     X1, #05356h
+                MOV     X1, #rom_5356
                 VCAL    0
                 STB     A, (00187h-00180h)[USP]
                 LB      A, r2
-                MOV     X1, #05364h
+                MOV     X1, #rom_5364
                 VCAL    0
                 STB     A, (00188h-00180h)[USP]
                 LB      A, r2
@@ -2372,7 +2316,7 @@ overrev_hardcap_compare_clear_pswh_bit0:     RB      PSWH.0
                 MB      C, off(00238h).2
 dtc23_knock_latch:     MB      09ah.2, C
                 LB      A, 0d9h
-                MOV     X1, #0528bh
+                MOV     X1, #rom_528b
                 CMPCB   A, 00002h[X1]
                 MB      off(00218h).7, C
                 VCAL    0
@@ -2384,16 +2328,16 @@ overrev_hardcap_compare_load_x1:     MOV     X1, #overrev_hardcap_compare_tbl_3
                 LB      A, 0d9h
                 VCAL    1
                 STB     A, (001b0h-00180h)[USP]
-                MOV     X1, #0545fh
+                MOV     X1, #rom_545f
                 JBR     off(00220h).0, overrev_hardcap_compare_load_ram0d9
-                MOV     X1, #0547ah
+                MOV     X1, #rom_547a
 overrev_hardcap_compare_load_ram0d9:     LB      A, 0d9h
                 VCAL    1
                 STB     A, off(00260h)
                 VCAL    4
-                MOV     X1, #054cbh
+                MOV     X1, #rom_54cb
                 JBR     off(00220h).0, overrev_hardcap_compare_load_ram0d9_2
-                MOV     X1, #054e6h
+                MOV     X1, #rom_54e6
 overrev_hardcap_compare_load_ram0d9_2:     LB      A, 0d9h
                 VCAL    1
                 STB     A, off(00262h)
@@ -2403,7 +2347,7 @@ overrev_hardcap_compare_load_ram0d9_2:     LB      A, 0d9h
 overrev_hardcap_compare_load_ram0d9_3:     LB      A, 0d9h
                 VCAL    1
                 STB     A, off(00264h)
-                MOV     X1, #055dah
+                MOV     X1, #rom_55da
                 LB      A, 0d9h
                 VCAL    1
                 STB     A, off(0023eh)
@@ -2431,10 +2375,10 @@ overrev_hardcap_compare_cmp_ram0d8:     CMPB    0d8h, #030h
                 RB      off(00216h).2
                 SJ      overrev_hardcap_compare_load_x1_2
 overrev_hardcap_compare_set_ram216_bit2:     SB      off(00216h).2
-overrev_hardcap_compare_load_x1_2:     MOV     X1, #05532h
+overrev_hardcap_compare_load_x1_2:     MOV     X1, #rom_5532
                 JBR     off(00216h).2, overrev_hardcap_compare_load_ram0d9_4
                 JBR     off(00220h).2, overrev_hardcap_compare_cmp_ram0d9
-                CMPB    0d9h, #036h
+code_1458:      CMPB    0d9h, #036h
                 JGE     overrev_hardcap_compare_cmp_ram0d9
                 LB      A, #070h
                 JBS     off(00239h).4, overrev_hardcap_compare_cmp_ram0dd
@@ -2447,7 +2391,7 @@ overrev_hardcap_compare_cmp_ram0d9:     CMPB    0d9h, #02eh
                 L       A, #00a77h
                 JBR     off(00220h).0, overrev_hardcap_compare_clear_er3
                 JBS     off(00224h).5, overrev_hardcap_compare_clear_er3
-overrev_hardcap_compare_load_x1_3:     MOV     X1, #0551dh
+overrev_hardcap_compare_load_x1_3:     MOV     X1, #rom_551d
 overrev_hardcap_compare_load_ram0d9_4:     LB      A, 0d9h
                 VCAL    1
 overrev_hardcap_compare_clear_er3:     CLR     er3
@@ -2456,9 +2400,9 @@ overrev_hardcap_compare_load_imm:     L       A, #00945h
                 MOV     er3, #00200h
 overrev_hardcap_compare_store_ram286:     ST      A, off(00286h)
                 MOV     off(0026ah), er3
-                MOV     X1, #0550fh
+                MOV     X1, #rom_550f
                 JBR     off(00216h).2, overrev_hardcap_compare_load_ram0d9_5
-                MOV     X1, #05501h
+                MOV     X1, #rom_5501
 overrev_hardcap_compare_load_ram0d9_5:     LB      A, 0d9h
                 VCAL    0
                 STB     A, off(00295h)
@@ -2477,32 +2421,32 @@ overrev_hardcap_compare_load_ram0d9_5:     LB      A, 0d9h
                 SJ      overrev_hardcap_compare_store_ram266
 overrev_hardcap_compare_clear_acc:     CLR     A
 overrev_hardcap_compare_store_ram266:     ST      A, off(00266h)
-                MOV     X1, #05495h
+                MOV     X1, #rom_5495
                 JBR     off(00220h).0, vemapscalar_gate
-                MOV     X1, #054b0h
+                MOV     X1, #rom_54b0
 vemapscalar_gate:     LB      A, 0d9h
                 VCAL    1
                 STB     A, off(00268h)
                 VCAL    4
                 MOV     DP, #0030eh
                 L       A, [DP]
-                CMPC    A, 05554h
+                CMPC    A, rom_5554
                 JLT     vemapscalar_gate_rom_load_ram555a
-                CMPC    A, 05556h
+                CMPC    A, rom_5556
                 JLE     vemapscalar_gate_store_dp_ind
-vemapscalar_gate_rom_load_ram555a:     LC      A, 0555ah
+vemapscalar_gate_rom_load_ram555a:     LC      A, rom_555a
                 JBR     off(00220h).0, vemapscalar_gate_store_dp_ind
-                LC      A, 05558h
+                LC      A, rom_5558
 vemapscalar_gate_store_dp_ind:     ST      A, [DP]
-                MOV     X1, #05397h
+                MOV     X1, #rom_5397
                 JBR     off(00220h).0, vemapscalar_gate_load_ram0d9
-                MOV     X1, #053a5h
+                MOV     X1, #rom_53a5
 vemapscalar_gate_load_ram0d9:     LB      A, 0d9h
                 VCAL    0
                 STB     A, r2
-                MOV     X1, #053b3h
+                MOV     X1, #rom_53b3
                 JBR     off(00220h).0, vemapscalar_gate_load_ram0d9_2
-                MOV     X1, #053c1h
+                MOV     X1, #rom_53c1
 vemapscalar_gate_load_ram0d9_2:     LB      A, 0d9h
                 VCAL    0
                 STB     A, ACCH
@@ -2527,11 +2471,11 @@ vemapscalar_gate_cmp_ram0d9:     CMPB    0d9h, A
                 LB      A, off(002d0h)
                 JNE     vemapscalar_gate_load_stk
                 L       A, (0016ch-00180h)[USP]
-                MOV     X1, #0540bh
-                MOV     X2, #0540fh
+                MOV     X1, #revlimit_p2_reset_540b
+                MOV     X2, #revlimit_p2_set_540f
                 J       vemapscalar_gate_if_ram212_bit5_set
-vemapscalar_gate_load_x1:     MOV     X1, #05403h
-                MOV     X2, #05407h
+vemapscalar_gate_load_x1:     MOV     X1, #revlimit_p1_reset_5403
+                MOV     X2, #revlimit_p1_set_5407
 vemapscalar_gate_call_add24_clamp_neg1:     CAL     add24_clamp_neg1
                 MOV     DP, A
                 L       A, (0016ah-00180h)[USP]
@@ -2539,17 +2483,17 @@ vemapscalar_gate_call_add24_clamp_neg1:     CAL     add24_clamp_neg1
                 CAL     add24_clamp_neg1
                 SJ      vemapscalar_gate_clear_pswh_bit0
 vemapscalar_gate_clear_acc:     CLR     A
-                LC      A, 05403h
+                LC      A, revlimit_p1_reset_5403
                 MOV     DP, A
-                LC      A, 05407h
+                LC      A, revlimit_p1_set_5407
                 SJ      vemapscalar_gate_clear_pswh_bit0
 vemapscalar_gate_load_ram2d0:     MOVB    off(002d0h), #01eh
 vemapscalar_gate_load_stk:     L       A, (0016ch-00180h)[USP]
-                MOV     X1, #0540bh
-                MOV     X2, #0540fh
+                MOV     X1, #revlimit_p2_reset_540b
+                MOV     X2, #revlimit_p2_set_540f
                 J       vemapscalar_gate_if_ram212_bit5_set_2
-vemapscalar_gate_load_x1_2:     MOV     X1, #05403h
-                MOV     X2, #05407h
+vemapscalar_gate_load_x1_2:     MOV     X1, #revlimit_p1_reset_5403
+                MOV     X2, #revlimit_p1_set_5407
 vemapscalar_gate_call_4977:     CAL     vemapscalar_gate_sub_sub_acc
                 MOV     DP, A
                 L       A, (0016ah-00180h)[USP]
@@ -2579,22 +2523,22 @@ sensor_bank_bc_alt:     CLR     A
 dcode14_return:     RC
 dtc13_baro_latch:     MB      099h.2, C
                 LB      A, 0e0h
-                MOV     X1, #052e3h
+                MOV     X1, #rom_52e3
                 VCAL    0
                 STB     A, (00189h-00180h)[USP]
                 LB      A, 0e0h
-                MOV     X1, #05346h
+                MOV     X1, #rom_5346
                 VCAL    2
                 STB     A, (00186h-00180h)[USP]
                 LB      A, 0e0h
-                MOV     X1, #05287h
+                MOV     X1, #rom_5287
                 VCAL    2
                 STB     A, (0019ah-00180h)[USP]
                 MOV     X1, #dcode14_check_tbl
                 LB      A, 0e0h
                 VCAL    2
                 STB     A, off(00299h)
-                MOV     X1, #053ffh
+                MOV     X1, #rom_53ff
                 LB      A, 0e0h
                 VCAL    2
                 STB     A, (00197h-00180h)[USP]
@@ -2617,7 +2561,7 @@ dtc10_iat_latch:     MB      098h.6, C
                 CMPB    A, #028h
                 MB      off(00223h).2, C
                 LB      A, 0d8h
-                MOV     X1, #05215h
+                MOV     X1, #rom_5215
                 VCAL    1
                 STB     A, (00152h-00180h)[USP]
                 LB      A, #000h
@@ -2640,7 +2584,7 @@ sensor_bank_gate3_store_ram280:     ST      A, off(00280h)
                 MOV     X1, #sensor_bank_gate3_tbl_4
                 VCAL    2
                 STB     A, off(002cbh)
-                MOV     X1, #055c1h
+                MOV     X1, #rom_55c1
                 LB      A, 0d8h
                 VCAL    1
                 STB     A, off(00242h)
@@ -2669,14 +2613,14 @@ dtc17_vss_latch:     MB      099h.4, C
 sensor_bank_gate3_load_r2:     LB      A, r2
                 CLR     X1
                 MOV     DP, #00004h
-sensor_bank_gate3_cmp_acc_2:     CMPCB   A, 0545bh[X1]
+sensor_bank_gate3_cmp_acc_2:     CMPCB   A, rom_545b[X1]
                 JLT     sensor_bank_gate3_load_dp
                 INC     X1
                 JRNZ    DP, sensor_bank_gate3_cmp_acc_2
 sensor_bank_gate3_load_dp:     L       A, DP
                 LB      A, ACC
 sensor_bank_gate3_store_ram2a4:     STB     A, off(002a4h)
-                LCB     A, 05176h[ACC]
+                LCB     A, rom_5176[ACC]
                 STB     A, off(002a5h)
                 JBS     off(0021bh).7, sensor_bank_gate3_clear_carry
                 JBS     off(00210h).3, sensor_bank_gate3_clear_carry
@@ -2708,11 +2652,11 @@ fueltbl_sanitize_advance:     ADD     DP, #00004h
                 CMP     DP, #00310h
                 JLT     fueltbl_sanitize_check
                 VCAL    4
-                MOV     X1, #0523fh
+                MOV     X1, #rom_523f
                 LB      A, 0dfh
                 CMPB    A, #00fh
                 JLT     fueltbl_sanitize_advance_load_ram0d8
-                MOV     X1, #05243h
+                MOV     X1, #rom_5243
 fueltbl_sanitize_advance_load_ram0d8:     LB      A, 0d8h
                 VCAL    2
                 CMPB    0d9h, A
@@ -2781,7 +2725,10 @@ vss_ect_gate_load_ram2d6:     MOVB    off(002d6h), r1
                 MOVB    off(002d7h), r2
                 J       vss_ect_gate_if_ram218_bit0_clr
 vss_ect_gate_goto_711d:     J       vss_ect_gate_load_stk
-                DB  044h,0BCh,0CDh,03Fh,0C6h,070h,05Dh,0CFh
+;@ Stock_rom_17a8 type=u16 count=2 formula=raw category="Internal" desc="Stock data, 5 bytes, read by the code at vss_ect_gate_load_stk; its role not traced."
+rom_17a8:       DB  044h,0BCh,0CDh,03Fh,0C6h ; 17A8
+;@ Stock_rom_17ad type=u16 count=2 formula=raw category="Internal" desc="Stock data, 4 bytes, read by the code at vss_ect_gate_load_stk; its role not traced."
+rom_17ad:       DB  070h,05Dh,0CFh ; 17AD
                 DB  03Ah
 vss_ect_gate_load_r3:     LB      A, r3
                 CMPB    A, 0dah
@@ -2901,11 +2848,11 @@ dcode_threshold_check_store_carry_ram218_bit3:     MB      off(00218h).3, C
                 LB      A, [DP]
                 STB     A, 0dbh
                 LB      A, 0dbh
-                MOV     X1, #0502ch
+                MOV     X1, #rom_502c
                 VCAL    0
                 STB     A, off(002a8h)
                 LB      A, 0dbh
-                MOV     X1, #052fbh
+                MOV     X1, #rom_52fb
                 VCAL    1
                 STB     A, (00142h-00180h)[USP]
                 LB      A, #09ah
@@ -2981,7 +2928,7 @@ knock_div_calc2:     MOVB    r0, #009h
 knock_div_calc2_addb_acc:     ADDB    A, #006h
 knock_div_calc1_sllb_acc:     SLLB    A
                 EXTND
-                LC      A, 05413h[ACC]
+                LC      A, rom_5413[ACC]
                 SJ      knock_div_calc1_store_stk
 div_scale_mul_final_call_4a84:     CAL     div_scale_mul_final_sub_subb_acc
                 ADDB    A, #080h
@@ -2991,11 +2938,6 @@ knock_div_calc1_store_stk:     ST      A, (00162h-00180h)[USP]
                 MOVB    off(002b3h), r2
                 VCAL    4
                 CLRB    A
-;  [flow] knock module: per-cylinder handler select. Index from knock counter r2 (DIV by 09h etc.)
-;    picks a word from handler-pointer tables @0542Bh or @05443h (alternate set when 0220h.0; the
-;    same pointer list is mirrored @6AB7h) and a retard value from @6A9Fh (0FFh = channel disabled).
-;    Handler words point into the code at 5441+...; results land on the frame at 0166h/0164h[USP].
-;    07FF0h/07FF1h debug-flag reads gate the retard application (always 0 = enabled normally).
                 MOV     DP, #003ddh
                 LCB     A, 07ff0h
                 SRLB    A
@@ -3045,10 +2987,10 @@ knock_div_calc4:     MOVB    r0, #009h
 knock_div_calc4_addb_acc:     ADDB    A, #006h
                 SLLB    A
                 EXTND
-                MOV     X1, #0542bh
+                MOV     X1, #rom_542b
                 MOV     X2, #tbl_knock_retard_6a9f
                 JBS     off(00220h).0, knock_div_calc4_if_ram21f_bit3_clr
-                MOV     X1, #05443h
+                MOV     X1, #rom_5443
                 MOV     X2, #tbl_knock_ptr_6ab7
 knock_div_calc4_if_ram21f_bit3_clr:     JBR     off(0021fh).3, knock_div_calc4_load_x2
                 MOV     X1, X2
@@ -3217,9 +3159,6 @@ accut_check_c3_clear_ram2f8:     CLRB    off(002f8h)
                 SJ      accut_check_c3_clear_ram22e_bit5
 accut_check_c3_load_ram2da:     LB      A, off(002dah)
                 JNE     accut_check_c3_clear_ram2f8
-;  [flow] A/C cut decision (p13info 'AC stuff @1B4D'). Reads A/C switch input 0224h.0 (ACS pin B5:
-;    grounded -> bit set). While the switch is NOT active it clears the A/C-request flag 022Eh.5;
-;    the compressor relay/flag path continues via 022Eh.5 elsewhere (idle-up at 3C25 etc.).
 accut_check_c3_if_ram224_bit0_clr:     JBR     off(00224h).0, accut_check_c3_clear_ram22e_bit5
                 SB      off(0022eh).5
                 LB      A, off(002f7h)
@@ -3522,7 +3461,7 @@ dtc_active_confirm_rom_load_tbl_577f_acc:     LCB     A, dtc_active_confirm_tbl[
                 CAL     dtc_active_confirm_sub_clear_acc
                 CAL     dtc_active_confirm_sub_load_dp
                 CAL     cfgvariant_checksum_calc
-                STB     A, [DP]
+                ST      A, [DP]                ; (a word: the sum and the xor, 362h-363h)
                 RB      off(00233h).0
                 RB      off(00233h).1
 dtc_active_confirm_set_pswh_bit0:     SB      PSWH.0
@@ -3815,7 +3754,7 @@ rpm_decel_limit_check_store_stk:     STB     A, (00179h-00180h)[USP]
                 JBS     off(00210h).6, rpm_decel_limit_check_load_ram2a6
                 JBS     off(00211h).4, rpm_decel_limit_check_load_ram2a6
                 JBS     off(0021dh).2, rpm_decel_limit_check_load_ram2a6
-                MOV     X1, #050f0h
+                MOV     X1, #rom_50f0
                 VCAL    0
                 JBR     off(00231h).5, rpm_decel_limit_check_cmp_acc_3
                 SUBB    A, #002h
@@ -3868,7 +3807,9 @@ rpm_decel_limit_check_store_carry_ram223_bit3:     MB      off(00223h).3, C
                 LB      A, (001b4h-00180h)[USP]
                 JNE     rpm_decel_limit_check_store_carry_ram223_bit5
                 J       rpm_decel_limit_check_if_ram230_bit1_set
-                DB  077h,0F4h,0C7h,0BAh
+                DB  077h ; 20D8
+;@ Stock_rom_20d9 type=u8 count=3 formula=raw category="Internal" desc="Stock data, 3 bytes, read by the code at rpm_decel_limit_check_if_ram230_bit1_set; its role not traced."
+rom_20d9:       DB  0F4h,0C7h,0BAh ; 20D9
 rpm_decel_limit_check_store_carry_ram223_bit5:     MB      off(00223h).5, C
                 MB      C, off(0021ah).0
                 MB      off(00223h).4, C
@@ -3965,8 +3906,8 @@ tps_window_store2:     MB      off(00217h).0, C
                 JBS     off(00210h).4, tps_interp_exact_match
                 MOVB    r4, #0ffh
                 LB      A, 0e1h
-                MOV     DP, #051ach
-                MOV     X1, #051b3h
+                MOV     DP, #rom_51ac
+                MOV     X1, #rom_51b3
                 JBS     off(00217h).0, tps_table_lookup
                 INC     DP
                 INC     X1
@@ -3989,7 +3930,7 @@ tps_interp_exact_match:     LB      A, r1
                 SJ      tps_interp_exact_match_store_ram0e3
 tps_interp_clamp_check:     LB      A, ACCH
                 CMPB    A, r0
-                JGE     tps_interp_clamp_check_clear_acc  ; [HTS120] c8)
+                JGE     tps_interp_clamp_check_clear_acc
                 STB     A, r0
 tps_interp_clamp_check_clear_acc:     CLR     A
                 LC      A, [DP]
@@ -4017,10 +3958,6 @@ tps_interp_clamp_check_if_lt_goto_2202:     JLT     tps_interp_clamp_check_clear
 tps_interp_clamp_check_clear_acc_2:     CLRB    A
                 JBR     off(00219h).2, tps_interp_exact_match_store_ram0e3
 tps_interp_clamp_check_load_r4:     LB      A, r4
-;  [flow] map-index prep (top of the main fuel/ign task). Interpolates the 10-entry MAP axis
-;    tbl_map_axis_mbar10 (@6050: 00,30,50,70,90,B0,D0,E0,F0,FF raw-ADC mBar scale) against 0A4h
-;    -> column index 0EDh + column scalar 0C6h (fraction bits latched into 022Bh).
-;    2215: RPM word 0AEh minus 0286h calibration with hysteresis -> 0B4h (open-loop-ish flag word).
 tps_interp_exact_match_store_ram0e3:     STB     A, 0e3h
                 STB     A, r0
                 MOVB    r6, 0edh
@@ -4039,11 +3976,6 @@ tps_interp_exact_match_store_ram0b4:     ST      A, 0b4h
                 LB      A, #093h
 tps_interp_exact_match_cmp_acc:     CMPB    A, off(00289h)
                 MB      off(00234h).0, C
-;  [flow] RPM-row scalars per cam profile: interpolate tbl_rpm_scalar_lo40 (@6000, 40 x 16-bit
-;    descending words) with row index 0EEh -> scalar 0CAh; tbl_rpm_scalar_hi40 (@6028) with 0EFh
-;    -> 0CCh. Fraction bits go to 022Bh.1/.0 (lo) and 022Bh.5/.4 (hi). 0289h (8-bit RPM) is compared
-;    with 8Dh/93h to hold the scalar when RPM sits in the VTEC cross-over band. These scalars are
-;    the second lookup axis (X1) of the maps below, i.e. the p13info 'low/high cam rev scalar' 6000/6028
                 MOV     DP, #tbl_rpm_scalar_lo40
                 MOVB    r6, 0eeh
                 CAL     tps_interp_exact_match_sub_rom_load_00026h_dp
@@ -4084,7 +4016,7 @@ tps_interp_exact_match_load_er1:     MOV     er1, off(0028eh)
                 LB      A, off(00288h)
                 JBR     off(00229h).6, tps_interp_exact_match_if_ram229_bit7_clr
                 JBS     off(00229h).7, tps_interp_exact_match_load_r2
-                MOV     X1, #05372h
+                MOV     X1, #rom_5372
                 VCAL    2
                 STB     A, r2
 tps_interp_exact_match_load_r2:     LB      A, r2
@@ -4094,7 +4026,7 @@ tps_interp_exact_match_load_r2:     LB      A, r2
 tps_interp_exact_match_set_ram218_bit4:     SB      off(00218h).4
                 SJ      tps_interp_exact_match_load_ram28e
 tps_interp_exact_match_if_ram229_bit7_clr:     JBR     off(00229h).7, tps_interp_exact_match_load_r3
-                MOV     X1, #05376h
+                MOV     X1, #rom_5376
                 VCAL    2
                 STB     A, r3
 tps_interp_exact_match_load_r3:     LB      A, r3
@@ -4107,14 +4039,6 @@ tps_interp_exact_match_load_ram28e:     MOV     off(0028eh), er1
                 JLT     tps_interp_exact_match_load_r0
                 J       tps_interp_exact_match_load_ie
                 DB  000h,000h,000h
-;  [flow] ignition base advance lookup: profile chosen by VTEC/high-cam flag 021Dh.1
-;    (p13info '021D.1 VTEC Active' -- verified: it selects lo-cam vs hi-cam in every map here).
-;    lo-cam:  tbl_ign_lo_cam (@63F8, 10x20) ; rows 4..0Dh can switch to alt tables
-;             tbl_ign_lo_cam_alt1 (@64C0) / tbl_ign_lo_cam_alt2 (@652E, when 0220h.0 clear)
-;    hi-cam:  tbl_ign_hi_cam (@659C) / tbl_ign_hi_cam_alt1 (@6664) / tbl_ign_hi_cam_alt2 (@66D2).
-;    Index: A = row 0EEh(lo)/0EFh(hi), X1 = scalar 0CAh/0CCh (from 6000/6028 above) via CAL 4523.
-;    tbl_aux_63f2 supplies the row-independent advance used at low RPM (VTEC off branch, 22CD).
-;    NOTE p13info lists the 2nd alt lo-cam table at 642E -- the code actually uses 652E.
 tps_interp_exact_match_load_r0:     MOVB    r0, off(0022bh)
                 LB      A, #03ch
                 JBS     off(0021dh).1, tps_interp_exact_match_andb_acc
@@ -4201,9 +4125,9 @@ tps_interp_exact_match_load_ram2aa:     MOVB    off(002aah), r0
                 JGE     idleign_result_store
                 JBS     off(00224h).2, idleign_result_store
                 L       A, 0b4h
-                MOV     X1, #050c8h
+                MOV     X1, #rom_50c8
                 JBS     off(00216h).7, idleign_table_lookup
-                MOV     X1, #050dch
+                MOV     X1, #rom_50dc
 idleign_table_lookup:     CAL     idleign_table_lookup_sub_load_acc
                 LB      A, ACC
                 MOVB    r0, #015h
@@ -4224,7 +4148,7 @@ idleign_result_store_cmp_ram0af:     CMPB    0afh, A
 idleign_result_store_cmp_acc:     CMPB    A, off(00289h)
                 MB      off(00231h).0, C
                 CLRB    A
-                MOV     X1, #05082h
+                MOV     X1, #rom_5082
                 JBS     off(00230h).6, knockretard_table_gate
                 INC     X1
                 MB      C, off(00230h).7
@@ -4238,7 +4162,7 @@ knockretard_table_gate:     JGE     knockretard_store
 knockretard_store:     STB     A, off(002b2h)
                 J       knockretard_store_if_ram21d_bit2_clr
 knockretard_store_load_ram289:     LB      A, off(00289h)
-                MOV     X1, #050beh
+                MOV     X1, #rom_50be
                 VCAL    0
                 CMPB    A, 0e7h
                 JLT     knockretard_store_goto_4f3e
@@ -4283,7 +4207,7 @@ knockretard_store_clear_acc:     CLR     A
                 LB      A, off(002b1h)
                 MOV     er3, A
                 LB      A, off(00288h)
-                MOV     X1, #0507eh
+                MOV     X1, #rom_507e
                 CAL     knockretard_table_gate_sub_load_acc
                 STB     A, r6
                 LB      A, off(002b0h)
@@ -4306,11 +4230,11 @@ knockretard_store_call_4f90:     CAL     knockretard_store_sub_vcal_7
                 JNE     knockretard_store_if_ram21d_bit5_clr
                 JBS     off(0021ch).7, knockretard_store_load_ram2ab
 knockretard_store_if_ram21d_bit5_clr:     JBR     off(0021dh).5, knockretard_store_load_ram2ab
-                MOV     DP, #0517bh
+                MOV     DP, #rom_517b
                 MOV     X1, 0cch
                 LB      A, 0efh
                 JBS     off(0021dh).1, knockretard_store_call_4523
-                MOV     DP, #0518fh
+                MOV     DP, #rom_518f
                 MOV     X1, 0cah
                 LB      A, 0eeh
 knockretard_store_call_4523:     CAL     scale_result_common_sub_extnd_acc
@@ -4352,7 +4276,7 @@ knockretard_store_store_ram2ab:     STB     A, off(002abh)
                 SJ      knockretard_store_if_ram230_bit0_set
 knockretard_store_goto_253c:     J       knockretard_store_clear_ram230_bit0
 knockretard_store_if_ram230_bit0_set:     JBS     off(00230h).0, knockretard_store_if_ram219_bit4_set
-                MOV     X1, #0515ah
+                MOV     X1, #rom_515a
                 LB      A, off(00289h)
                 VCAL    0
                 CMPB    A, 0e7h
@@ -4366,7 +4290,7 @@ knockretard_store_if_ram230_bit0_set:     JBS     off(00230h).0, knockretard_sto
 knockretard_store_if_ram219_bit4_set:     JBS     off(00219h).4, knockretard_store_load_x1
                 CMP     0b0h, #0ffffh
                 JGE     tipin_decay_zero
-knockretard_store_load_x1:     MOV     X1, #05168h
+knockretard_store_load_x1:     MOV     X1, #rom_5168
                 LB      A, off(00289h)
                 VCAL    0
                 MOVB    r0, off(002a5h)
@@ -4520,7 +4444,7 @@ scale_result_common_call_4523:     CAL     scale_result_common_sub_extnd_acc
 scale_result_common_vcal_7:     VCAL    7
 scale_result_common_store_ram2b4:     STB     A, off(002b4h)
 scale_result_common_load_ram289:     LB      A, off(00289h)
-                MOV     X1, #05046h
+                MOV     X1, #rom_5046
                 VCAL    0
                 STB     A, off(002b7h)
                 LB      A, #0ffh
@@ -4529,7 +4453,7 @@ scale_result_common_load_ram289:     LB      A, off(00289h)
 scale_result_common_cmp_acc:     CMPB    A, off(00289h)
                 MB      off(00232h).1, C
                 LB      A, off(00289h)
-                MOV     X1, #05000h
+                MOV     X1, #rom_5000
                 VCAL    0
                 STB     A, off(002a7h)
                 STB     A, r0
@@ -4562,11 +4486,11 @@ scale_result_common_store_ram2c7:     STB     A, off(002c7h)
                 LB      A, #0d0h
 scale_result_common_cmp_acc_2:     CMPB    A, off(002a9h)
                 MB      off(00231h).2, C
-                MOV     DP, #0511eh
+                MOV     DP, #rom_511e
                 MOV     X1, 0cch
                 LB      A, 0efh
                 JBS     off(0021dh).1, scale_result_common_if_ram231_bit2_set
-                MOV     DP, #05146h
+                MOV     DP, #rom_5146
                 MOV     X1, 0cah
                 LB      A, 0eeh
 scale_result_common_if_ram231_bit2_set:     JBS     off(00231h).2, scale_result_common_call_4523_2
@@ -4866,9 +4790,6 @@ vtec_state_active_check_store_ram1b4:     STB     A, off(001b4h)
                 CLRB    off(001b2h)
 vtec_state_store_goto_6e00:     J       vtec_state_store_set_carry
                 DW  00000h
-;  [flow] VTEC state machine + duty value: 011Dh.0/.1 = engaged/active latches, 01B4h = requested
-;    state (0/1/2 set here), 01B6h = dwell/confirm countdown, 01AEh = soliton duty value taken from
-;    tbl_cfg_69c6 (@69C6) when 01B6h <= 8. r1=2 means 'active'.
 vtec_state_store_load_x1:     MOV     X1, 0cch
                 JBS     off(0011dh).1, vtec_state_store_call_4523
                 LB      A, 0eeh
@@ -4885,10 +4806,6 @@ vtec_state_store_store_ram135:     STB     A, off(00135h)
                 LB      A, #0cdh
 vtec_state_store_cmp_acc:     CMPB    A, off(00179h)
                 MB      off(0012eh).7, C
-;  [flow] fuel row multiplier per cam state: interpolate tbl_fuel_row_mult_lo40 (@605A, 40 x 16-bit,
-;    ~0776h.. values) / tbl_fuel_row_mult_hi40 (@6082) at row 0EEh/0EFh, scalar X1=0CAh/0CCh.
-;    (p13info 'scalar? or multiplier? 16bit' at 605A/6082 -- it is the row-multiplier row feeding the
-;    fuel calc; result kept in r0/0E9h area and used with the map value below.)
                 MOV     DP, #tbl_fuel_row_mult_hi40
                 MOV     X1, 0cch
                 LB      A, 0efh
@@ -4967,7 +4884,7 @@ tipin_gate_common_store_ram146:     STB     A, off(00146h)
                 MB      off(0012dh).5, C
                 JBS     off(00116h).1, Cranking
                 J       tipin_gate_common_clear_ram09f_bit1
-Cranking:     MOV     X1, #0537ah
+Cranking:     MOV     X1, #rom_537a
                 LB      A, 0d9h
                 VCAL    1
                 STB     A, off(0013eh)
@@ -4976,7 +4893,7 @@ Cranking:     MOV     X1, #0537ah
                 CAL     idleign_table_lookup_sub_load_acc
                 LB      A, r6
                 STB     A, off(00180h)
-                MOV     X1, #05393h
+                MOV     X1, #rom_5393
                 LB      A, 0e0h
                 VCAL    2
                 STB     A, off(00183h)
@@ -5047,7 +4964,7 @@ postfuel_calc_start:     SB      off(0011dh).4
                 LB      A, 0d9h
                 CMPB    A, #0c8h
                 MB      PSWL.5, C
-                MOV     X1, #0522ah
+                MOV     X1, #rom_522a
                 VCAL    1
                 STB     A, off(00158h)
                 CLRB    off(00157h)
@@ -5173,7 +5090,7 @@ tipin_gate_common_cmp_acc_3:     CMPB    A, 0d9h
                 LB      A, off(00179h)
                 CMPB    A, #040h
                 MB      off(00130h).7, C
-                MOV     X1, #05267h
+                MOV     X1, #rom_5267
                 VCAL    0
                 JBS     off(00130h).7, tipin_gate_common_store_r2
                 JBS     off(00130h).5, tipin_gate_common_subb_acc
@@ -5192,7 +5109,7 @@ tipin_gate_common_if_ram11f_bit5_clr:     JBR     off(0011fh).5, tipin_gate_comm
                 JBS     off(00115h).6, tipin_gate_common_load_imm_2
                 JBR     off(00130h).6, tipin_gate_common_load_imm_2
                 LB      A, off(00179h)
-                MOV     X1, #05277h
+                MOV     X1, #rom_5277
                 VCAL    0
                 SUBB    A, off(0019ah)
                 JGE     tipin_gate_common_load_ram1b7
@@ -5300,12 +5217,6 @@ tipin_gate_common_clear_ram1d8:     CLRB    off(001d8h)
 tipin_gate_common_store_carry_ram11c_bit7:     MB      off(0011ch).7, C
                 LB      A, #080h
                 JBS     off(00118h).4, tipin_gate_common_store_ram193
-;  [flow] main fuel map lookup: profile by 021Dh.1 -> tbl_fuel_hi_cam (@6172) or tbl_fuel_lo_cam
-;    (@60AA) [p13info 'Low/High Cam Fuel Table' confirmed @60AA/6172]. Index: row = 0EEh/0EFh,
-;    X1 = scalar 0CAh/0CCh, column r1 = 0EDh with fraction scalar X2 = 0C6h, CAL 4545 interpolates,
-;    result = base fuel byte -> 0193h. Below: 2D17+ applies a correction map (tbl_corr_map_lo/hi
-;    6A77/6A8B or the all-FF tables 6923/6937), multipliers 0199h/02BAh, final base pulse -> 0183h
-;    clamped by tbl_inj_pw_volt_6911 (voltage vs pw 2-word pairs @6911, p13info did not cover it).
                 LB      A, 0efh
                 MOV     X1, 0cch
                 MOV     DP, #tbl_fuel_hi_cam
@@ -5364,8 +5275,6 @@ tipin_gate_common_cmp_acc_7:     CMPB    A, #007h
                 JGE     tipin_gate_common_load_ram0ef_2
                 RB      off(00131h).1
                 SJ      tipin_gate_common_rom_load_tbl_6921
-;  [flow] 80h-based correction map lookup (tbl_corr_map_lo_6a77 / tbl_corr_map_hi_6a8b by cam row),
-;    same row/scalar index; result scales the 0193h base fuel by x/80h.
 tipin_gate_common_load_ram0ef_2:     LB      A, 0efh
                 MOV     DP, #tbl_corr_map_hi_6a8b
                 MOV     X1, 0cch
@@ -5414,13 +5323,13 @@ tipin_gate_common_if_ram124_bit5_set:     JBS     off(00124h).5, tipin_gate_comm
                 SJ      tipin_gate_common_if_ram11d_bit1_set_2
 tipin_gate_common_set_ram12d_bit7:     SB      off(0012dh).7
 tipin_gate_common_if_ram11d_bit1_set_2:     JBS     off(0011dh).1, tipin_gate_common_load_x1_3
-                MOV     X1, #053cfh
+                MOV     X1, #rom_53cf
                 JBR     off(0011ah).0, tipin_gate_common_load_ram179
-                MOV     X1, #053e7h
+                MOV     X1, #rom_53e7
                 SJ      tipin_gate_common_load_ram179
-tipin_gate_common_load_x1_3:     MOV     X1, #053dbh
+tipin_gate_common_load_x1_3:     MOV     X1, #rom_53db
                 JBR     off(0011ah).0, tipin_gate_common_load_ram179
-                MOV     X1, #053f3h
+                MOV     X1, #rom_53f3
 tipin_gate_common_load_ram179:     LB      A, off(00179h)
                 VCAL    0
                 SUBB    A, off(00197h)
@@ -5472,13 +5381,6 @@ vaccut_rpm_check:     LB      A, #080h
 vaccut_rpm_check_cmp_acc:     CMPB    A, off(00179h)
                 JGE     ofc_enable_check_if_ram130_bit0_set
                 SJ      revlimiter_fuelcut_set
-;  [flow] rev/speed limiter engage+resume. 0AEh = RPM word (p13info '0AEh 16-bit RPM' verified:
-;    compared against the limiter words and reset to FFFFh at boot/loss-of-signal).
-;    2E81: cut  = (RPM word > 016Ah); 2E95: resume above 0238h/0217h words when flag 011Ah.4 picks
-;    the resume word 016Ch. 2E86/2E89 also consult CEL words 0110h.3 / 0111h.7 (p13info CEL words).
-;    2EA9: SPEED limiter: CMPB 0DFh(VSS km/h), #0FFh -- the immediate at 2EAC is the p13info
-;    'Speed Limiter 0-255, FF disables' byte; 0FFh = no speed (km/h) realistically reaches it.
-;    01E3h/01E4h latch which limiter is waiting to be cleared; actual cut = PSWL.5 (fuel-cut strobe).
 revlimiter_engage_resume_check_load_ram16c:     L       A, off(0016ch)
                 JBS     off(0011ah).4, revlimiter_engage_resume_check_cmp_acc
                 L       A, off(0016ah)
@@ -5570,11 +5472,11 @@ fuelcuttrack_store_if_ram116_bit5_clr:     JBR     off(00116h).5, postig_result_
                 JBR     off(00117h).4, fuelcuttrack_store_load_imm
                 RB      off(00128h).3
                 SJ      postig_result_default
-fuelcuttrack_store_load_imm:     L       A, #052b3h
-                MOV     X1, #052c1h
+fuelcuttrack_store_load_imm:     L       A, #rom_52b3
+                MOV     X1, #rom_52c1
                 JBS     off(00120h).0, fuelcuttrack_store_if_ram11c_bit0_set
-                L       A, #05297h
-                MOV     X1, #052a5h
+                L       A, #rom_5297
+                MOV     X1, #rom_52a5
 fuelcuttrack_store_if_ram11c_bit0_set:     JBS     off(0011ch).0, fuelcuttrack_store_load_ram0d9
                 MOV     X1, A
 fuelcuttrack_store_load_ram0d9:     LB      A, 0d9h
@@ -5613,14 +5515,14 @@ to_set_pswl4_flag_b:     SB      PSWL.5
 to_set_pswl4_flag_b_set_ram11c_bit0:     SB      off(0011ch).0
                 SJ      to_set_pswl4_flag_b_store_ram18a
 postig_result_default:     LB      A, #080h
-                MOV     X1, #053dbh
+                MOV     X1, #rom_53db
                 JBS     off(0011dh).1, ignmap2_table_select
-                MOV     X1, #053cfh
+                MOV     X1, #rom_53cf
 ignmap2_table_select:     JBR     off(0011ch).0, ignmap2_rpm_gate
                 LB      A, #074h
-                MOV     X1, #053f3h
+                MOV     X1, #rom_53f3
                 JBS     off(0011dh).1, ignmap2_rpm_gate
-                MOV     X1, #053e7h
+                MOV     X1, #rom_53e7
 ignmap2_rpm_gate:     CMPB    A, off(00179h)
                 JGE     ignmap2_result_check_clear_acc
                 LB      A, off(00179h)
@@ -5728,7 +5630,7 @@ o2_trim_dp_table_read_store_ram160:     ST      A, off(00160h)
                 LB      A, #040h
                 JBS     off(0011ch).2, o2_trim_dp_table_read_store_ram180
                 JBS     off(0011ch).0, o2_trim_dp_table_read_store_ram180
-                MOV     X1, #051b9h
+                MOV     X1, #rom_51b9
                 MOV     X2, #0017ah
                 JBR     off(0011bh).0, o2_trim_dp_table_read_if_ram120_bit0_set
                 ADD     X1, #00004h
@@ -5744,7 +5646,7 @@ o2_trim_dp_table_read_load_tbl_x2:     LB      A, 00000h[X2]
                 CAL     knockretard_table_gate_sub_load_acc
 o2_trim_dp_table_read_store_ram180:     STB     A, off(00180h)
                 LB      A, off(00178h)
-                MOV     X1, #052efh
+                MOV     X1, #rom_52ef
                 VCAL    0
                 MOVB    ACCH, #002h
                 MOVB    r0, off(00189h)
@@ -6057,7 +5959,7 @@ injtimer_bank_a_calc:     ST      A, er2
                 MOV     DP, #00382h
                 MOV     er0, [DP]
                 ST      A, [DP]
-                MOV     X1, #052dfh
+                MOV     X1, #rom_52df
 cylinder_ign_correct_loop:     INC     DP
                 INC     DP
                 L       A, er2
@@ -6164,7 +6066,7 @@ o2_trim_step_start_cmp_acc_2:     CMPB    A, 0e2h
                 INC     DP
                 JBS     off(00132h).4, o2_trim_step_start_rom_load_051a3h_dp
                 INC     DP
-o2_trim_step_start_rom_load_051a3h_dp:     LCB     A, 051a3h[DP]
+o2_trim_step_start_rom_load_051a3h_dp:     LCB     A, rom_51a3[DP]
 o2_trim_step_start_store_r6:     STB     A, r6
                 CLR     er0
                 MOV     DP, #00382h
@@ -6281,18 +6183,30 @@ injector_effective_pw_skip_store_carry_ram01f_bit4:     MB      P4SF.4, C
                 MB      off(0012dh).0, C
                 MB      C, off(00115h).3
                 MB      off(0012dh).1, C
+;@ VTECSpeedOff type=u8 formula=raw unit=km/h category="VTEC" desc="Stock VTEC: once in, it holds above this road speed. (an immediate in the code.)" at=vtec_speed_off+1
+vtec_speed_off:
                 LB      A, #019h
                 JBS     off(0012eh).4, injector_effective_pw_skip_cmp_acc_5
+;@ VTECSpeedOn type=u8 formula=raw unit=km/h category="VTEC" desc="Stock VTEC: it engages only above this road speed. (an immediate in the code.)" at=vtec_speed_on+1
+vtec_speed_on:
                 LB      A, #01eh
 injector_effective_pw_skip_cmp_acc_5:     CMPB    A, 0dfh
                 MB      off(0012eh).4, C
+;@ VTECStockLoadOff type=u8 formula=p13_rpm8 slot=vtec.stock.load.off category="VTEC" desc="Stock VTEC: once in on load, it drops out below this rpm. (an immediate in the code.)" at=vtec_load_off+1
+vtec_load_off:
                 LB      A, #0cch
                 JBS     off(0012eh).5, injector_effective_pw_skip_cmp_acc_6
+;@ VTECStockLoadOn type=u8 formula=p13_rpm8 slot=vtec.stock.load.on category="VTEC" desc="Stock VTEC: above this rpm it engages when the load is over the stock load curve (VTECLoad). (an immediate in the code.)" at=vtec_load_on+1
+vtec_load_on:
                 LB      A, #0cfh
 injector_effective_pw_skip_cmp_acc_6:     CMPB    A, off(00179h)
                 MB      off(0012eh).5, C
+;@ VTECStockAnyOff type=u8 formula=p13_rpm8 slot=vtec.stock.any.off category="VTEC" desc="Stock VTEC: once in whatever the load, it holds above this rpm. (an immediate in the code.)" at=vtec_any_off+1
+vtec_any_off:
                 LB      A, #0e3h
                 JBS     off(0012eh).6, injector_effective_pw_skip_cmp_acc_7
+;@ VTECStockAnyOn type=u8 formula=p13_rpm8 slot=vtec.stock.any.on category="VTEC" desc="Stock VTEC: above this rpm it engages whatever the load. (an immediate in the code.)" at=vtec_any_on+1
+vtec_any_on:
                 LB      A, #0e5h
 injector_effective_pw_skip_cmp_acc_7:     CMPB    A, off(00179h)
                 MB      off(0012eh).6, C
@@ -6552,11 +6466,11 @@ vss_clamp_common_if_ram229_bit2_clr:     JBR     off(00229h).2, vss_clamp_common
 vss_clamp_common_if_ram229_bit0_clr:     JBR     off(00229h).0, vss_clamp_common_load_ram2ba_2
                 JBR     off(00229h).4, vss_clamp_common_load_ram2fb_2
                 LB      A, 0dfh
-                MOV     X1, #050fah
+                MOV     X1, #rom_50fa
                 VCAL    0
                 STB     A, off(002bah)
                 LB      A, 0dfh
-                MOV     X1, #05102h
+                MOV     X1, #rom_5102
                 VCAL    0
                 STB     A, off(002bch)
                 SJ      vss_clamp_common_clear_ram226_bit2_2
@@ -6779,7 +6693,7 @@ transit_flag_common_store_carry_ram233_bit7:     MB      off(00233h).7, C
 transit_flag_common_set_dp_ind:     SB      [DP].0
                 JNE     transit_flag_common_goto_6ed7
 transit_flag_common_call_4afe:     CAL     cfgvariant_checksum_loop_load_dp
-                STB     A, [DP]
+                ST      A, [DP]                ; (a word: the sum and the xor, 362h-363h)
 transit_flag_common_goto_6ed7:     J       transit_flag_common_clear_ram232_bit6
 idle_init_start_load_dp_2:     MOV     DP, #0c000h
                 RB      PSWH.0
@@ -6933,7 +6847,7 @@ idle_temp_hyst3_load_adcr2h:     LB      A, ADCR2H
                 LB      A, #0f0h
 idle_temp_hyst3_cmp_acc:     CMPB    A, 0dch
                 MB      off(0022fh).1, C
-                MOV     X1, #055a5h
+                MOV     X1, #rom_55a5
                 LB      A, off(00289h)
                 VCAL    0
                 MOVB    r0, 0dch
@@ -6945,10 +6859,10 @@ idle_temp_hyst3_cmp_acc:     CMPB    A, 0dch
                 LB      A, ACCH
                 JGE     idle_temp_hyst3_load_x1
 idle_temp_hyst3_load_imm:     LB      A, #0ffh
-idle_temp_hyst3_load_x1:     MOV     X1, #055afh
+idle_temp_hyst3_load_x1:     MOV     X1, #rom_55af
                 VCAL    1
                 MOV     X2, A
-                MOV     X1, #0559bh
+                MOV     X1, #rom_559b
                 LB      A, off(00289h)
                 VCAL    0
                 STB     A, ACCH
@@ -7026,7 +6940,7 @@ idle_temp_hyst3_store_ram284:     ST      A, off(00284h)
                 CAL     vcal_4_load_dp
 idle_temp_hyst3_if_ram22e_bit5_clr:     JBR     off(0022eh).5, idle_temp_hyst3_load_ram248
                 MOV     off(00246h), #00380h
-                MOV     X1, #055d0h
+                MOV     X1, #rom_55d0
                 LB      A, off(00289h)
                 VCAL    0
                 L       A, ACC
@@ -7078,7 +6992,7 @@ idle_temp_hyst3_set_pswh_bit0:     SB      PSWH.0
 idle_temp_hyst3_set_pswl_bit5:     SB      PSWL.5
 idle_temp_hyst3_cmp_ram0d9:     CMPB    0d9h, #038h
                 JGE     idle_temp_hyst3_load_ram23e
-                MOV     X1, #055f5h
+                MOV     X1, #rom_55f5
                 L       A, off(00286h)
                 CAL     idleign_table_lookup_sub_load_acc
                 CMP     A, off(0023eh)
@@ -7102,11 +7016,14 @@ idle_temp_hyst3_if_ram22c_bit4_clr:     JBR     off(0022ch).4, idle_temp_hyst3_i
                 CMPB    off(00296h), #000h
                 JEQ     idle_temp_hyst3_store_ram24a
                 J       idle_temp_hyst3_decb_ram296
-                DB  067h,000h,004h,0CBh,00Bh
+                DB  067h ; 3D2A
+;@ Stock_rom_3d2b type=u16 count=2 formula=raw category="Internal" desc="Stock data, 4 bytes, read by the code at idle_temp_hyst3_decb_ram296; its role not traced."
+rom_3d2b:       DB  000h,004h,0CBh,00Bh ; 3D2B
 idle_temp_hyst3_if_ram22c_bit2_set:     JBS     off(0022ch).2, idle_temp_hyst3_clear_acc_3
                 SB      off(0022ch).4
 idle_temp_hyst3_goto_4f70:     J       idle_temp_hyst3_load_imm_4
-                DB  004h
+;@ Stock_rom_3d38 type=u8 count=1 formula=raw category="Internal" desc="Stock data, 1 bytes, read by the code at idle_temp_hyst3_load_imm_4; its role not traced."
+rom_3d38:       DB  004h
 idle_temp_hyst3_clear_acc_3:     CLR     A
 idle_temp_hyst3_store_ram24a:     ST      A, off(0024ah)
                 LB      A, #0d0h
@@ -7207,7 +7124,7 @@ idle_temp_hyst3_load_ram210:     L       A, off(00210h)
 idle_temp_hyst3_call_4a61:     CAL     idle_temp_hyst3_sub_load_dp
 idle_temp_hyst3_if_ram216_bit4_set:     JBS     off(00216h).4, idle_temp_hyst3_clear_ram216_bit6
                 CLR     off(0025ch)
-                MOV     X1, #0555ch
+                MOV     X1, #rom_555c
                 LB      A, 0d9h
                 VCAL    0
                 CMPB    A, off(00289h)
@@ -7218,17 +7135,17 @@ idle_temp_hyst3_if_ram216_bit4_set:     JBS     off(00216h).4, idle_temp_hyst3_c
                 JGE     idle_temp_hyst3_load_ram2f6
                 L       A, 0b2h
                 MOV     DP, A
-                MOV     X1, #0556ah
+                MOV     X1, #rom_556a
                 LB      A, 0d9h
                 VCAL    1
                 ; warning: had to flip DD
                 CMP     A, DP
                 JGT     idle_temp_hyst3_clear_ram2f6
-                MOV     X1, #0557fh
+                MOV     X1, #rom_557f
                 LB      A, 0d9h
                 VCAL    0
                 STB     A, off(002f6h)
-                MOV     X1, #0558dh
+                MOV     X1, #rom_558d
                 LB      A, 0d9h
                 VCAL    0
                 CLR     er0
@@ -7329,7 +7246,7 @@ idle_temp_hyst3_if_ram220_bit0_clr_2:     JBR     off(00220h).0, idle_temp_hyst3
                 JBS     off(00224h).5, idle_temp_hyst3_load_ram260
                 JBR     off(0022dh).6, idle_temp_hyst3_load_ram260
                 CLR     A
-                LC      A, 05558h
+                LC      A, rom_5558
                 ADD     A, off(00260h)
                 SJ      idle_temp_hyst3_store_ram254
 idle_temp_hyst3_load_ram260:     L       A, off(00260h)
@@ -7345,11 +7262,11 @@ idle_temp_hyst3_load_imm_3:     LB      A, #043h
                 JBS     off(00216h).6, idle_temp_hyst3_if_ram216_bit5_clr
                 STB     A, off(00297h)
                 JBS     off(00216h).7, idle_temp_hyst3_load_x1_3
-idle_temp_hyst3_load_x1_2:     MOV     X1, #05550h
+idle_temp_hyst3_load_x1_2:     MOV     X1, #rom_5550
                 SJ      idle_temp_hyst3_clear_pswh_bit0
 idle_temp_hyst3_if_ram216_bit5_clr:     JBR     off(00216h).5, idle_temp_hyst3_if_ram216_bit2_set_2
                 STB     A, off(00297h)
-idle_temp_hyst3_load_x1_3:     MOV     X1, #0554dh
+idle_temp_hyst3_load_x1_3:     MOV     X1, #rom_554d
                 SJ      idle_temp_hyst3_clear_pswh_bit0
 idle_temp_hyst3_if_ram216_bit2_set_2:     JBS     off(00216h).2, idle_temp_hyst3_load_ram0d9
                 CMPB    0ffh, #096h
@@ -7368,10 +7285,10 @@ idle_temp_hyst3_load_ram297:     LB      A, off(00297h)
                 SJ      idle_temp_hyst3_load_x1_3
 idle_temp_hyst3_load_r2_2:     LB      A, r2
                 STB     A, off(00297h)
-idle_temp_hyst3_load_x1_4:     MOV     X1, #05547h
+idle_temp_hyst3_load_x1_4:     MOV     X1, #rom_5547
                 SJ      idle_temp_hyst3_clear_pswh_bit0
 idle_temp_hyst3_if_ram216_bit7_clr:     JBR     off(00216h).7, idle_temp_hyst3_load_x1_2
-                MOV     X1, #0554ah
+                MOV     X1, #rom_554a
 idle_temp_hyst3_clear_pswh_bit0:     RB      PSWH.0
                 MOV     er0, 0b4h
                 MB      C, off(00216h).7
@@ -7533,7 +7450,7 @@ idle_temp_hyst3_mul_acc_3:     MUL
 idle_temp_hyst3_sub_er2:     SUB     er2, A
                 L       A, er3
                 SBC     A, er1
-idle_temp_hyst3_load_dp_2:     MOV     DP, #05554h
+idle_temp_hyst3_load_dp_2:     MOV     DP, #rom_5554
                 CMPC    A, [DP]
                 JLT     idle_temp_hyst3_rom_load_dp_ind
                 INC     DP
@@ -7560,9 +7477,9 @@ idle_temp_hyst3_clear_er3:     CLR     er3
 idle_temp_hyst3_load_er3_6:     MOV     er3, off(0025ah)
 idle_temp_hyst3_load_ram260_2:     L       A, off(00260h)
                 CAL     tipin_time_finalize_sub_load_acc
-idle_temp_hyst3_rom_load_ram5558:     LC      A, 05558h
+idle_temp_hyst3_rom_load_ram5558:     LC      A, rom_5558
                 JBS     off(00220h).0, idle_temp_hyst3_clear_ram09e_bit3_3
-                LC      A, 0555ah
+                LC      A, rom_555a
 idle_temp_hyst3_clear_ram09e_bit3_3:     RB      09eh.3
                 JEQ     idle_temp_hyst3_call_44b5
                 PUSHS   A
@@ -7682,7 +7599,7 @@ percyl_counter_dp_select:     MOV     DP, #00333h
                 JBS     off(002c1h).3, percyl_counter_increment
                 DEC     DP
 percyl_counter_increment:     INCB    off(002c1h)
-                TRB     [DP]  ; [H] ;mnemonic was "TBR" (letter transposition); confirmed as TRB against HondaTuningSuiteRom120.asm, same opcode C213
+                TRB     [DP]
                 JNE     percyl_wrap_check1
                 LB      A, off(002c1h)
                 ANDB    A, #007h
@@ -7855,11 +7772,6 @@ learn_table2_check_sub_cmp_acc:     CMP     A, 00004h[X1]
 learn_table2_check_sub_return:     RT
 vcal_0:         LB      A, ACC
 vcal_0_cmp_acc:     CMPCB   A, 00002h[X1]
-; [H] --- Generic 1D linear-interpolation table lookup, used 50 times throughout the file (flex
-; [H] fuel, boost/wastegate control, GIO trims, ignition/O2 corrections, etc). Given a table
-; [H] pointer in X1 (entries are (X,Y) byte pairs) and an input value in A, walks the table to
-; [H] find the bracketing X segment, then linearly interpolates the corresponding Y. This is the
-; [H] same routine flex-fuel notes describe as "the shared interpolation helper".
                 JGE     table_interp_bracket_found
                 INC     X1
                 INC     X1
@@ -7953,7 +7865,7 @@ table_interp_lookup_4byte:     CMPC    A, 00004h[X1]
 table_interp_4byte_bracket:     ST      A, er0
                 LC      A, 00004h[X1]
                 ST      A, er2
-                SUB     er0, A  ; [HTS120] - the value you found in the label_4999 loop
+                SUB     er0, A
                 LC      A, [X1]
                 SUB     A, er2
                 ST      A, er2
@@ -8127,30 +8039,107 @@ dtc_active_confirm_sub_clear_acc:     CLR     A
                 LC      A, [ACC]
                 CLR     er0
                 J       [ACC]
-                DB  0C5h,0DAh,0C0h,01Ah,0CAh,001h,0A8h,003h
-                DB  041h,046h,062h,0E4h,003h,0F2h,053h,0CDh
-                DB  001h,0A8h,003h,041h,046h,027h,0C0h,021h
-                DB  0C9h,001h,0A8h,003h,041h,046h,062h,0DAh
-                DB  003h,0F2h,053h,0CDh,001h,0A8h,003h,041h
-                DB  046h,062h,0E5h,003h,0F2h,053h,0CDh,001h
-                DB  0A8h,0CBh,07Ah,07Fh,0C6h,022h,0C9h,006h
-                DB  0A8h,0C6h,02Ah,0C9h,001h,0A8h,0CBh,06Dh
-                DB  027h,0C0h,023h,0C9h,001h,0A8h,0CBh,065h
-                DB  062h,0D2h,003h,0F2h,053h,0CDh,001h,0A8h
-                DB  0CBh,05Bh,027h,0C0h,00Ah,0CEh,004h,098h
-                DB  002h,0CBh,009h,062h,0E1h,003h,0C2h,0C0h
-                DB  080h,0CAh,001h,0A8h,0CBh,047h,062h,0D3h
-                DB  003h,0F2h,053h,0CDh,001h,0A8h,0CBh,03Dh
-                DB  062h,0D8h,003h,0F2h,053h,0CDh,001h,0A8h
-                DB  0CBh,033h,0FAh,0CBh,031h,077h,023h,0CBh
-                DB  02Dh,062h,0E3h,003h,0F2h,053h,0CDh,001h
-                DB  0A8h,077h,024h,0CBh,021h,077h,029h,0CBh
-                DB  01Dh,0B3h,0E0h,0C0h,000h,080h,0CAh,001h
-                DB  0A8h,077h,02Bh,0CBh,011h,027h,0C0h,015h
-                DB  0CEh,001h,0A8h,0CBh,008h,027h,0C0h,016h
-                DB  0CEh,001h,0A8h,0CBh,000h,07Eh,089h,0F8h
-                DB  063h,050h,078h,0CDh,002h,086h,004h,0C0h
-                DB  048h,003h,011h,001h
+dtc_step_4594:  CMPB 0DAh, #01Ah
+                JLT dtc_step_459B
+                INCB r0
+dtc_step_459B:  J dtc_step_4641
+dtc_step_459E:  MOV DP, #003E4h
+                LB A, [DP]
+                SLLB A
+                JGE dtc_step_45A6
+                INCB r0
+dtc_step_45A6:  J dtc_step_4641
+dtc_step_45A9:  CMPB r7, #021h
+                JEQ dtc_step_45AF
+                INCB r0
+dtc_step_45AF:  J dtc_step_4641
+dtc_step_45B2:  MOV DP, #003DAh
+                LB A, [DP]
+                SLLB A
+                JGE dtc_step_45BA
+                INCB r0
+dtc_step_45BA:  J dtc_step_4641
+dtc_step_45BD:  MOV DP, #crank_sync_exit_jump_store_carry_ram12e_bit3
+                LB A, [DP]
+                SLLB A
+                JGE dtc_step_45C5
+                INCB r0
+dtc_step_45C5:  SJ dtc_step_4641
+dtc_step_45C7:  LB A, r7
+                CMPB A, #022h
+                JEQ dtc_step_45D2
+                INCB r0
+                CMPB A, #02Ah
+                JEQ dtc_step_45D2
+                INCB r0
+dtc_step_45D2:  SJ dtc_step_4641
+dtc_step_45D4:  CMPB r7, #023h
+                JEQ dtc_step_45DA
+                INCB r0
+dtc_step_45DA:  SJ dtc_step_4641
+dtc_step_45DC:  MOV DP, #003D2h
+                LB A, [DP]
+                SLLB A
+                JGE dtc_step_45E4
+                INCB r0
+dtc_step_45E4:  SJ dtc_step_4641
+dtc_step_45E6:  CMPB r7, #00Ah
+                JNE dtc_step_45EF
+                MOVB r0, #002h
+                SJ dtc_step_45F8
+dtc_step_45EF:  MOV DP, #003E1h
+                CMPB [DP], #080h
+                JLT dtc_step_45F8
+                INCB r0
+dtc_step_45F8:  SJ dtc_step_4641
+dtc_step_45FA:  MOV DP, #003D3h
+                LB A, [DP]
+                SLLB A
+                JGE dtc_step_4602
+                INCB r0
+dtc_step_4602:  SJ dtc_step_4641
+dtc_step_4604:  MOV DP, #003D8h
+                LB A, [DP]
+                SLLB A
+                JGE dtc_step_460C
+                INCB r0
+dtc_step_460C:  SJ dtc_step_4641
+dtc_step_460E:  CLRB A
+                SJ dtc_step_4642
+dtc_step_4611:  LB A, #023h
+                SJ dtc_step_4642
+dtc_step_4615:  MOV DP, #003E3h
+                LB A, [DP]
+                SLLB A
+                JGE dtc_step_461D
+                INCB r0
+dtc_step_461D:  LB A, #024h
+                SJ dtc_step_4642
+dtc_step_4621:  LB A, #029h
+                SJ dtc_step_4642
+dtc_step_4625:  CMP -32[USP], #08000h
+                JLT dtc_step_462D
+                INCB r0
+dtc_step_462D:  LB A, #02Bh
+                SJ dtc_step_4642
+dtc_step_4631:  CMPB r7, #015h
+                JNE dtc_step_4637
+                INCB r0
+dtc_step_4637:  SJ dtc_step_4641
+dtc_step_4639:  CMPB r7, #016h
+                JNE dtc_step_463F
+                INCB r0
+dtc_step_463F:  SJ dtc_step_4641
+dtc_step_4641:  LB A, r6
+dtc_step_4642:  STB A, r1
+                EXTND
+                SRL A
+                MOV X1, A
+                LB A, r0
+                JGE dtc_step_464B
+                ADDB A, #004h
+dtc_step_464B:  SBR 00348h[X1]
+dtc_step_464F:  RT
 crank_tooth_count_store_sub_clear_ram0a0_bit6:     RB      0a0h.6
                 CLR     A
                 ST      A, IGNA
@@ -8247,10 +8236,6 @@ scale_result_common_sub_extnd_acc_2:     EXTND
 scale_result_common_sub_add_er3:     ADD     er3, A
                 RT
 ign_angle_to_timer_convert:     CLRB    A
-; [H] --- Converts a computed ignition angle/trim (r4) into a hardware timer-compare value
-; [H] (scaling via MULB by 3 and combining with er1), used when programming the two ignition
-; [H] coil-channel hardware timers (igntiming_output_coil1 and the DP=0x35D channel that follows).
-; [H] Clamps the result if it would exceed 0xFE00 range (CMPB ACC,#0feh check).
                 STB     A, r3
                 SUBB    A, r4
                 MOVB    r0, #003h
@@ -8271,7 +8256,7 @@ ign_timer_clamp_store:     ST      A, er0
                 SC
 ign_timer_convert_return:     RT
 to_set_pswl4_flag_b_sub_clear_acc:     CLR     A
-                LC      A, 05247h
+                LC      A, rom_5247
                 SB      off(0011bh).0
                 JEQ     to_set_pswl4_flag_b_sub_goto_o2_trim_dp300_read
                 JBR     off(0012dh).1, to_set_pswl4_flag_b_sub_if_ram117_bit3_set
@@ -8313,9 +8298,9 @@ o2trim_add_clamp:     ADD     er1, A
                 MOV     er1, #0ffffh
                 SJ      o2trim_add_clamp_call_48c3
 to_set_pswl4_flag_b_sub_sll_x1:     SLL     X1
-                L       A, #05249h
+                L       A, #rom_5249
                 JBR     off(00120h).0, to_set_pswl4_flag_b_sub_add_x1
-                L       A, #05253h
+                L       A, #rom_5253
 to_set_pswl4_flag_b_sub_add_x1:     ADD     X1, A
                 LC      A, [X1]
                 JBR     off(0012fh).3, o2trim_add_clamp
@@ -8367,7 +8352,7 @@ o2_trim_dp304_calc_mul_acc:     MUL
                 ROL     er1
                 JGE     o2_trim_dp300_read_rom_load_ram5247
                 MOV     er1, #0ffffh
-o2_trim_dp300_read_rom_load_ram5247:     LC      A, 05247h
+o2_trim_dp300_read_rom_load_ram5247:     LC      A, rom_5247
                 MOV     DP, #00170h
                 JBR     off(0012fh).3, o2_trim_dp300_read_decb_dp_ind
                 INC     DP
@@ -8377,9 +8362,9 @@ o2_trim_dp300_read_decb_dp_ind:     DECB    [DP]
                 LB      A, ACC
                 STB     A, [DP]
                 CAL     o2_trim_dp300_read_sub_clear_x1
-                L       A, #0525dh
+                L       A, #rom_525d
                 JBR     off(00120h).0, o2_trim_dp300_read_add_x1
-                L       A, #05262h
+                L       A, #rom_5262
 o2_trim_dp300_read_add_x1:     ADD     X1, A
                 CLR     A
                 LCB     A, [X1]
@@ -8509,7 +8494,7 @@ vtec_state_store_sub_rom_load_dp_ind:     LCB     A, [DP]
                 CLR     er1
 vtec_state_store_sub_load_er1:     L       A, er1
                 RT
-accelenrich_clear_pulse_check_sub_load_x1:     MOV     X1, #0532eh
+accelenrich_clear_pulse_check_sub_load_x1:     MOV     X1, #rom_532e
                 LB      A, (002a4h-00280h)[USP]
                 CMPB    A, #002h
                 JLE     accelenrich_clear_pulse_check_sub_cmp_ram179
@@ -8534,7 +8519,7 @@ accelenrich_rpm_tier1:     CMPB    off(00179h), #066h
 accelenrich_rpm_tier1_store_ram18e:     STB     A, off(0018eh)
 accelenrich_rpm_tier1_clear_acch:     CLRB    ACCH
                 MOV     X1, A
-                ADD     X1, #05310h
+                ADD     X1, #rom_5310
                 LB      A, 0e9h
                 VCAL    3
                 RT
@@ -8656,9 +8641,9 @@ ect_fault_range_check_sub_store_dp_ind:     STB     A, [DP]
 ect_fault_range_check_sub_return:     RT
 idle_temp_hyst3_sub_load_dp:     MOV     DP, #0030eh
                 CLR     A
-                LC      A, 05558h
+                LC      A, rom_5558
                 JBS     off(00220h).0, idle_temp_hyst3_sub_store_dp_ind
-                LC      A, 0555ah
+                LC      A, rom_555a
 idle_temp_hyst3_sub_store_dp_ind:     ST      A, [DP]
                 RT
 vss_clamp_common_sub_load_dp_2:     MOV     DP, #08000h
@@ -8886,13 +8871,35 @@ int_serial_sub_cmp_acc_4:     CMPB    A, #0ffh
                 RT
 int_serial_sub_load_imm:     LB      A, #0ffh
                 RT
-                DB  062h,020h,002h,0F2h,0D6h,051h,001h,062h
-                DB  03Ch,002h,0E2h,0C9h,006h,0B5h,006h,017h
-                DB  032h,029h,04Dh,0F5h,006h,001h,0E4h,00Eh
-                DB  032h,029h,04Dh,0F5h,006h,001h,062h,0B4h
-                DB  002h,0F2h,032h,08Eh,044h,001h,0F9h,0F4h
-                DB  0A9h,053h,053h,0B5h,006h,0ABh,0FFh,06Ch
-                DB  001h,062h,01Fh,002h,0F2h,0D6h,02Fh,001h
+serial_cmd_4C25:MOV DP, #00220h
+                LB A, [DP]
+                ANDB A, #051h
+                RT
+serial_cmd_4C2C:MOV DP, #0023Ch
+                L A, [DP]
+                JEQ serial_cmd_4C38
+                DEC 006h
+                CAL serial_cmd_4D29
+serial_cmd_4C38:LB A, 006h
+                RT
+serial_cmd_4C3B:L A, off(00Eh)
+                CAL serial_cmd_4D29
+                LB A, 006h
+                RT
+serial_cmd_4C43:MOV DP, #002B4h
+                LB A, [DP]
+                CAL vcal_7
+                RT
+serial_cmd_4C4B:CLR A
+                LB A, off(0A9h)
+                SLLB A
+                SLLB A
+                LCB A, clamp_result_store_tbl_2[006h]
+                RT
+serial_cmd_4C56:MOV DP, #0021Fh
+                LB A, [DP]
+                ANDB A, #02Fh
+                RT
 vcal_4_sub_load_usp:     MOV     USP, #00280h
                 CLRB    off(00300h)
                 L       A, #08000h
@@ -8900,9 +8907,9 @@ vcal_4_sub_load_usp:     MOV     USP, #00280h
                 ST      A, off(00308h)
                 ST      A, off(0030ch)
                 MB      C, (00220h-00280h)[USP].0
-                LC      A, 05558h
+                LC      A, rom_5558
                 JLT     vcal_4_sub_store_ram30e
-                LC      A, 0555ah
+                LC      A, rom_555a
 vcal_4_sub_store_ram30e:     ST      A, off(0030eh)
                 MOVB    off(0032fh), #078h
                 CLRB    off(0032eh)
@@ -8975,7 +8982,13 @@ clamp_result_store_sub_rom_load_tbl_x1:     LCB     A, [X1]
                 L       A, #00bb3h
                 ST      A, [DP]
                 RT
-                DB  063h,063h,063h,063h,063h,063h,001h
+serial_cmd_4D29:SRL A
+                SRL A
+                SRL A
+                SRL A
+                SRL A
+                SRL A
+                RT
 percyl_counter_gate_sub_load_dp:     MOV     DP, #003dbh
                 LB      A, [DP]
                 CMPB    A, #066h
@@ -9060,14 +9073,14 @@ ign_p40_toggle_load_ie:     MOV     IE, #0141bh
                 DB  0FFh,0FFh,0FFh,0FFh
 int_break_sub_load_ram07b:     MOVB    SCONB, #081h
                 LC      A, 00020h
-                CMP     A, #00043h
+                CMP     A, #int_serial
                 JEQ     int_break_sub_return
                 MOVB    SCONB, #0a1h
 int_break_sub_return:     RT
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
 clamp_result_store_sub_load_r1:     MOVB    r1, #085h
                 MOVB    r2, #081h
-                L       A, #00043h
+                L       A, #int_serial
                 CMPC    A, 00020h
                 JEQ     clamp_result_store_sub_return
                 MOVB    r2, #0a1h
@@ -9077,7 +9090,11 @@ clamp_result_store_sub_return:     RT
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
-                DB  062h,048h,003h,0F2h,0D6h,0F1h,001h,0FFh
+serial_cmd_4E70:MOV DP, #00348h
+                LB A, [DP]
+                ANDB A, #0F1h
+                RT
+                DB  0FFh ; 4E77
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
 vcal_4_sub_clear_acc_2:     CLR     A
                 MOV     DP, #0011ah
@@ -9086,9 +9103,17 @@ vcal_4_sub_clear_acc_2:     CLR     A
                 L       A, off(00382h)
 vcal_4_sub_store_ram3c2:     ST      A, off(003c2h)
                 RT
-                DB  0FFh,0FFh,0FFh,0FAh,090h,09Dh,03Bh,000h
-                DB  0D6h,00Fh,083h,0D5h,007h,090h,09Dh,053h
-                DB  06Dh,0D6h,00Fh,0C5h,007h,0E2h,001h,0FFh
+                DB  0FFh,0FFh,0FFh ; 4E8D
+serial_cmd_4E90:CLRB A
+                LCB A, 0003Bh
+                ANDB A, #00Fh
+                SWAPB
+                STB A, 007h
+                LCB A, rom_6d53
+                ANDB A, #00Fh
+                ORB A, 007h
+                RT
+                DB  0FFh ; 4EA4
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
@@ -9150,15 +9175,21 @@ knockretard_store_goto_2410:     J       knockretard_store_goto_6e90
 idle_temp_hyst3_decb_ram296:     DECB    off(00296h)
                 L       A, #02000h
                 JBS     off(00220h).6, idle_temp_hyst3_goto_3d3a
-                LC      A, 03d2bh
+                LC      A, rom_3d2b
 idle_temp_hyst3_goto_3d3a:     J       idle_temp_hyst3_store_ram24a
 idle_temp_hyst3_load_imm_4:     LB      A, #002h
                 JBS     off(00220h).6, idle_temp_hyst3_store_ram296
-                LCB     A, 03d38h
+                LCB     A, rom_3d38
 idle_temp_hyst3_store_ram296:     STB     A, off(00296h)
                 J       idle_temp_hyst3_clear_acc_3
-                DB  0FFh,0FFh,0FAh,062h,012h,002h,0C2h,028h
-                DB  0CAh,002h,0F5h,0DFh,001h,0FFh,0FFh,0FFh
+                DB  0FFh,0FFh ; 4F7E
+serial_cmd_4F80:CLRB A
+                MOV DP, #00212h
+                MB C, [DP].0
+                JLT serial_cmd_4F8A
+                LB A, 0DFh
+serial_cmd_4F8A:RT
+                DB  0FFh,0FFh,0FFh ; 4F8B
                 DB  0FFh,0FFh
 knockretard_store_sub_vcal_7:     VCAL    7
                 STB     A, off(002cah)
@@ -9170,9 +9201,9 @@ knockretard_store_sub_vcal_7:     VCAL    7
                 CMPB    off(00288h), #060h
                 JGE     knockretard_store_sub_clear_acc
                 CLRB    A
-                LCB     A, 0145bh
+                LCB     A, code_1458+3
                 JBS     off(00220h).2, knockretard_store_sub_cmp_acc
-                LCB     A, 01470h
+                LCB     A, overrev_hardcap_compare_cmp_ram0d9+3
 knockretard_store_sub_cmp_acc:     CMPB    A, 0d9h
                 JGE     knockretard_store_sub_load_dp
 knockretard_store_sub_clear_acc:     CLRB    A
@@ -9207,244 +9238,453 @@ scale_result_common_sub_extnd_acc_3:     EXTND
                 EXTND
                 ADD     er3, A
                 RT
-                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
+                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh ; 4FF9
+;@ DwellRpm type=u8 count=22 colstride=2 formula=raw cols.axis=rom_5000 cols.stride=2 cols.formula=p13_rpm8 cols.unit=rpm cols.decimals=0 category="Dwell" desc="Coil dwell against rpm (2A7h), multiplied with DwellBattery." at=rom_5000+1
+rom_5000:       DB  0FFh ; 5000
                 DB  09Ch,0F8h,09Fh,0F0h,0A8h,0E8h,0A5h,0E0h
                 DB  0A9h,0D8h,0ACh,0D0h,0AFh,0C8h,0AAh,0C0h
                 DB  0A4h,0B0h,097h,0A8h,091h,0A0h,08Ah,098h
                 DB  081h,090h,077h,088h,06Eh,080h,064h,070h
                 DB  05Ah,060h,04Eh,050h,043h,040h,037h,020h
-                DB  02Ah,000h,01Ch,0FFh,020h,0FEh,021h,0BCh
+                DB  02Ah,000h,01Ch ; 5029
+;@ DwellBattery type=u8 count=13 colstride=2 formula=raw cols.axis=rom_502c cols.stride=2 cols.formula=p13_batt_v category="Dwell" desc="Coil dwell against battery voltage (2A8h): longer at low voltage." at=rom_502c+1
+rom_502c:       DB  0FFh,020h,0FEh,021h,0BCh ; 502C
                 DB  031h,0A7h,036h,09Dh,03Bh,092h,040h,088h
                 DB  046h,07Dh,04Dh,073h,057h,068h,061h,053h
-                DB  08Ah,03Fh,0EEh,000h,0EEh,0FFh,034h,0F8h
+                DB  08Ah,03Fh,0EEh,000h,0EEh ; 5041
+;@ IgnitionRpmCorrection type=u8 count=22 colstride=2 formula=raw cols.axis=rom_5046 cols.stride=2 cols.formula=p13_rpm8 cols.unit=rpm cols.decimals=0 category="Ignition" desc="Advance added against rpm (2B7h), on top of the ignition maps: more at high rpm." at=rom_5046+1
+rom_5046:       DB  0FFh,034h,0F8h ; 5046
                 DB  030h,0F0h,02Ch,0E8h,029h,0E0h,026h,0D8h
                 DB  023h,0D0h,01Fh,0C8h,01Ch,0C0h,019h,0B0h
                 DB  015h,0A8h,013h,0A0h,011h,098h,00Fh,090h
                 DB  00Eh,088h,00Ch,080h,00Ah,070h,007h,060h
                 DB  005h,050h,003h,040h,002h,020h,000h,000h
-                DB  000h,0FFh,019h,0AEh,019h,087h,019h,057h
-                DB  019h,034h,000h,000h,000h,0D4h,000h,064h
-                DB  000h,089h,0D4h,076h,051h,0FFh,000h,01Fh
+                DB  000h ; 5071
+;@ KnockRetardCoolant type=u8 count=6 colstride=2 formula=raw cols.axis=rom_5072 cols.stride=2 cols.formula=honda_temp_c category="Knock" desc="Knock: a limit against coolant temperature (2B1h), used with the knock retard against load (rom_507e)." at=rom_5072+1
+rom_5072:       DB  0FFh,019h,0AEh,019h,087h,019h,057h ; 5072
+                DB  019h,034h,000h,000h,000h ; 5079
+;@ KnockLoad type=u8 count=2 colstride=2 formula=raw cols.axis=rom_507e cols.stride=2 cols.formula=map_load_axis_mbar category="Knock" desc="Knock: a value against load (two points), with KnockRetardCoolant (2B1h), in the knock retard limit." at=rom_507e+1
+rom_507e:       DB  0D4h,000h,064h ; 507E
+                DB  000h ; 5081
+;@ Stock_rom_5082 type=u8 count=4 formula=raw category="Internal" desc="Stock data, 4 bytes, read by the code at idleign_result_store_cmp_acc; its role not traced."
+rom_5082:       DB  089h,0D4h,076h,051h ; 5082
+;@ CoolantPairCold type=u8 count=7 colstride=2 formula=raw cols.axis=rom_5086 cols.stride=2 cols.formula=honda_temp_c category="Internal" desc="Looked up against coolant temperature with rom_5094 when the coolant byte is under 28h (CoolantPairWarm above), in the coolant reading's ramp (ect_simulate_ramp)." at=rom_5086+1
+rom_5086:       DB  0FFh,000h,01Fh ; 5086
                 DB  000h,01Bh,000h,015h,006h,010h,00Dh,00Fh
-                DB  00Dh,000h,00Dh,0FFh,000h,01Fh,000h,01Bh
+                DB  00Dh,000h,00Dh ; 5091
+;@ CoolantPairCold2 type=u8 count=7 colstride=2 formula=raw cols.axis=rom_5094 cols.stride=2 cols.formula=honda_temp_c category="Internal" desc="The partner of CoolantPairCold (coolant byte under 28h), in the coolant reading's ramp." at=rom_5094+1
+rom_5094:       DB  0FFh,000h,01Fh,000h,01Bh ; 5094
                 DB  000h,015h,000h,010h,000h,00Fh,000h,000h
-                DB  000h,0FFh,050h,0F1h,050h,0BAh,050h,0A1h
-                DB  043h,057h,020h,028h,000h,000h,000h,0FFh
+                DB  000h ; 50A1
+;@ CoolantPairWarm type=u8 count=7 colstride=2 formula=raw cols.axis=rom_50a2 cols.stride=2 cols.formula=honda_temp_c category="Internal" desc="Looked up against coolant temperature with its partner (rom_50b0) when the coolant byte is 28h or more (rom_5086/rom_5094 below that); into r3 in the coolant reading's ramp (ect_simulate_ramp)." at=rom_50a2+1
+rom_50a2:       DB  0FFh,050h,0F1h,050h,0BAh,050h,0A1h ; 50A2
+                DB  043h,057h,020h,028h,000h,000h,000h ; 50A9
+;@ CoolantPairWarm2 type=u8 count=7 colstride=2 formula=raw cols.axis=rom_50b0 cols.stride=2 cols.formula=honda_temp_c category="Internal" desc="The partner of CoolantPairWarm (coolant byte 28h or more), in the coolant reading's ramp." at=rom_50b0+1
+rom_50b0:       DB  0FFh ; 50B0
                 DB  040h,0F1h,040h,0BAh,040h,0A1h,032h,057h
-                DB  014h,028h,000h,000h,000h,0FFh,040h,0A0h
-                DB  040h,080h,038h,040h,02Ch,000h,02Ch,0FFh
+                DB  014h,028h,000h,000h,000h ; 50B9
+;@ KnockLoadThreshold type=u8 count=5 colstride=2 formula=raw cols.axis=rom_50be cols.stride=2 cols.formula=p13_rpm8 cols.unit=rpm cols.decimals=0 category="Knock" desc="Knock: the load (0E7h) above which, against rpm, the knock retard can act." at=rom_50be+1
+rom_50be:       DB  0FFh,040h,0A0h ; 50BE
+                DB  040h,080h,038h,040h,02Ch,000h,02Ch ; 50C1
+;@ IdleIgnition type=u16 count=5 colstride=4 formula=raw cols.axis=rom_50c8 cols.type=u16 cols.stride=4 cols.formula=raw category="Idle" desc="Idle: timing against the idle speed error (0B4h, crank period counts over the target) while flag 216h.7 is set." at=rom_50c8+2
+rom_50c8:       DB  0FFh ; 50C8
                 DB  0FFh,000h,000h,050h,001h,000h,000h,000h
                 DB  001h,015h,000h,0B3h,000h,015h,000h,000h
-                DB  000h,000h,000h,0FFh,0FFh,000h,000h,0BEh
+                DB  000h,000h,000h ; 50D9
+;@ IdleIgnition2 type=u16 count=5 colstride=4 formula=raw cols.axis=rom_50dc cols.type=u16 cols.stride=4 cols.formula=raw category="Idle" desc="Idle: timing against the idle speed error (0B4h, crank period counts over the target) while flag 216h.7 is clear." at=rom_50dc+2
+rom_50dc:       DB  0FFh,0FFh,000h,000h,0BEh ; 50DC
                 DB  001h,000h,000h,045h,001h,015h,000h,0CDh
-                DB  000h,015h,000h,000h,000h,000h,000h,0FFh
+                DB  000h,015h,000h,000h,000h,000h,000h ; 50E9
+;@ Stock_rom_50f0 type=u8 count=10 formula=raw category="Internal" desc="Stock data, 10 bytes, read by the code at rpm_decel_limit_check_store_stk; its role not traced."
+rom_50f0:       DB  0FFh ; 50F0
                 DB  056h,080h,056h,060h,048h,040h,03Ch,000h
-                DB  030h,0FFh,0A0h,05Dh,0A0h,02Fh,0A0h,000h
-                DB  0A0h,0FFh,020h,05Dh,020h,02Fh,020h,000h
+                DB  030h ; 50F9
+;@ SpeedTable2BA type=u8 count=4 colstride=2 formula=raw cols.axis=rom_50fa cols.stride=2 cols.formula=raw category="Internal" desc="Against road speed (2BAh; 50h when not used)." at=rom_50fa+1
+rom_50fa:       DB  0FFh,0A0h,05Dh,0A0h,02Fh,0A0h,000h ; 50FA
+                DB  0A0h ; 5101
+;@ SpeedTable2BC type=u8 count=4 colstride=2 formula=raw cols.axis=rom_5102 cols.stride=2 cols.formula=raw category="Internal" desc="Against road speed (2BCh; 80h when not used)." at=rom_5102+1
+rom_5102:       DB  0FFh,020h,05Dh,020h,02Fh,020h,000h ; 5102
                 DB  020h,000h,000h,000h,000h,000h,000h,000h
                 DB  017h,037h,038h,03Bh,038h,045h,047h,055h
-                DB  057h,05Ah,05Bh,05Bh,05Bh,02Fh,03Bh,040h
+                DB  057h,05Ah,05Bh,05Bh,05Bh ; 5119
+;@ IgnMinHigh type=u8 count=20 formula=p13_advance cols.axis=tbl_rpm_scalar_hi40 cols.type=u16 cols.formula=rpm_period_word category="Ignition" desc="High cam: the least advance against rpm (2B6h) - the timing is never let below it." at=rom_5102+8
+;@ IgnMinLow type=u8 count=20 formula=p13_advance cols.axis=tbl_rpm_scalar_lo40 cols.type=u16 cols.formula=rpm_period_word category="Ignition" desc="Low cam: the least advance against rpm (2B6h) - the timing is never let below it." at=rom_511e+20
+;@ IgnMinHigh2 type=u8 count=20 formula=p13_advance cols.axis=tbl_rpm_scalar_hi40 cols.type=u16 cols.formula=rpm_period_word category="Ignition" desc="High cam: the least advance against rpm (2B6h) while flag 231h.2 is set (2A9h at D0h or over)." at=rom_511e
+rom_511e:       DB  02Fh,03Bh,040h ; 511E
                 DB  04Ah,057h,064h,073h,088h,080h,06Fh,073h
                 DB  080h,08Dh,08Dh,091h,091h,091h,091h,091h
                 DB  091h,000h,000h,000h,000h,000h,000h,000h
                 DB  000h,000h,000h,008h,00Eh,017h,01Fh,02Dh
-                DB  037h,040h,043h,05Bh,05Bh,000h,000h,000h
+                DB  037h,040h,043h,05Bh,05Bh ; 5141
+;@ IgnMinLow2 type=u8 count=20 formula=p13_advance cols.axis=tbl_rpm_scalar_lo40 cols.type=u16 cols.formula=rpm_period_word category="Ignition" desc="Low cam: the least advance against rpm (2B6h) while flag 231h.2 is set (2A9h at D0h or over)." at=rom_5146
+rom_5146:       DB  000h,000h,000h ; 5146
                 DB  002h,011h,022h,02Fh,037h,04Ch,05Dh,06Ah
                 DB  06Eh,074h,076h,07Bh,077h,07Bh,082h,093h
-                DB  093h,0FFh,04Dh,0D0h,04Dh,0C0h,040h,0A0h
-                DB  033h,080h,033h,040h,033h,000h,033h,0FFh
+                DB  093h ; 5159
+;@ KnockRpmLimit type=u8 count=7 colstride=2 formula=raw cols.axis=rom_515a cols.stride=2 cols.formula=p13_rpm8 cols.unit=rpm cols.decimals=0 category="Knock" desc="Knock: a value against rpm compared with 0E7h, in the knock retard's own steps." at=rom_515a+1
+rom_515a:       DB  0FFh,04Dh,0D0h,04Dh,0C0h,040h,0A0h ; 515A
+                DB  033h,080h,033h,040h,033h,000h,033h ; 5161
+;@ KnockRpmStep type=u8 count=7 colstride=2 formula=raw cols.axis=rom_5168 cols.stride=2 cols.formula=p13_rpm8 cols.unit=rpm cols.decimals=0 category="Knock" desc="Knock: a value against rpm, multiplied with 2A5h - the size of the knock retard's steps." at=rom_5168+1
+rom_5168:       DB  0FFh ; 5168
                 DB  02Ah,0D0h,02Ah,0C0h,02Ah,0A0h,02Ah,080h
-                DB  02Ah,040h,019h,000h,019h,000h,000h,04Ch
-                DB  080h,080h,000h,000h,000h,000h,000h,000h
+                DB  02Ah,040h,019h,000h,019h ; 5171
+;@ Stock_rom_5176 type=u8 count=5 formula=raw category="Internal" desc="Stock data, 5 bytes, read by the code at sensor_bank_gate3_store_ram2a4; its role not traced."
+rom_5176:       DB  000h,000h,04Ch ; 5176
+                DB  080h,080h ; 5179
+;@ KnockRpmCurveHigh type=u8 count=20 formula=raw cols.axis=tbl_rpm_scalar_hi40 cols.type=u16 cols.formula=rpm_period_word category="Knock" desc="High cam: a knock value against rpm, with flag 21Dh.5 (into 2ABh)." at=rom_517b
+rom_517b:       DB  000h,000h,000h,000h,000h,000h ; 517B
                 DB  000h,000h,000h,000h,000h,000h,000h,000h
-                DB  000h,000h,000h,000h,000h,000h,000h,000h
+                DB  000h,000h,000h,000h,000h,000h ; 5189
+;@ KnockRpmCurveLow type=u8 count=20 formula=raw cols.axis=tbl_rpm_scalar_lo40 cols.type=u16 cols.formula=rpm_period_word category="Knock" desc="Low cam: a knock value against rpm, with flag 21Dh.5 (into 2ABh)." at=rom_518f
+rom_518f:       DB  000h,000h ; 518F
                 DB  000h,000h,000h,000h,000h,000h,000h,004h
                 DB  006h,008h,014h,017h,017h,000h,000h,000h
-                DB  000h,000h,008h,008h,008h,008h,008h,008h
-                DB  008h,008h,008h,030h,030h,040h,030h,030h
-                DB  030h,020h,004h,030h,004h,020h,004h,020h
-                DB  0D4h,0D4h,064h,03Fh,0D4h,0B6h,064h,03Fh
-                DB  0FFh,04Ch,0F5h,04Ch,0BAh,04Ah,087h,048h
-                DB  02Eh,044h,028h,040h,000h,040h,0FFh,06Ah
+                DB  000h,000h ; 51A1
+;@ Stock_rom_51a3 type=u8 count=9 formula=raw category="Internal" desc="Stock data, 9 bytes, read by the code at o2_trim_step_start_rom_load_051a3h_dp; its role not traced."
+rom_51a3:       DB  008h,008h,008h,008h,008h,008h ; 51A3
+                DB  008h,008h,008h ; 51A9
+;@ Stock_rom_51ac type=u8 count=7 formula=raw category="Internal" desc="Stock data, 7 bytes, read by the code at tps_window_store2; its role not traced."
+rom_51ac:       DB  030h,030h,040h,030h,030h ; 51AC
+                DB  030h,020h ; 51B1
+;@ Stock_rom_51b3 type=u8 count=6 formula=raw category="Internal" desc="Stock data, 6 bytes, read by the code at tps_window_store2; its role not traced."
+rom_51b3:       DB  004h,030h,004h,020h,004h,020h ; 51B3
+rom_51b9:       DB  0D4h,0D4h,064h,03Fh,0D4h,0B6h,064h,03Fh
+;@ CoolantFuel type=u8 count=7 colstride=2 formula=trim_byte_64_pct cols.axis=rom_51c1 cols.stride=2 cols.formula=honda_temp_c category="Fuel" slot=ectcorr.fuel desc="Fuel against coolant temperature (17Ah; 40h = 0 %): the warm-up enrichment, applied to every pulse once the engine runs." at=rom_51c1+1
+rom_51c1:       DB  0FFh,04Ch,0F5h,04Ch,0BAh,04Ah,087h,048h
+                DB  02Eh,044h,028h,040h,000h,040h ; 51C9
+;@ CoolantFuel2 type=u8 count=7 colstride=2 formula=trim_byte_64_pct cols.axis=rom_51cf cols.stride=2 cols.formula=honda_temp_c category="Fuel" desc="A second fuel correction against coolant temperature (17Bh; 40h = 0 %), applied off idle." at=rom_51cf+1
+rom_51cf:       DB  0FFh,06Ah ; 51CF
                 DB  0F5h,06Ah,0BAh,062h,087h,05Dh,02Eh,04Ah
-                DB  028h,040h,000h,040h,0FFh,040h,0F5h,040h
+                DB  028h,040h,000h,040h ; 51D9
+;@ ClosedLoopCoolant1 type=u8 count=7 colstride=2 formula=raw cols.axis=rom_51dd cols.stride=2 cols.formula=honda_temp_c category="Closed loop" desc="Closed loop: a value against coolant temperature (17Ch) the O2 correction reads with rom_51b9." at=rom_51dd+1
+rom_51dd:       DB  0FFh,040h,0F5h,040h ; 51DD
                 DB  0BAh,040h,087h,040h,02Eh,040h,028h,040h
-                DB  000h,040h,0FFh,053h,0F5h,053h,0BAh,053h
+                DB  000h,040h ; 51E9
+;@ ClosedLoopCoolant2 type=u8 count=7 colstride=2 formula=raw cols.axis=rom_51eb cols.stride=2 cols.formula=honda_temp_c category="Closed loop" desc="Closed loop: a value against coolant temperature (17Dh) the O2 correction reads with rom_51b9." at=rom_51eb+1
+rom_51eb:       DB  0FFh,053h,0F5h,053h,0BAh,053h ; 51EB
                 DB  087h,04Eh,02Eh,043h,028h,040h,000h,040h
-                DB  0FFh,060h,0D0h,060h,087h,059h,056h,050h
-                DB  02Eh,045h,028h,040h,000h,040h,0FFh,08Fh
+;@ ClosedLoopCoolant3 type=u8 count=7 colstride=2 formula=raw cols.axis=rom_51f9 cols.stride=2 cols.formula=honda_temp_c category="Closed loop" desc="Closed loop: a value against coolant temperature (17Eh), the O2 correction's step when it is running." at=rom_51f9+1
+rom_51f9:       DB  0FFh,060h,0D0h,060h,087h,059h,056h,050h
+                DB  02Eh,045h,028h,040h,000h,040h ; 5201
+;@ TipInCoolant type=u8 count=7 colstride=2 formula=trim_byte_64_pct cols.axis=rom_5207 cols.stride=2 cols.formula=honda_temp_c category="Tip-in" desc="Tip-in fuel against coolant temperature (17Fh; 40h = 0 %): more when cold." at=rom_5207+1
+rom_5207:       DB  0FFh,08Fh ; 5207
                 DB  0F5h,08Fh,0BAh,080h,087h,076h,02Eh,043h
-                DB  028h,040h,000h,040h,0FFh,0EBh,091h,0F5h
+                DB  028h,040h,000h,040h ; 5211
+;@ IntakeAirFuel type=u16 count=7 colstride=3 formula=trim_word_pct cols.axis=rom_5215 cols.stride=3 cols.formula=honda_temp_c category="Fuel" desc="Fuel against intake air temperature (152h; 8000h = 0 %): more fuel in cold, dense air." at=rom_5215+1
+rom_5215:       DB  0FFh,0EBh,091h,0F5h ; 5215
                 DB  0EBh,091h,0E1h,008h,08Ch,0BAh,02Bh,087h
                 DB  087h,000h,080h,057h,029h,07Ch,000h,029h
-                DB  07Ch,0FFh,099h,099h,0F5h,099h,099h,0E1h
+                DB  07Ch ; 5229
+;@ PostFuel type=u16 count=7 colstride=3 formula=raw cols.axis=rom_522a cols.stride=3 cols.formula=honda_temp_c category="Fuel" desc="After-start fuel against coolant temperature (158h): the extra fuel the engine starts with, which then decays." at=rom_522a+1
+rom_522a:       DB  0FFh,099h,099h,0F5h,099h,099h,0E1h ; 522A
                 DB  08Fh,05Ah,0A6h,0CDh,03Ch,07Ah,0C3h,035h
-                DB  034h,0D7h,023h,000h,0D7h,023h,0BAh,02Eh
-                DB  0A9h,057h,0BAh,03Bh,0A9h,094h,004h,004h
-                DB  000h,000h,05Ah,004h,05Ah,004h,0E0h,000h
-                DB  000h,000h,000h,000h,05Ah,004h,05Ah,004h
-                DB  0E0h,000h,000h,000h,00Bh,0BDh,0BDh,06Fh
-                DB  02Ch,00Bh,0BDh,0BDh,06Fh,02Ch,0FFh,030h
+                DB  034h,0D7h,023h,000h,0D7h,023h ; 5239
+;@ Stock_rom_523f type=u8 count=4 formula=raw category="Internal" desc="Stock data, 4 bytes, read by the code at fueltbl_sanitize_advance; its role not traced."
+rom_523f:       DB  0BAh,02Eh ; 523F
+                DB  0A9h,057h ; 5241
+;@ IntakeAirCoolantCross type=u8 count=2 colstride=2 formula=raw cols.axis=rom_5243 cols.stride=2 cols.formula=honda_temp_c category="Sensors" desc="Against intake air temperature, compared with the coolant temperature (flag 218h.2); a second table above 15 km/h." at=rom_5243+1
+rom_5243:       DB  0BAh,03Bh,0A9h,094h ; 5243
+rom_5247:       DB  004h,004h ; 5247
+rom_5249:       DB  000h,000h,05Ah,004h,05Ah,004h,0E0h,000h
+                DB  000h,000h ; 5251
+;@ Stock_rom_5253 type=u16 count=5 formula=raw category="Internal" desc="Stock data, 10 bytes, read by the code at to_set_pswl4_flag_b_sub_sll_x1; its role not traced."
+rom_5253:       DB  000h,000h,05Ah,004h,05Ah,004h ; 5253
+                DB  0E0h,000h,000h,000h ; 5259
+;@ Stock_rom_525d type=u16 count=2 formula=raw category="Internal" desc="Stock data, 5 bytes, read by the code at o2_trim_dp300_read_decb_dp_ind; its role not traced."
+rom_525d:       DB  00Bh,0BDh,0BDh,06Fh ; 525D
+                DB  02Ch ; 5261
+;@ Stock_rom_5262 type=u16 count=2 formula=raw category="Internal" desc="Stock data, 5 bytes, read by the code at o2_trim_dp300_read_decb_dp_ind; its role not traced."
+rom_5262:       DB  00Bh,0BDh,0BDh,06Fh,02Ch ; 5262
+;@ OpenLoopLoad type=u8 count=8 colstride=2 formula=map_load_axis_mbar cols.axis=rom_5267 cols.stride=2 cols.formula=p13_rpm8 cols.unit=rpm cols.decimals=0 category="Fuel" desc="The load (the map load byte, less the baro correction 19Ah) above which the fuel goes open loop and rich (11Ch.6), against rpm: lower at high rpm." at=rom_5267+1
+rom_5267:       DB  0FFh,030h ; 5267
                 DB  0F0h,050h,0E0h,070h,0C0h,0B0h,0A0h,0E0h
-                DB  080h,0E0h,020h,0C0h,000h,0C0h,0FFh,0FFh
+                DB  080h,0E0h,020h,0C0h,000h,0C0h ; 5271
+;@ Stock_rom_5277 type=u8 count=16 formula=raw category="Internal" desc="Stock data, 16 bytes, read by the code at tipin_gate_common_if_ram11f_bit5_clr; its role not traced."
+rom_5277:       DB  0FFh,0FFh ; 5277
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
-                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0F5h,000h
-                DB  089h,030h,0FFh,080h,01Fh,080h,018h,088h
-                DB  012h,092h,00Fh,098h,000h,098h,0FFh,08Ah
+                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh ; 5281
+;@ BaroLoadCorrection type=u8 count=2 colstride=2 formula=raw cols.axis=rom_5287 cols.stride=2 cols.formula=map_load_axis_mbar category="Fuel" desc="Taken off the load before it is compared with the open-loop load (19Ah), against barometric pressure." at=rom_5287+1
+rom_5287:       DB  0F5h,000h ; 5287
+                DB  089h,030h ; 5289
+;@ CoolantFuelMult type=u8 count=6 colstride=2 formula=raw cols.axis=rom_528b cols.stride=2 cols.formula=honda_temp_c category="Fuel" desc="Fuel against coolant temperature (199h): a multiplier on the map's value while flag 11Ch.2 is set; also sets flag 218h.7 below its second point." at=rom_528b+1
+rom_528b:       DB  0FFh,080h,01Fh,080h,018h,088h ; 528B
+                DB  012h,092h,00Fh,098h,000h,098h ; 5291
+;@ FuelCutCoolant type=u8 count=7 colstride=2 formula=raw cols.axis=rom_5297 cols.stride=2 cols.formula=honda_temp_c category="Fuel" desc="Overrun fuel cut (manual): a value against coolant temperature, in the cut's tracking (fuelcuttrack)." at=rom_5297+1
+rom_5297:       DB  0FFh,08Ah ; 5297
                 DB  0EDh,08Ah,094h,080h,062h,073h,044h,066h
-                DB  02Eh,05Ah,000h,05Ah,0FFh,07Dh,0EDh,07Dh
+                DB  02Eh,05Ah,000h,05Ah ; 52A1
+;@ FuelCutCoolant2 type=u8 count=7 colstride=2 formula=raw cols.axis=rom_52a5 cols.stride=2 cols.formula=honda_temp_c category="Fuel" desc="Overrun fuel cut (manual): a second value against coolant temperature, in the cut's tracking (fuelcuttrack)." at=rom_52a5+1
+rom_52a5:       DB  0FFh,07Dh,0EDh,07Dh ; 52A5
                 DB  094h,06Ah,062h,05Dh,044h,050h,02Eh,043h
-                DB  000h,043h,0FFh,08Ah,0EDh,08Ah,0BAh,082h
+                DB  000h,043h ; 52B1
+;@ Stock_rom_52b3 type=u16 count=7 formula=raw category="Internal" desc="Stock data, 14 bytes, read by the code at fuelcuttrack_store_load_imm; its role not traced."
+rom_52b3:       DB  0FFh,08Ah,0EDh,08Ah,0BAh,082h ; 52B3
                 DB  0A1h,070h,062h,05Bh,02Eh,050h,000h,050h
-                DB  0FFh,07Dh,0EDh,07Dh,0BAh,06Dh,0A1h,060h
+;@ Stock_rom_52c1 type=u8 count=30 formula=raw category="Internal" desc="Stock data, 30 bytes, read by the code at fuelcuttrack_store_load_imm; its role not traced."
+rom_52c1:       DB  0FFh,07Dh,0EDh,07Dh,0BAh,06Dh,0A1h,060h
                 DB  062h,050h,02Eh,033h,000h,033h,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
-                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,080h,080h
-                DB  080h,080h,0FFh,000h,0F9h,000h,0DBh,00Fh
-                DB  0BDh,02Ch,0A0h,048h,000h,048h,0FFh,000h
+                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh ; 52D9
+;@ CylinderFuelTrim type=u8 count=4 formula=trim_byte_pct category="Fuel" slot=cyltrim.fuel desc="Fuel trim for each cylinder, 1-4, on its own injector time (384h-38Ah; 80h = 0 %). The stock code applies it in closed loop only."
+rom_52df:       DB  080h,080h ; 52DF
+                DB  080h,080h ; 52E1
+;@ BaroFuel type=u8 count=6 colstride=2 formula=raw cols.axis=rom_52e3 cols.stride=2 cols.formula=map_load_axis_mbar category="Fuel" desc="Fuel added against barometric pressure (189h): none at sea level, more as the pressure falls (FFh everywhere is about 40 % more fuel)." at=rom_52e3+1
+rom_52e3:       DB  0FFh,000h,0F9h,000h,0DBh,00Fh ; 52E3
+                DB  0BDh,02Ch,0A0h,048h,000h,048h ; 52E9
+rom_52ef:       DB  0FFh,000h ; 52EF
                 DB  070h,000h,050h,05Ah,030h,0A6h,010h,0FFh
-                DB  000h,0FFh,0FFh,08Bh,000h,0A7h,08Bh,000h
+                DB  000h,0FFh ; 52F9
+;@ InjectorDeadTime type=u16 count=7 colstride=3 formula=p13_inj_ms cols.axis=rom_52fb cols.stride=3 cols.formula=p13_batt_v category="Fuel" desc="Injector dead time against battery voltage (142h): added to every pulse, cranking included - the time the injector takes to open." at=rom_52fb+1
+rom_52fb:       DB  0FFh,08Bh,000h,0A7h,08Bh,000h ; 52FB
                 DB  092h,0ABh,000h,07Dh,0DDh,000h,069h,036h
-                DB  001h,054h,0E5h,001h,000h,0E5h,001h,099h
+                DB  001h,054h,0E5h,001h,000h,0E5h,001h ; 5309
+;@ TipInStanding type=u16 count=2 colstride=3 formula=p13_inj_ms category="Tip-in" cols.axis=rom_5310+0 cols.stride=3 cols.formula=raw cols.unit="TPS change" desc="Tip-in fuel standing (under 5 km/h, flag 117h.1 set): the extra pulse (146h) against how fast the throttle opens (0E9h, the change each pass), two points, the extra fuel in between in proportion." at=rom_5310+1
+;@ TipInLowRpm type=u16 count=2 colstride=3 formula=p13_inj_ms category="Tip-in" cols.axis=rom_5310+6 cols.stride=3 cols.formula=raw cols.unit="TPS change" desc="Tip-in fuel moving, below about 1600 rpm (the rpm byte under 66h): the extra pulse (146h) against how fast the throttle opens (0E9h, the change each pass), two points, the extra fuel in between in proportion." at=rom_5310+7
+;@ TipInLowRpm2 type=u16 count=2 colstride=3 formula=p13_inj_ms category="Tip-in" cols.axis=rom_5310+12 cols.stride=3 cols.formula=raw cols.unit="TPS change" desc="Tip-in fuel moving, below about 1600 rpm, with flag 11Ah.3: the extra pulse (146h) against how fast the throttle opens (0E9h, the change each pass), two points, the extra fuel in between in proportion." at=rom_5310+13
+;@ TipInHighRpm type=u16 count=2 colstride=3 formula=p13_inj_ms category="Tip-in" cols.axis=rom_5310+18 cols.stride=3 cols.formula=raw cols.unit="TPS change" desc="Tip-in fuel moving, above about 1600 rpm: the extra pulse (146h) against how fast the throttle opens (0E9h, the change each pass), two points, the extra fuel in between in proportion." at=rom_5310+19
+;@ TipInHighRpm2 type=u16 count=2 colstride=3 formula=p13_inj_ms category="Tip-in" cols.axis=rom_5310+24 cols.stride=3 cols.formula=raw cols.unit="TPS change" desc="Tip-in fuel moving, above about 1600 rpm, with flag 11Ah.3: the extra pulse (146h) against how fast the throttle opens (0E9h, the change each pass), two points, the extra fuel in between in proportion." at=rom_5310+25
+rom_5310:       DB  099h ; 5310
                 DB  0D9h,005h,000h,000h,000h,066h,04Fh,007h
                 DB  000h,000h,000h,066h,034h,008h,000h,0D8h
                 DB  000h,033h,0A7h,003h,000h,000h,000h,033h
-                DB  08Ch,004h,000h,0D8h,000h,01Fh,0EEh,000h
+                DB  08Ch,004h,000h,0D8h,000h ; 5329
+;@ TipInSet2 type=u8 count=24 formula=raw category="Tip-in" desc="Tip-in: a second set of four two-point tables (6 bytes each: throttle change, pulse word; twice) picked by 2A4h and the rpm byte over 8Ah."
+rom_532e:       DB  01Fh,0EEh,000h ; 532E
                 DB  000h,000h,001h,028h,0ECh,000h,000h,000h
                 DB  001h,01Fh,0E9h,000h,000h,000h,001h,028h
-                DB  0ECh,000h,000h,000h,001h,0F9h,080h,089h
-                DB  040h,0FFh,050h,0E1h,048h,094h,038h,057h
-                DB  018h,02Eh,000h,000h,000h,0FFh,068h,0EDh
+                DB  0ECh,000h,000h,000h,001h ; 5341
+;@ TipInBaro type=u8 count=2 colstride=2 formula="x * 100 / 128" inverse="x * 128 / 100" unit=% decimals=1 cols.axis=rom_5346 cols.stride=2 cols.formula=map_load_axis_mbar category="Tip-in" desc="Tip-in fuel against barometric pressure (186h; 80h = 100 %): less at altitude." at=rom_5346+1
+rom_5346:       DB  0F9h,080h,089h ; 5346
+                DB  040h ; 5349
+rom_534a:       DB  0FFh,050h,0E1h,048h,094h,038h,057h ; 534A
+                DB  018h,02Eh,000h,000h,000h ; 5351
+;@ InjCoolantFactor type=u8 count=7 colstride=2 formula=raw cols.axis=rom_5356 cols.stride=2 cols.formula=honda_temp_c category="Fuel" desc="Against coolant temperature (187h, used while flag 119h.3 is set): multiplied by the count in 0E6h (at most 10h) in the injection time." at=rom_5356+1
+rom_5356:       DB  0FFh,068h,0EDh ; 5356
                 DB  068h,0D0h,05Dh,0A1h,057h,06Eh,03Ah,028h
-                DB  013h,000h,013h,0FFh,029h,0EDh,029h,0D0h
+                DB  013h,000h,013h ; 5361
+;@ InjCoolantFactor2 type=u8 count=7 colstride=2 formula=raw cols.axis=rom_5364 cols.stride=2 cols.formula=honda_temp_c category="Fuel" desc="Against coolant temperature (188h, used while flag 119h.3 is clear): multiplied by the count in 0E6h (at most 14h) in the injection time." at=rom_5364+1
+rom_5364:       DB  0FFh,029h,0EDh,029h,0D0h ; 5364
                 DB  024h,0A1h,024h,06Eh,023h,028h,010h,000h
-                DB  010h,0FFh,01Eh,000h,00Fh,0FFh,00Ah,000h
-                DB  019h,0FFh,08Ah,066h,0F5h,08Ah,066h,0E1h
+                DB  010h ; 5371
+;@ LoadHoldCount type=u8 count=2 colstride=2 formula=raw cols.axis=rom_5372 cols.stride=2 cols.formula=map_load_axis_mbar category="Fuel" desc="Against load: a count (r2) held down to zero, then flag 218h.4." at=rom_5372+1
+rom_5372:       DB  0FFh,01Eh,000h,00Fh ; 5372
+rom_5376:       DB  0FFh,00Ah,000h ; 5376
+                DB  019h ; 5379
+;@ CrankFuel type=u16 count=7 colstride=3 formula=quarter cols.axis=rom_537a cols.stride=3 cols.formula=honda_temp_c category="Cranking" slot=crankfuel.ect desc="Cranking fuel against coolant temperature (the word / 4, as HTS shows it; 13Eh): the pulse while the starter turns, before the rpm and baro factors." at=rom_537a+1
+rom_537a:       DB  0FFh,08Ah,066h,0F5h,08Ah,066h,0E1h ; 537A
                 DB  0BAh,037h,0BAh,004h,029h,06Eh,088h,013h
                 DB  028h,07Fh,008h,000h,07Fh,008h,0FFh,0FFh
-                DB  0FFh,0FFh,0F5h,080h,089h,04Eh,0FFh,083h
+                DB  0FFh,0FFh ; 5391
+;@ CrankFuelBaro type=u8 count=2 colstride=2 formula=trim_signed_pct cols.axis=rom_5393 cols.stride=2 cols.formula=map_load_axis_mbar category="Cranking" desc="Cranking fuel against barometric pressure (183h; 80h = 0 %): less fuel at altitude." at=rom_5393+1
+rom_5393:       DB  0F5h,080h,089h,04Eh ; 5393
+;@ DecelResumeRpm type=u8 count=7 colstride=2 formula=p13_rpm8 cols.axis=rom_5397 cols.stride=2 cols.formula=honda_temp_c category="Fuel" desc="Overrun fuel cut (manual): once cut, the fuel comes back below this rpm, against coolant temperature (16Eh)." at=rom_5397+1
+rom_5397:       DB  0FFh,083h ; 5397
                 DB  0EDh,083h,094h,06Dh,062h,060h,044h,053h
-                DB  02Eh,046h,000h,046h,0FFh,083h,0EDh,083h
+                DB  02Eh,046h,000h,046h ; 53A1
+;@ DecelResumeRpmAuto type=u8 count=7 colstride=2 formula=p13_rpm8 cols.axis=rom_53a5 cols.stride=2 cols.formula=honda_temp_c category="Fuel" desc="Overrun fuel cut (automatic): once cut, the fuel comes back below this rpm, against coolant temperature (16Eh)." at=rom_53a5+1
+rom_53a5:       DB  0FFh,083h,0EDh,083h ; 53A5
                 DB  0BAh,070h,0A1h,06Ah,062h,060h,02Eh,03Ah
-                DB  000h,03Ah,0FFh,08Dh,0EDh,08Dh,094h,080h
+                DB  000h,03Ah ; 53B1
+;@ DecelCutRpm type=u8 count=7 colstride=2 formula=p13_rpm8 cols.axis=rom_53b3 cols.stride=2 cols.formula=honda_temp_c category="Fuel" desc="Overrun fuel cut (manual): with the throttle shut, the fuel is cut above this rpm, against coolant temperature (16Fh)." at=rom_53b3+1
+rom_53b3:       DB  0FFh,08Dh,0EDh,08Dh,094h,080h ; 53B3
                 DB  062h,073h,044h,066h,02Eh,05Ah,000h,05Ah
-                DB  0FFh,08Dh,0EDh,08Dh,0BAh,082h,0A1h,07Dh
-                DB  062h,073h,02Eh,050h,000h,050h,0FFh,014h
+;@ DecelCutRpmAuto type=u8 count=7 colstride=2 formula=p13_rpm8 cols.axis=rom_53c1 cols.stride=2 cols.formula=honda_temp_c category="Fuel" desc="Overrun fuel cut (automatic): with the throttle shut, the fuel is cut above this rpm, against coolant temperature (16Fh)." at=rom_53c1+1
+rom_53c1:       DB  0FFh,08Dh,0EDh,08Dh,0BAh,082h,0A1h,07Dh
+                DB  062h,073h,02Eh,050h,000h,050h ; 53C9
+rom_53cf:       DB  0FFh,014h ; 53CF
                 DB  0FCh,014h,0E0h,013h,0CDh,009h,083h,009h
-                DB  000h,009h,0FFh,019h,0FCh,019h,0E0h,00Ch
-                DB  0CDh,020h,0C0h,030h,000h,030h,0FFh,01Dh
+                DB  000h,009h ; 53D9
+;@ DecelCutLoad2 type=u8 count=6 colstride=2 formula=map_load_axis_mbar cols.axis=rom_53db cols.stride=2 cols.formula=p13_rpm8 cols.unit=rpm cols.decimals=0 category="Fuel" desc="Overrun fuel cut: the load it needs to be under, against rpm (a second set)." at=rom_53db+1
+rom_53db:       DB  0FFh,019h,0FCh,019h,0E0h,00Ch ; 53DB
+                DB  0CDh,020h,0C0h,030h,000h,030h ; 53E1
+;@ DecelCutLoad type=u8 count=6 colstride=2 formula=map_load_axis_mbar cols.axis=rom_53e7 cols.stride=2 cols.formula=p13_rpm8 cols.unit=rpm cols.decimals=0 category="Fuel" desc="Overrun fuel cut: the load (less the baro correction) it needs to be under, against rpm." at=rom_53e7+1
+rom_53e7:       DB  0FFh,01Dh ; 53E7
                 DB  0FCh,01Dh,0E0h,01Dh,0CDh,013h,083h,013h
-                DB  000h,013h,0FFh,023h,0FCh,023h,0E0h,014h
-                DB  0CDh,028h,0C0h,038h,000h,038h,0F8h,000h
-;  [info] rev-limit word pairs (16-bit, 'OBD1_16bit RPM' per p13info). Split here for labelling:
-;    5401=3000h 5403=012Ah 5405=00DFh 5407=0120h | 5409=00C1h 540B=00FAh 540D=0112h 540F=00F4h
-;    p13info: 5403 low-cam reset, 5407 low-cam set, 540B high-cam reset, 540F high-cam set.
-;    Code uses (5403,5407) when 0212h.5 set, else (540B,540F); the latter pair is also the boot
-;    default immediates @0C1E/0C23. See block at 1520.
+                DB  000h,013h ; 53F1
+;@ DecelCutLoadHold type=u8 count=6 colstride=2 formula=map_load_axis_mbar cols.axis=rom_53f3 cols.stride=2 cols.formula=p13_rpm8 cols.unit=rpm cols.decimals=0 category="Fuel" desc="Overrun fuel cut, once cut: the load it stays cut under, against rpm." at=rom_53f3+1
+rom_53f3:       DB  0FFh,023h,0FCh,023h,0E0h,014h ; 53F3
+                DB  0CDh,028h,0C0h,038h,000h,038h ; 53F9
+;@ BaroDecelLoad type=u8 count=2 colstride=2 formula=raw cols.axis=rom_53ff cols.stride=2 cols.formula=map_load_axis_mbar category="Fuel" desc="Taken off the load before the overrun cut's load check (197h), against barometric pressure." at=rom_53ff+1
+rom_53ff:       DB  0F8h,000h ; 53FF
                 DB  000h,030h
+;@ RevLimitLowResume type=u16 formula=rpm_period_word unit=rpm category="Limits" slot=stockrev.lowresume desc="The stock rev limiter (low cam): where the fuel comes back. Low cam: VTEC off, or code 22 stored; high cam: VTEC engaged. Fuel is cut above the cut point until the engine falls under the resume point; the boot starts from the high-cam pair as immediates (F4h/FAh)."
 revlimit_p1_reset_5403:
                 DB  02Ah,01h
                 DB  0DFh,00h
+;@ RevLimitLowCut type=u16 formula=rpm_period_word unit=rpm category="Limits" slot=stockrev.lowcut desc="The stock rev limiter (low cam): the cut point. Low cam: VTEC off, or code 22 stored; high cam: VTEC engaged. Fuel is cut above the cut point until the engine falls under the resume point; the boot starts from the high-cam pair as immediates (F4h/FAh)."
 revlimit_p1_set_5407:
                 DB  020h,01h
                 DB  0C1h,00h
+;@ RevLimitHighResume type=u16 formula=rpm_period_word unit=rpm category="Limits" slot=stockrev.highresume desc="The stock rev limiter (high cam): where the fuel comes back. Low cam: VTEC off, or code 22 stored; high cam: VTEC engaged. Fuel is cut above the cut point until the engine falls under the resume point; the boot starts from the high-cam pair as immediates (F4h/FAh)."
 revlimit_p2_reset_540b:
                 DB  0FAh,00h
                 DB  012h,01h
+;@ RevLimitHighCut type=u16 formula=rpm_period_word unit=rpm category="Limits" slot=stockrev.highcut desc="The stock rev limiter (high cam): the cut point. Low cam: VTEC off, or code 22 stored; high cam: VTEC engaged. Fuel is cut above the cut point until the engine falls under the resume point; the boot starts from the high-cam pair as immediates (F4h/FAh)."
 revlimit_p2_set_540f:
                 DB  0F4h,00h
-                DB  0F0h,000h,066h,086h,033h,083h,000h,080h
+                DB  0F0h,000h ; 5411
+;@ KnockLevels type=u16 count=12 formula=raw category="Knock" desc="Knock: the detection levels by rpm band (162h)."
+rom_5413:       DB  066h,086h,033h,083h,000h,080h ; 5413
                 DB  0DDh,07Dh,0AAh,07Ah,0AAh,07Ah,066h,086h
                 DB  033h,083h,000h,080h,0DDh,07Dh,0AAh,07Ah
-                DB  0AAh,07Ah,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
+                DB  0AAh,07Ah ; 5429
+;@ KnockLevels2 type=u16 count=12 formula=raw category="Knock" desc="Knock: detection levels by rpm band (166h; automatic, flag 21Fh.3 clear)."
+rom_542b:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh ; 542B
                 DB  0FFh,0FFh,0FFh,0FFh,000h,000h,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
-                DB  000h,000h,05Bh,004h,0CAh,004h,039h,005h
+                DB  000h,000h ; 5441
+;@ KnockLevels3 type=u16 count=12 formula=raw category="Knock" desc="Knock: detection levels by rpm band (166h; manual)."
+rom_5443:       DB  05Bh,004h,0CAh,004h,039h,005h ; 5443
                 DB  0A9h,005h,018h,006h,000h,000h,039h,005h
                 DB  0A9h,005h,018h,006h,088h,006h,0F7h,006h
-                DB  000h,000h,04Dh,075h,09Eh,0C5h,0FFh,000h
+                DB  000h,000h ; 5459
+;@ Stock_rom_545b type=u8 count=4 formula=raw category="Internal" desc="Stock data, 4 bytes, read by the code at sensor_bank_gate3_cmp_acc_2; its role not traced."
+rom_545b:       DB  04Dh,075h,09Eh,0C5h ; 545B
+;@ IdleAirCoolant type=u16 count=9 colstride=3 formula=raw cols.axis=rom_545f cols.stride=3 cols.formula=honda_temp_c category="Idle" desc="Idle air against coolant temperature (260h; manual)." at=rom_545f+1
+rom_545f:       DB  0FFh,000h ; 545F
                 DB  012h,0F5h,000h,012h,0E4h,080h,009h,0D0h
                 DB  080h,009h,0B9h,000h,015h,087h,000h,012h
                 DB  058h,000h,00Fh,02Eh,020h,001h,000h,020h
-                DB  001h,0FFh,000h,010h,0F5h,000h,010h,0D8h
+                DB  001h ; 5479
+;@ IdleAirCoolantAuto type=u16 count=9 colstride=3 formula=raw cols.axis=rom_547a cols.stride=3 cols.formula=honda_temp_c category="Idle" desc="Idle air against coolant temperature (260h; automatic)." at=rom_547a+1
+rom_547a:       DB  0FFh,000h,010h,0F5h,000h,010h,0D8h ; 547A
                 DB  000h,010h,0BAh,080h,009h,087h,000h,016h
                 DB  067h,000h,016h,04Dh,000h,00Fh,02Eh,020h
-                DB  001h,000h,020h,001h,0FFh,000h,040h,0F5h
+                DB  001h,000h,020h,001h ; 5491
+;@ IdleAirCoolant3 type=u16 count=9 colstride=3 formula=raw cols.axis=rom_5495 cols.stride=3 cols.formula=honda_temp_c category="Idle" desc="Idle air against coolant temperature (268h; manual)." at=rom_5495+1
+rom_5495:       DB  0FFh,000h,040h,0F5h ; 5495
                 DB  000h,040h,0E4h,000h,024h,0D0h,000h,024h
                 DB  0B9h,000h,02Dh,087h,000h,028h,058h,000h
-                DB  020h,02Eh,080h,00Dh,000h,080h,00Dh,0FFh
+                DB  020h,02Eh,080h,00Dh,000h,080h,00Dh ; 54A9
+;@ IdleAirCoolant3Auto type=u16 count=9 colstride=3 formula=raw cols.axis=rom_54b0 cols.stride=3 cols.formula=honda_temp_c category="Idle" desc="Idle air against coolant temperature (268h; automatic)." at=rom_54b0+1
+rom_54b0:       DB  0FFh ; 54B0
                 DB  000h,03Ch,0F5h,000h,03Ch,0D8h,000h,028h
                 DB  0BAh,000h,01Eh,087h,000h,01Eh,067h,000h
                 DB  01Eh,04Dh,000h,018h,02Eh,000h,00Fh,000h
-                DB  000h,00Fh,0FFh,000h,026h,0F5h,000h,026h
+                DB  000h,00Fh ; 54C9
+;@ IdleAirCoolant2 type=u16 count=9 colstride=3 formula=raw cols.axis=rom_54cb cols.stride=3 cols.formula=honda_temp_c category="Idle" desc="Idle air against coolant temperature (262h; manual)." at=rom_54cb+1
+rom_54cb:       DB  0FFh,000h,026h,0F5h,000h,026h ; 54CB
                 DB  0E4h,000h,016h,0D0h,000h,016h,0B9h,000h
                 DB  01Bh,087h,000h,018h,058h,000h,014h,02Eh
-                DB  000h,00Bh,000h,000h,00Bh,0FFh,000h,020h
+                DB  000h,00Bh,000h,000h,00Bh ; 54E1
+;@ IdleAirCoolant2Auto type=u16 count=9 colstride=3 formula=raw cols.axis=rom_54e6 cols.stride=3 cols.formula=honda_temp_c category="Idle" desc="Idle air against coolant temperature (262h; automatic)." at=rom_54e6+1
+rom_54e6:       DB  0FFh,000h,020h ; 54E6
                 DB  0F5h,000h,020h,0D8h,000h,020h,0BAh,000h
                 DB  019h,087h,000h,01Eh,067h,000h,01Eh,04Dh
                 DB  000h,018h,02Eh,000h,00Fh,000h,000h,00Fh
-                DB  0FFh,07Ah,0EDh,07Ah,094h,066h,062h,05Dh
-                DB  044h,053h,02Eh,046h,000h,046h,0FFh,086h
+;@ IdleControlRpm type=u8 count=7 colstride=2 formula=raw cols.axis=rom_5501 cols.stride=2 cols.formula=honda_temp_c category="Idle" desc="Idle: an rpm against coolant temperature (295h, the rpm byte): flag 216h.4 set above it (with 10 counts of hysteresis) - manual." at=rom_5501+1
+rom_5501:       DB  0FFh,07Ah,0EDh,07Ah,094h,066h,062h,05Dh
+                DB  044h,053h,02Eh,046h,000h,046h ; 5509
+;@ IdleControlRpmAuto type=u8 count=7 colstride=2 formula=raw cols.axis=rom_550f cols.stride=2 cols.formula=honda_temp_c category="Idle" desc="Idle: an rpm against coolant temperature (295h, the rpm byte): flag 216h.4 set above it (with 10 counts of hysteresis) - automatic." at=rom_550f+1
+rom_550f:       DB  0FFh,086h ; 550F
                 DB  0EDh,086h,094h,07Ah,062h,070h,044h,066h
-                DB  02Eh,066h,000h,066h,0FFh,0E2h,004h,0EDh
+                DB  02Eh,066h,000h,066h ; 5519
+;@ IdleTarget type=u16 count=7 colstride=3 formula=rpm_period_word cols.axis=rom_551d cols.stride=3 cols.formula=honda_temp_c category="Idle" slot=idle.target desc="Idle speed target against coolant temperature (286h, a crank period): 700 rpm warm, 1500 rpm cold. The idle valve is worked to hold it; just after a start IdleTargetStart is used instead." at=rom_551d+1
+rom_551d:       DB  0FFh,0E2h,004h,0EDh ; 551D
                 DB  0E2h,004h,094h,0A2h,005h,062h,05Eh,006h
                 DB  044h,053h,007h,02Eh,077h,00Ah,000h,077h
-                DB  00Ah,0FFh,04Fh,004h,0EDh,04Fh,004h,094h
+                DB  00Ah ; 5531
+;@ IdleTargetStart type=u16 count=7 colstride=3 formula=rpm_period_word cols.axis=rom_5532 cols.stride=3 cols.formula=honda_temp_c category="Idle" desc="Idle speed target just after a start, against coolant temperature (286h, a crank period): 950 rpm warm, 1700 rpm cold - for the first few seconds (until the time since start, 0FFh, passes 32h), then IdleTarget." at=rom_5532+1
+rom_5532:       DB  0FFh,04Fh,004h,0EDh,04Fh,004h,094h ; 5532
                 DB  0E2h,004h,062h,06Dh,005h,044h,01Bh,006h
-                DB  02Eh,0B6h,007h,000h,0B6h,007h,024h,00Ah
-                DB  02Eh,010h,00Ch,001h,001h,001h,001h,001h
-                DB  002h,001h,000h,000h,000h,000h,00Fh,000h
-                DB  006h,000h,005h,0FFh,070h,0EDh,070h,094h
+                DB  02Eh,0B6h,007h,000h,0B6h,007h ; 5541
+;@ IdleGains type=u8 count=3 formula=raw category="Idle" desc="Idle valve control: the gains (multiplying the speed error 0B4h into 24Ch, then 24Eh, and 0B2h into 250h) - one of four sets."
+rom_5547:       DB  024h,00Ah ; 5547
+                DB  02Eh ; 5549
+;@ IdleGains2 type=u8 count=3 formula=raw category="Idle" desc="Idle valve control: the gains (flag 216h.7) - one of four sets."
+rom_554a:       DB  010h,00Ch,001h ; 554A
+;@ IdleGains3 type=u8 count=3 formula=raw category="Idle" desc="Idle valve control: the gains - one of four sets."
+rom_554d:       DB  001h,001h,001h ; 554D
+;@ IdleGains4 type=u8 count=3 formula=raw category="Idle" desc="Idle valve control: the gains - one of four sets."
+rom_5550:       DB  001h ; 5550
+                DB  002h,001h,000h ; 5551
+;@ Stock_rom_5554 type=u16 count=1 formula=raw category="Internal" desc="Stock data, 2 bytes, read by the code at vemapscalar_gate; its role not traced."
+rom_5554:       DB  000h,000h ; 5554
+;@ Stock_rom_5556 type=u16 count=1 formula=raw category="Internal" desc="Stock data, 2 bytes, read by the code at vemapscalar_gate; its role not traced."
+rom_5556:       DB  000h,00Fh ; 5556
+;@ Stock_rom_5558 type=u16 count=1 formula=raw category="Internal" desc="Stock data, 2 bytes, read by the code at warmcold_tm2_check_if_ram220_bit0_clr; its role not traced."
+rom_5558:       DB  000h ; 5558
+                DB  006h ; 5559
+;@ Stock_rom_555a type=u16 count=1 formula=raw category="Internal" desc="Stock data, 2 bytes, read by the code at int_break_load_imm; its role not traced."
+rom_555a:       DB  000h,005h ; 555A
+;@ IdleCoolantRpm type=u8 count=7 colstride=2 formula=raw cols.axis=rom_555c cols.stride=2 cols.formula=honda_temp_c category="Idle" desc="Idle: an rpm against coolant temperature (the rpm byte), compared with the rpm; above it the idle state's 2F6h is cleared." at=rom_555c+1
+rom_555c:       DB  0FFh,070h,0EDh,070h,094h ; 555C
                 DB  063h,062h,05Ah,044h,050h,02Eh,043h,000h
-                DB  043h,0FFh,008h,000h,0EDh,008h,000h,094h
+                DB  043h ; 5569
+;@ IdleCoolantPeriod type=u16 count=7 colstride=3 formula=raw cols.axis=rom_556a cols.stride=3 cols.formula=honda_temp_c category="Idle" desc="Idle: a crank period against coolant temperature, compared with 0B2h; over it the idle state's 2F6h is cleared." at=rom_556a+1
+rom_556a:       DB  0FFh,008h,000h,0EDh,008h,000h,094h ; 556A
                 DB  012h,000h,062h,025h,000h,044h,02Eh,000h
-                DB  02Eh,05Ah,000h,000h,05Ah,000h,0FFh,070h
+                DB  02Eh,05Ah,000h,000h,05Ah,000h ; 5579
+;@ IdleCoolantStep type=u8 count=7 colstride=2 formula=raw cols.axis=rom_557f cols.stride=2 cols.formula=honda_temp_c category="Idle" desc="Idle: a value against coolant temperature into 2F6h (the idle state's step)." at=rom_557f+1
+rom_557f:       DB  0FFh,070h ; 557F
                 DB  0EDh,070h,094h,054h,062h,048h,044h,040h
-                DB  02Eh,034h,000h,034h,0FFh,01Ah,0EDh,01Ah
+                DB  02Eh,034h,000h,034h ; 5589
+;@ IdleCoolantGain type=u8 count=7 colstride=2 formula=raw cols.axis=rom_558d cols.stride=2 cols.formula=honda_temp_c category="Idle" desc="Idle: a multiplier against coolant temperature on the period difference (0B2h)." at=rom_558d+1
+rom_558d:       DB  0FFh,01Ah,0EDh,01Ah ; 558D
                 DB  094h,010h,062h,00Ah,044h,008h,02Eh,005h
-                DB  000h,005h,0FFh,063h,04Dh,063h,020h,046h
-                DB  017h,03Eh,000h,03Eh,0FFh,059h,04Dh,059h
-                DB  02Dh,04Bh,017h,03Eh,000h,03Eh,0FFh,0C0h
+                DB  000h,005h ; 5599
+;@ IdleEldRpm2 type=u8 count=5 colstride=2 formula=raw cols.axis=rom_559b cols.stride=2 cols.formula=p13_rpm8 cols.unit=rpm cols.decimals=0 category="Idle" desc="Idle air for the electrical load: a second factor against rpm." at=rom_559b+1
+rom_559b:       DB  0FFh,063h,04Dh,063h,020h,046h ; 559B
+                DB  017h,03Eh,000h,03Eh ; 55A1
+;@ IdleEldRpm type=u8 count=5 colstride=2 formula=raw cols.axis=rom_55a5 cols.stride=2 cols.formula=p13_rpm8 cols.unit=rpm cols.decimals=0 category="Idle" desc="Idle air for the electrical load, against rpm: the ELD reading is scaled by it." at=rom_55a5+1
+rom_55a5:       DB  0FFh,059h,04Dh,059h ; 55A5
+                DB  02Dh,04Bh,017h,03Eh,000h,03Eh ; 55A9
+rom_55af:       DB  0FFh,0C0h ; 55AF
                 DB  005h,0A7h,030h,003h,082h,050h,001h,072h
                 DB  010h,001h,060h,000h,000h,000h,000h,000h
-                DB  0FFh,080h,004h,040h,080h,004h,033h,080h
-                DB  006h,02Eh,080h,007h,000h,080h,007h,0FFh
+;@ IdleIntakeAir type=u16 count=5 colstride=3 formula=raw cols.axis=rom_55c1 cols.stride=3 cols.formula=honda_temp_c category="Idle" desc="Idle: against intake air temperature (242h), multiplied with IdleIntakeAirRpm." at=rom_55c1+1
+rom_55c1:       DB  0FFh,080h,004h,040h,080h,004h,033h,080h
+                DB  006h,02Eh,080h,007h,000h,080h,007h ; 55C9
+;@ IdleIntakeAirRpm type=u8 count=5 colstride=2 formula=raw cols.axis=rom_55d0 cols.stride=2 cols.formula=p13_rpm8 cols.unit=rpm cols.decimals=0 category="Idle" desc="Idle: against rpm, multiplied with IdleIntakeAir (242h)." at=rom_55d0+1
+rom_55d0:       DB  0FFh ; 55D0
                 DB  0B8h,0A0h,0B8h,080h,09Ch,040h,080h,000h
-                DB  080h,0FFh,040h,00Bh,0F5h,040h,00Bh,0D0h
+                DB  080h ; 55D9
+;@ IdleCoolantAir type=u16 count=9 colstride=3 formula=raw cols.axis=rom_55da cols.stride=3 cols.formula=honda_temp_c category="Idle" desc="Idle: a value against coolant temperature (23Eh), the idle air the cold engine is held to." at=rom_55da+1
+rom_55da:       DB  0FFh,040h,00Bh,0F5h,040h,00Bh,0D0h ; 55DA
                 DB  080h,009h,0BAh,000h,008h,094h,000h,00Bh
                 DB  057h,080h,00Dh,044h,040h,009h,028h,040h
-                DB  005h,000h,040h,005h,0FFh,0FFh,040h,005h
+                DB  005h,000h,040h,005h ; 55F1
+;@ IdleAirTargetPeriod type=u16 count=5 colstride=4 formula=raw cols.axis=rom_55f5 cols.type=u16 cols.stride=4 cols.formula=rpm_period_word cols.unit=rpm category="Idle" desc="Idle: the least idle air against the idle target (286h) while cold (coolant byte 38h or more)." at=rom_55f5+2
+rom_55f5:       DB  0FFh,0FFh,040h,005h ; 55F5
                 DB  0C5h,00Ah,040h,005h,077h,00Ah,040h,005h
                 DB  045h,009h,080h,009h,000h,000h,080h,009h
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh
+;@ IdleDashpot type=u16 count=8 colstride=3 formula=raw cols.axis=idle_temp_hyst3_tbl cols.stride=3 cols.formula=p13_rpm8 cols.unit=rpm cols.decimals=0 category="Idle" desc="Idle air held open as the revs fall with the throttle shut (the dashpot, 25Eh), against rpm: low cam." at=idle_temp_hyst3_tbl+1
 idle_temp_hyst3_tbl:       DB  0FFh,000h,007h,0DAh,000h,007h,0D0h,000h
                 DB  024h,0C3h,080h,01Fh,0ADh,050h,012h,090h
                 DB  0E0h,00Eh,066h,000h,000h,000h,000h,000h
+;@ IdleDashpotHigh type=u16 count=8 colstride=3 formula=raw cols.axis=idle_temp_hyst3_tbl_2 cols.stride=3 cols.formula=p13_rpm8 cols.unit=rpm cols.decimals=0 category="Idle" desc="Idle air held open as the revs fall with the throttle shut (the dashpot, 25Eh), against rpm: VTEC engaged." at=idle_temp_hyst3_tbl_2+1
 idle_temp_hyst3_tbl_2:       DB  0FFh,000h,02Ah,0F0h,000h,02Ah,0E0h,000h
                 DB  033h,0DAh,0D0h,029h,0D3h,000h,026h,0CAh
                 DB  000h,00Bh,0C0h,000h,000h,000h,000h,000h
+;@ BaroTable299 type=u8 count=2 colstride=2 formula=raw cols.axis=dcode14_check_tbl cols.stride=2 cols.formula=map_load_axis_mbar category="Sensors" desc="Against barometric pressure (299h)." at=dcode14_check_tbl+1
 dcode14_check_tbl:       DB  0F7h,080h,060h,0C2h
+;@ IdleAirCoolant4 type=u16 count=9 colstride=3 formula=raw cols.axis=overrev_hardcap_compare_tbl cols.stride=3 cols.formula=honda_temp_c category="Idle" desc="Idle air against coolant temperature (264h; manual)." at=overrev_hardcap_compare_tbl+1
 overrev_hardcap_compare_tbl:       DB  0FFh,000h,040h,0F1h,000h,040h,0E7h,000h
                 DB  032h,0DEh,000h,028h,0D0h,000h,01Dh,0BAh
                 DB  000h,017h,0A1h,000h,010h,062h,000h,000h
                 DB  000h,000h,000h
+;@ IdleAirCoolant4Auto type=u16 count=9 colstride=3 formula=raw cols.axis=overrev_hardcap_compare_tbl_2 cols.stride=3 cols.formula=honda_temp_c category="Idle" desc="Idle air against coolant temperature (264h; automatic)." at=overrev_hardcap_compare_tbl_2+1
 overrev_hardcap_compare_tbl_2:       DB  0FFh,000h,040h,0F1h,000h,040h,0E7h,000h
                 DB  03Dh,0DEh,000h,031h,0D0h,000h,022h,0BAh
                 DB  000h,019h,0A1h,000h,012h,062h,000h,000h
                 DB  000h,000h,000h
+;@ IdleValveCurrent type=u16 count=9 colstride=4 formula=raw cols.axis=idle_gear_target_store_tbl cols.type=u16 cols.stride=4 cols.formula=raw category="Idle" desc="Idle: the idle valve's current target (26Eh) against the air wanted (23Ch)." at=idle_gear_target_store_tbl+2
 idle_gear_target_store_tbl:       DB  0FFh,0FFh,0C0h,0FFh,000h,040h,000h,0F0h,07Ah,02Ch
                 DB  000h,0C0h,0D7h,01Bh,000h,0A0h,0E3h,00Dh,000h,080h
                 DB  0DEh,004h,000h,060h,016h,002h,000h,050h,0B4h,000h
                 DB  066h,046h,000h,000h,099h,039h,000h,000h,000h,000h
+;@ VTECLoad type=u8 count=7 colstride=2 formula=map_load_axis_mbar cols.axis=injector_effective_pw_skip_tbl cols.stride=2 cols.formula=p13_rpm8 cols.unit=rpm cols.decimals=0 category="VTEC" slot=vtec.stock.curve desc="Stock VTEC: the load (the map load byte) needed against rpm, between the with-load and any-load points; 16 counts less once in." at=injector_effective_pw_skip_tbl+1
 injector_effective_pw_skip_tbl:       DB  0FFh,000h,0DCh,000h,0D9h,050h,0D4h,0D0h
                 DB  0CFh,0F0h,0CDh,0FFh,000h,0FFh,000h,000h
                 DB  000h,000h,000h,000h,000h,000h,000h,000h
                 DB  000h,000h,000h,000h,000h,000h,000h,000h
                 DB  000h,000h,000h,000h,000h,000h,000h,000h
                 DB  000h,000h,000h,000h,000h,000h
+;@ InjectorTimingCoolant type=u16 count=8 colstride=3 formula=raw cols.axis=overrev_hardcap_compare_tbl_3 cols.stride=3 cols.formula=honda_temp_c category="Fuel" desc="Against coolant temperature (1B0h, a word): what each cylinder's injector start countdown (398h-) is loaded with on its tooth." at=overrev_hardcap_compare_tbl_3+1
 overrev_hardcap_compare_tbl_3:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,000h,000h,000h
@@ -9453,19 +9693,27 @@ overrev_hardcap_compare_tbl_3:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  000h,000h,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
+;@ VtecChangeTimingHigh type=u8 count=20 formula="(x - 128) / 4" inverse="x * 4 + 128" unit=° decimals=2 cols.axis=tbl_rpm_scalar_hi40 cols.type=u16 cols.formula=rpm_period_word category="VTEC" desc="High cam: the timing added during the VTEC change-over (2C4h, 80h = none; FFh here), against rpm." at=tipin_decay_zero_tbl
+;@ VtecChangeTimingLow type=u8 count=20 formula="(x - 128) / 4" inverse="x * 4 + 128" unit=° decimals=2 cols.axis=tbl_rpm_scalar_lo40 cols.type=u16 cols.formula=rpm_period_word category="VTEC" desc="Low cam: the timing added during the VTEC change-over (2C4h, 80h = none), against rpm." at=tipin_decay_zero_tbl-20
 tipin_decay_zero_tbl:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
+;@ MapFailsafeLoad type=u8 count=2 colstride=2 formula=map_load_axis_mbar cols.axis=tbl_tps_5736 cols.stride=2 cols.formula=tps_pct category="Sensors" desc="The load used instead of the MAP sensor's when it has failed (codes 3/5): against throttle - the fail-safe load." at=tbl_tps_5736+1
 tbl_tps_5736:       DB  066h,0E0h,01Ah,060h
 tbl_ect_simulate_ramp:       DB  0E1h,0CFh,0A0h,06Dh,028h
+;@ IdleValveCheckLow type=u16 count=2 colstride=3 formula=raw cols.axis=tbl_dcode14_lo cols.stride=3 cols.formula=p13_batt_v category="Internal" desc="The idle valve check (code 14): the lowest current reading against battery voltage." at=tbl_dcode14_lo+1
 tbl_dcode14_lo:       DB  0A7h,0CDh,0FCh,034h,000h,038h
+;@ IdleValveCheckHigh type=u16 count=2 colstride=3 formula=raw cols.axis=tbl_dcode14_hi cols.stride=3 cols.formula=p13_batt_v category="Internal" desc="The idle valve check (code 14): the highest current reading against battery voltage." at=tbl_dcode14_hi+1
 tbl_dcode14_hi:       DB  0FFh,000h,000h,000h,000h,000h
+;@ DecelCutThrottle type=u8 count=2 colstride=2 formula=p13_rpm8 cols.axis=revlimiter_engage_resume_check_tbl cols.stride=2 cols.formula=tps_pct category="Limits" desc="With the throttle nearly shut (under 2Eh) the fuel is cut above this rpm, against throttle (above 2000 rpm whatever the throttle when its sensor has failed, code 7): part of the overrun fuel cut." at=revlimiter_engage_resume_check_tbl+1
 revlimiter_engage_resume_check_tbl:       DB  02Eh,060h,022h
 dtc_scan_new_code_tbl:       DB  04Dh,00Fh,00Fh,00Fh,02Dh,02Dh,04Bh,00Fh
                 DB  000h,00Fh,02Dh,00Fh,02Dh,02Dh,0FFh,000h
                 DB  02Dh,006h,02Dh,00Fh,00Fh,02Dh,02Dh,0FFh
                 DB  0FFh,007h,007h,014h,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh
+;@ Stock_clamp_result_store_tbl type=u8 count=6 formula=raw category="Internal" desc="Stock data, 6 bytes, read by the code at clamp_result_store_sub_load_dp; its role not traced."
 clamp_result_store_tbl:       DB  02Dh,02Dh,007h,006h,006h,006h
+;@ Stock_learn_table1_check_tbl type=u8 count=10 formula=raw category="Internal" desc="Stock data, 10 bytes, read by the code at learn_table1_check; its role not traced."
 learn_table1_check_tbl:       DB  019h,000h,019h,019h,019h,0FFh,0FFh,0FFh,0FFh,0B3h
 dtc_active_confirm_tbl:       DB  00Bh,003h,006h,007h,005h,001h,008h,00Ah
                 DB  000h,00Ch,00Ch,00Dh,00Eh,011h,000h,000h
@@ -9474,9 +9722,12 @@ dtc_active_confirm_tbl:       DB  00Bh,003h,006h,007h,005h,001h,008h,00Ah
                 DB  000h,004h,008h,009h,00Fh,01Eh,01Fh,010h
                 DB  000h,004h,008h,009h,000h,000h,000h,000h
                 DB  01Dh,0A1h,044h,034h
+;@ Stock_tbl_map_sign type=u8 count=4 formula=raw category="Internal" desc="Stock data, 4 bytes, read by the code at overrev_hardcap_compare_store_carry_ram232_bit4; its role not traced."
 tbl_map_sign:       DB  000h,000h,000h,000h
+;@ Stock_rpm_decel_limit_check_tbl type=u8 count=12 formula=raw category="Internal" desc="Stock data, 12 bytes, read by the code at rpm_decel_limit_check; its role not traced."
 rpm_decel_limit_check_tbl:       DB  0D4h,001h,0A9h,003h,053h,007h,000h,000h
                 DB  000h,000h,0FFh,0FFh
+;@ Stock_crank_sync_exit_jump_tbl type=u8 count=24 formula=raw category="Internal" desc="Stock jump addresses (code; do not edit), 24 bytes, read by the code at crank_sync_exit_jump_clear_acc; its role not traced."
 crank_sync_exit_jump_tbl:       DB  084h,094h,0A4h,0B4h,006h,016h,026h,036h
                 DB  046h,056h,06Eh,07Eh,08Eh,09Eh,0AEh,0BEh
                 DB  00Ch,01Ch,02Ch,03Ch,04Ch,05Ch,064h,074h
@@ -9485,11 +9736,14 @@ crank_sync_exit_jump_tbl:       DB  084h,094h,0A4h,0B4h,006h,016h,026h,036h
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh
+;@ Stock_knockretard_store_tbl type=u8 count=3 formula=raw category="Internal" desc="Stock data, 3 bytes, read by the code at knockretard_store_load_ram280; its role not traced."
 knockretard_store_tbl:       DB  088h,0FFh,076h
+;@ IntakeAirLoad type=u8 count=5 colstride=2 formula=raw cols.axis=sensor_bank_gate3_tbl cols.stride=2 cols.formula=honda_temp_c category="Sensors" desc="Against intake air temperature (into r2, then 280h), with the load over zero." at=sensor_bank_gate3_tbl+1
 sensor_bank_gate3_tbl:       DB  0FFh,000h,087h,000h,057h,011h,013h,019h,000h,019h
 sensor_bank_gate3_tbl_2:       DB  0FFh,000h,087h,000h,057h,000h,013h,000h,000h,000h
 fuelcuttrack_store_tbl:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
+;@ Stock_fuelcuttrack_store_tbl_2 type=u8 count=10 formula=raw category="Internal" desc="Stock data, 10 bytes, read by the code at fuelcuttrack_store_sub_load_x1; its role not traced."
 fuelcuttrack_store_tbl_2:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
@@ -9527,6 +9781,7 @@ fuelcuttrack_store_tbl_2:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
+;@ Stock_idle_temp_hyst3_tbl_3 type=u8 count=8 formula=raw category="Internal" desc="Stock data, 8 bytes, read by the code at idle_temp_hyst3_load_er0; its role not traced."
 idle_temp_hyst3_tbl_3:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
@@ -9650,6 +9905,7 @@ idle_temp_hyst3_tbl_3:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
+;@ Stock_o2trim_add_clamp_tbl type=u16 count=8 formula=raw category="Internal" desc="Stock data, 16 bytes, read by the code at o2trim_add_clamp_sub_load_imm_3; its role not traced."
 o2trim_add_clamp_tbl:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
 sensor_bank_gate3_tbl_3:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
@@ -9716,23 +9972,31 @@ sensor_bank_gate3_tbl_3:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
 calchecksum_loop_tbl:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
+;@ RpmScalerLow type=u16 count=20 formula=rpm_period_word category="Axes" desc="Rpm axis of the low-cam maps (crank periods, falling: the rpm rising)."
 tbl_rpm_scalar_lo40:       DB  0A6h,00Eh,0C5h,00Ah,076h,00Ah,045h,009h,053h,007h
                 DB  0A2h,005h,0E2h,004h,011h,004h,07Ch,003h,0EEh,002h
                 DB  09Dh,002h,071h,002h,027h,002h,0EDh,001h,0D4h,001h
                 DB  0B4h,001h,08Eh,001h,06Fh,001h,038h,001h,0FAh,000h
+;@ RpmScalerHigh type=u16 count=20 formula=rpm_period_word category="Axes" desc="Rpm axis of the high-cam maps (crank periods, falling: the rpm rising)."
 tbl_rpm_scalar_hi40:       DB  0A2h,005h,0E2h,004h,011h,004h,07Ch,003h,0EEh,002h
                 DB  09Dh,002h,071h,002h,0FAh,001h,0D4h,001h,0BEh,001h
                 DB  0A0h,001h,08Eh,001h,077h,001h,061h,001h,04Eh,001h
                 DB  038h,001h,020h,001h,013h,001h,0FDh,000h,0EAh,000h
+;@ MapScaler type=u8 count=10 formula=map_load_axis_mbar category="Axes" desc="Load axis of the fuel and ignition maps (the map load byte, 288h: (MAP - 1800h) >> 7)."
 tbl_map_axis_mbar10:       DB  000h,030h,050h,070h,090h,0B0h,0D0h,0E0h,0F0h,0FFh
+;@ VESlopeLow type=u8 count=20 formula=raw cols.axis=tbl_rpm_scalar_lo40 cols.type=u16 cols.formula=rpm_period_word category="VE" desc="The low cam's speed-density base fuel: at each rpm row, the slope against load - the base pulse is this x the load (135h) / 16, plus the offset (VEOffsetLow) x 2. One straight line against load for each rpm row; between rows it is interpolated."
+;@ VEOffsetLow type=u8 count=20 formula="x - 128" inverse="x + 128" cols.axis=tbl_rpm_scalar_lo40 cols.type=u16 cols.formula=rpm_period_word category="VE" desc="The low cam's speed-density base fuel: at each rpm row, the offset (80h = none) added, x 2, to the slope (VESlopeLow) x the load / 16." at=tbl_fuel_row_mult_lo40+20
 tbl_fuel_row_mult_lo40:       DB  076h,075h,075h,077h,077h,07Ch,080h,080h,081h,088h
                 DB  086h,083h,086h,088h,08Ch,093h,093h,095h,094h,085h
                 DB  0A1h,0A8h,0AAh,0A9h,0A2h,096h,098h,09Eh,0A6h,09Eh
                 DB  099h,09Dh,09Eh,0ABh,09Ah,0A3h,0A3h,0A6h,083h,063h
+;@ VESlopeHigh type=u8 count=20 formula=raw cols.axis=tbl_rpm_scalar_hi40 cols.type=u16 cols.formula=rpm_period_word category="VE" desc="The high cam's speed-density base fuel: at each rpm row, the slope against load - the base pulse is this x the load (135h) / 16, plus the offset (VEOffsetHigh) x 2. One straight line against load for each rpm row; between rows it is interpolated."
+;@ VEOffsetHigh type=u8 count=20 formula="x - 128" inverse="x + 128" cols.axis=tbl_rpm_scalar_hi40 cols.type=u16 cols.formula=rpm_period_word category="VE" desc="The high cam's speed-density base fuel: at each rpm row, the offset (80h = none) added, x 2, to the slope (VESlopeHigh) x the load / 16." at=tbl_fuel_row_mult_hi40+20
 tbl_fuel_row_mult_hi40:       DB  097h,097h,097h,097h,097h,095h,092h,09Eh,09Ah,09Ah
                 DB  094h,094h,09Ah,09Fh,0A1h,0A8h,0AEh,0ADh,0A8h,0A2h
                 DB  002h,002h,002h,002h,002h,002h,002h,002h,01Dh,025h
                 DB  038h,034h,04Eh,068h,085h,084h,08Ch,07Ah,06Ch,06Ah
+;@ FuelLow type=u8 size=20x10 stride=10 formula="x * 100 / 128" inverse="x * 128 / 100" unit=% decimals=1 rows.axis=RpmScalerLow rows.type=u16 rows.formula=rpm_period_word cols.axis=tbl_map_axis_mbar10 cols.formula=map_load_axis_mbar category="Fuel" desc="Low-cam fuel map (P13): the open-loop enrichment on the speed-density base (VE): 80h = 100 %, no enrichment. At 80h or under the ECU stays at its closed-loop 100 %; over 80h it goes open loop and rich by this much, at most FuelMapCap (137.5 % stock). Not a fuel amount like the P30's maps."
 tbl_fuel_lo_cam:       DB  080h,080h,080h,090h,08Eh,091h,09Ch,0AEh,0A7h,0A7h
                 DB  080h,080h,080h,08Ch,08Eh,08Fh,0A1h,0AEh,0B0h,0B0h
                 DB  080h,080h,080h,091h,092h,08Fh,0A1h,0AEh,0AFh,0AFh
@@ -9753,6 +10017,7 @@ tbl_fuel_lo_cam:       DB  080h,080h,080h,090h,08Eh,091h,09Ch,0AEh,0A7h,0A7h
                 DB  080h,09Eh,096h,093h,092h,093h,09Ch,09Bh,09Ah,09Ah
                 DB  080h,0A3h,099h,097h,094h,08Ah,093h,091h,08Fh,08Fh
                 DB  080h,0A0h,0AAh,0ABh,0ABh,0AAh,0ADh,0ADh,0ADh,0ADh
+;@ FuelHigh type=u8 size=20x10 stride=10 formula="x * 100 / 128" inverse="x * 128 / 100" unit=% decimals=1 rows.axis=RpmScalerHigh rows.type=u16 rows.formula=rpm_period_word cols.axis=tbl_map_axis_mbar10 cols.formula=map_load_axis_mbar category="Fuel" desc="High-cam fuel map (P13): the open-loop enrichment on the speed-density base (VE): 80h = 100 %, no enrichment. At 80h or under the ECU stays at its closed-loop 100 %; over 80h it goes open loop and rich by this much, at most FuelMapCap (137.5 % stock). Not a fuel amount like the P30's maps."
 tbl_fuel_hi_cam:       DB  080h,080h,080h,082h,084h,085h,08Ah,092h,095h,095h
                 DB  080h,080h,080h,082h,084h,085h,08Ah,092h,095h,095h
                 DB  080h,080h,080h,082h,084h,085h,08Ah,092h,095h,095h
@@ -9773,6 +10038,7 @@ tbl_fuel_hi_cam:       DB  080h,080h,080h,082h,084h,085h,08Ah,092h,095h,095h
                 DB  080h,099h,0A0h,0A0h,0ACh,0A5h,0A2h,0A1h,09Dh,09Dh
                 DB  080h,099h,099h,09Ah,0B0h,0ADh,0A8h,0A8h,0A5h,0A5h
                 DB  080h,08Dh,0A4h,0A3h,0ADh,0A9h,0A7h,0A7h,0A3h,0A3h
+;@ FuelCorrLowAuto type=u8 size=11x10 stride=10 formula="x * 100 / 128" inverse="x * 128 / 100" unit=% decimals=1 rows.axis=tbl_rpm_scalar_lo40+8 rows.type=u16 rows.formula=rpm_period_word cols.axis=tbl_map_axis_mbar10 cols.formula=map_load_axis_mbar category="Fuel" desc="Low cam, automatic: a fuel correction on the map's value for rpm rows 4-13 (18Fh; 80h = 100 %)."
 tbl_corr_map_a_623a:       DB  080h,080h,080h,080h,080h,080h,080h,080h,080h,080h
                 DB  080h,080h,07Ah,07Ah,078h,077h,080h,080h,080h,080h
                 DB  080h,080h,07Ah,07Ah,078h,077h,080h,080h,080h,080h
@@ -9784,6 +10050,7 @@ tbl_corr_map_a_623a:       DB  080h,080h,080h,080h,080h,080h,080h,080h,080h,080h
                 DB  080h,080h,07Ah,07Ah,078h,078h,07Bh,080h,080h,080h
                 DB  080h,080h,07Eh,07Eh,07Eh,07Eh,080h,080h,080h,080h
                 DB  080h,080h,080h,080h,080h,080h,080h,080h,080h,080h
+;@ FuelCorrLow type=u8 size=11x10 stride=10 formula="x * 100 / 128" inverse="x * 128 / 100" unit=% decimals=1 rows.axis=tbl_rpm_scalar_lo40+8 rows.type=u16 rows.formula=rpm_period_word cols.axis=tbl_map_axis_mbar10 cols.formula=map_load_axis_mbar category="Fuel" desc="Low cam, manual: a fuel correction on the map's value for rpm rows 4-13 (18Fh; 80h = 100 %)."
 tbl_corr_map_b_62a8:       DB  080h,080h,080h,080h,080h,080h,080h,080h,080h,080h
                 DB  080h,080h,07Ah,07Ah,078h,077h,080h,080h,080h,080h
                 DB  080h,080h,07Ah,07Ah,078h,077h,080h,080h,080h,080h
@@ -9795,6 +10062,7 @@ tbl_corr_map_b_62a8:       DB  080h,080h,080h,080h,080h,080h,080h,080h,080h,080h
                 DB  080h,080h,07Ah,07Ah,078h,07Bh,080h,080h,080h,080h
                 DB  080h,080h,07Eh,07Eh,07Eh,07Eh,080h,080h,080h,080h
                 DB  080h,080h,080h,080h,080h,080h,080h,080h,080h,080h
+;@ FuelCorrHighAuto type=u8 size=11x10 stride=10 formula="x * 100 / 128" inverse="x * 128 / 100" unit=% decimals=1 rows.axis=tbl_rpm_scalar_hi40+8 rows.type=u16 rows.formula=rpm_period_word cols.axis=tbl_map_axis_mbar10 cols.formula=map_load_axis_mbar category="Fuel" desc="High cam, automatic: a fuel correction on the map's value for rpm rows 4-13 (18Fh; 80h = 100 %)."
 tbl_corr_map_c_6316:       DB  080h,080h,080h,080h,080h,080h,080h,080h,080h,080h
                 DB  080h,080h,080h,080h,080h,080h,080h,080h,080h,080h
                 DB  080h,080h,080h,080h,080h,080h,080h,080h,080h,080h
@@ -9806,6 +10074,7 @@ tbl_corr_map_c_6316:       DB  080h,080h,080h,080h,080h,080h,080h,080h,080h,080h
                 DB  080h,080h,080h,080h,080h,080h,080h,080h,080h,080h
                 DB  080h,080h,080h,080h,080h,080h,080h,080h,080h,080h
                 DB  080h,080h,080h,080h,080h,080h,080h,080h,080h,080h
+;@ FuelCorrHigh type=u8 size=11x10 stride=10 formula="x * 100 / 128" inverse="x * 128 / 100" unit=% decimals=1 rows.axis=tbl_rpm_scalar_hi40+8 rows.type=u16 rows.formula=rpm_period_word cols.axis=tbl_map_axis_mbar10 cols.formula=map_load_axis_mbar category="Fuel" desc="High cam, manual: a fuel correction on the map's value for rpm rows 4-13 (18Fh; 80h = 100 %)."
 tbl_corr_map_d_6384:       DB  080h,080h,080h,080h,080h,080h,080h,080h,080h,080h
                 DB  080h,080h,080h,080h,080h,080h,080h,080h,080h,080h
                 DB  080h,080h,080h,080h,080h,080h,080h,080h,080h,080h
@@ -9817,7 +10086,9 @@ tbl_corr_map_d_6384:       DB  080h,080h,080h,080h,080h,080h,080h,080h,080h,080h
                 DB  080h,080h,080h,080h,080h,080h,080h,080h,080h,080h
                 DB  080h,080h,080h,080h,080h,080h,080h,080h,080h,080h
                 DB  080h,080h,080h,080h,080h,080h,080h,080h,080h,080h
+;@ Stock_tbl_aux_63f2 type=u8 count=6 formula=raw category="Internal" desc="Stock data, 6 bytes, read by the code at tps_interp_exact_match_andb_acc; its role not traced."
 tbl_aux_63f2:       DB  040h,000h,06Bh,0BFh,08Dh,02Bh
+;@ IgnitionLow type=u8 size=20x10 stride=10 formula=p13_advance rows.axis=RpmScalerLow rows.type=u16 rows.formula=rpm_period_word cols.axis=tbl_map_axis_mbar10 cols.formula=map_load_axis_mbar category="Ignition" desc="Low-cam ignition map (P13), degrees before TDC."
 tbl_ign_lo_cam:       DB  055h,055h,055h,055h,02Eh,00Eh,000h,000h,000h,000h
                 DB  055h,055h,055h,055h,030h,00Fh,000h,000h,000h,000h
                 DB  055h,055h,055h,055h,038h,010h,000h,000h,000h,000h
@@ -9838,6 +10109,7 @@ tbl_ign_lo_cam:       DB  055h,055h,055h,055h,02Eh,00Eh,000h,000h,000h,000h
                 DB  0B3h,0AEh,0A7h,0A0h,09Bh,095h,091h,086h,082h,082h
                 DB  0B3h,0AEh,0A9h,0A7h,0A6h,0A0h,09Bh,099h,093h,093h
                 DB  0B3h,0AEh,0A9h,0A7h,0A6h,0A0h,09Bh,099h,093h,093h
+;@ IgnitionLowAltAuto type=u8 size=11x10 stride=10 formula=p13_advance unit="deg BTDC" rows.axis=tbl_rpm_scalar_lo40+8 rows.type=u16 rows.formula=rpm_period_word cols.axis=tbl_map_axis_mbar10 cols.formula=map_load_axis_mbar category="Ignition" desc="Low cam, automatic: the ignition map used instead of IgnitionLow for rpm rows 4-13 while code 12 is stored or flag 218h.4 is set (degrees before TDC)."
 tbl_ign_lo_cam_alt1:       DB  055h,055h,055h,055h,055h,03Bh,01Dh,019h,011h,011h
                 DB  074h,074h,074h,072h,06Fh,051h,033h,02Ah,022h,022h
                 DB  085h,085h,085h,082h,077h,057h,03Bh,033h,02Fh,02Fh
@@ -9849,6 +10121,7 @@ tbl_ign_lo_cam_alt1:       DB  055h,055h,055h,055h,055h,03Bh,01Dh,019h,011h,011h
                 DB  0A4h,0A4h,0A0h,09Bh,099h,08Ah,07Dh,074h,074h,074h
                 DB  0A9h,0A6h,0A3h,0A1h,09Eh,08Dh,07Dh,076h,076h,076h
                 DB  0ADh,0AAh,0A9h,0A3h,09Eh,08Eh,07Eh,07Bh,07Bh,07Bh
+;@ IgnitionLowAlt type=u8 size=11x10 stride=10 formula=p13_advance unit="deg BTDC" rows.axis=tbl_rpm_scalar_lo40+8 rows.type=u16 rows.formula=rpm_period_word cols.axis=tbl_map_axis_mbar10 cols.formula=map_load_axis_mbar category="Ignition" desc="Low cam, manual: the ignition map used instead of IgnitionLow for rpm rows 4-13 while code 12 is stored or flag 218h.4 is set (degrees before TDC)."
 tbl_ign_lo_cam_alt2:       DB  055h,055h,055h,055h,055h,03Bh,01Dh,019h
                 DB  011h,011h,074h,074h,074h,072h,06Fh,051h
                 DB  033h,02Ah,022h,022h,085h,085h,085h,082h
@@ -9863,6 +10136,7 @@ fueltbl_range_check_tbl:       DB  061h,05Dh,05Dh,05Dh,09Fh,09Fh,09Fh,09Bh
                 DB  074h,074h,0A9h,0A6h,0A3h,0A1h,09Eh,08Dh
                 DB  07Dh,076h,076h,076h,0ADh,0AAh,0A9h,0A3h
                 DB  09Eh,08Eh,07Eh,07Bh,07Bh,07Bh
+;@ IgnitionHigh type=u8 size=20x10 stride=10 formula=p13_advance rows.axis=RpmScalerHigh rows.type=u16 rows.formula=rpm_period_word cols.axis=tbl_map_axis_mbar10 cols.formula=map_load_axis_mbar category="Ignition" desc="High-cam ignition map (P13), degrees before TDC."
 tbl_ign_hi_cam:       DB  08Ah,085h,080h,07Ch,062h,040h,035h,033h,02Fh,02Fh
                 DB  08Eh,089h,084h,07Ch,06Dh,046h,042h,040h,03Bh,03Bh
                 DB  09Bh,096h,091h,088h,080h,055h,048h,042h,040h,040h
@@ -9883,6 +10157,7 @@ tbl_ign_hi_cam:       DB  08Ah,085h,080h,07Ch,062h,040h,035h,033h,02Fh,02Fh
                 DB  0CAh,0CAh,0B9h,0B0h,0A2h,099h,095h,093h,091h,091h
                 DB  0B6h,0B6h,0A7h,0A0h,09Bh,099h,095h,093h,091h,091h
                 DB  0B6h,0B6h,0A7h,0A0h,09Bh,099h,095h,093h,091h,091h
+;@ IgnitionHighAltAuto type=u8 size=11x10 stride=10 formula=p13_advance unit="deg BTDC" rows.axis=tbl_rpm_scalar_hi40+8 rows.type=u16 rows.formula=rpm_period_word cols.axis=tbl_map_axis_mbar10 cols.formula=map_load_axis_mbar category="Ignition" desc="High cam, automatic: the ignition map used instead of IgnitionHigh for rpm rows 4-13 while code 12 is stored or flag 218h.4 is set (degrees before TDC)."
 tbl_ign_hi_cam_alt1:                 DW  0a7ach
 o2trim_add_clamp_tbl_2:       DB  0A2h,099h,091h,073h,062h,05Eh,057h,057h
                 DB  0B9h,0B4h,0AFh,0A2h,097h,077h,06Dh,06Bh
@@ -9898,6 +10173,7 @@ o2trim_add_clamp_tbl_2:       DB  0A2h,099h,091h,073h,062h,05Eh,057h,057h
                 DB  0E3h,0E3h,0D5h,0C0h,0A8h,09Eh,097h,093h
                 DB  08Dh,08Dh,0DAh,0DAh,0C9h,0C0h,0A8h,0A0h
                 DB  097h,093h,091h,091h
+;@ IgnitionHighAlt type=u8 size=11x10 stride=10 formula=p13_advance unit="deg BTDC" rows.axis=tbl_rpm_scalar_hi40+8 rows.type=u16 rows.formula=rpm_period_word cols.axis=tbl_map_axis_mbar10 cols.formula=map_load_axis_mbar category="Ignition" desc="High cam, manual: the ignition map used instead of IgnitionHigh for rpm rows 4-13 while code 12 is stored or flag 218h.4 is set (degrees before TDC)."
 tbl_ign_hi_cam_alt2:       DB  0ACh,0A7h,0A2h,099h,091h,073h,062h,05Eh,057h,057h
                 DB  0B9h,0B4h,0AFh,0A2h,097h,077h,06Dh,06Bh,064h,064h
                 DB  0D2h,0CDh,0C8h,0C0h,0AFh,088h,080h,07Ch,073h,073h
@@ -9909,6 +10185,7 @@ tbl_ign_hi_cam_alt2:       DB  0ACh,0A7h,0A2h,099h,091h,073h,062h,05Eh,057h,057h
                 DB  0E6h,0E6h,0E0h,0C4h,0A5h,09Dh,095h,08Dh,08Dh,08Dh
                 DB  0E3h,0E3h,0D5h,0C0h,0A8h,09Eh,097h,093h,08Dh,08Dh
                 DB  0DAh,0DAh,0C9h,0C0h,0A8h,0A0h,097h,093h,091h,091h
+;@ EgrMapLowAuto type=u8 size=11x10 stride=10 formula=raw rows.axis=tbl_rpm_scalar_lo40+8 rows.type=u16 rows.formula=rpm_period_word cols.axis=tbl_map_axis_mbar10 cols.formula=map_load_axis_mbar category="EGR" desc="Low cam, automatic: the EGR lift wanted for rpm rows 4-13 and load (added to 290h for the target, 294h), once warm."
 injector_effective_pw_skip_tbl_2:       DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h
                 DB  000h,000h,00Ch,013h,019h,02Dh,000h,000h,000h,000h
                 DB  000h,000h,00Ch,013h,029h,03Ch,000h,000h,000h,000h
@@ -9920,6 +10197,7 @@ injector_effective_pw_skip_tbl_2:       DB  000h,000h,000h,000h,000h,000h,000h,0
                 DB  000h,000h,020h,032h,054h,060h,000h,000h,000h,000h
                 DB  000h,000h,00Bh,010h,01Ch,020h,000h,000h,000h,000h
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h
+;@ EgrMapLow type=u8 size=11x10 stride=10 formula=raw rows.axis=tbl_rpm_scalar_lo40+8 rows.type=u16 rows.formula=rpm_period_word cols.axis=tbl_map_axis_mbar10 cols.formula=map_load_axis_mbar category="EGR" desc="Low cam, manual: the EGR lift wanted for rpm rows 4-13 and load (added to 290h for the target, 294h), once warm."
 injector_effective_pw_skip_tbl_3:       DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h
                 DB  000h,000h,00Ch,013h,019h,02Dh,000h,000h,000h,000h
                 DB  000h,000h,00Ch,013h,029h,03Ch,000h,000h,000h,000h
@@ -9931,6 +10209,7 @@ injector_effective_pw_skip_tbl_3:       DB  000h,000h,000h,000h,000h,000h,000h,0
                 DB  000h,000h,020h,032h,054h,060h,000h,000h,000h,000h
                 DB  000h,000h,00Bh,010h,01Ch,020h,000h,000h,000h,000h
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h
+;@ EgrMapHighAuto type=u8 size=11x10 stride=10 formula=raw rows.axis=tbl_rpm_scalar_hi40+8 rows.type=u16 rows.formula=rpm_period_word cols.axis=tbl_map_axis_mbar10 cols.formula=map_load_axis_mbar category="EGR" desc="High cam, automatic: the EGR lift wanted for rpm rows 4-13 and load (all zero: no EGR with VTEC engaged)."
 tbl_zero_681c:       DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h
@@ -9942,6 +10221,7 @@ tbl_zero_681c:       DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h
+;@ EgrMapHigh type=u8 size=11x10 stride=10 formula=raw rows.axis=tbl_rpm_scalar_hi40+8 rows.type=u16 rows.formula=rpm_period_word cols.axis=tbl_map_axis_mbar10 cols.formula=map_load_axis_mbar category="EGR" desc="High cam, manual: the EGR lift wanted for rpm rows 4-13 and load (all zero: no EGR with VTEC engaged)."
 tbl_zero_688a:       DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h
@@ -9954,94 +10234,214 @@ tbl_zero_688a:       DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h
                 DB  000h,000h,000h,000h,000h,000h,000h,000h,000h,000h
+;@ IdleRpmTable type=u16 count=5 colstride=3 formula=raw cols.axis=idle_temp_hyst3_tbl_4 cols.stride=3 cols.formula=p13_rpm8 cols.unit=rpm cols.decimals=0 category="Idle" desc="Idle: a word against rpm, with the idle valve's current check (32Fh)." at=idle_temp_hyst3_tbl_4+1
 idle_temp_hyst3_tbl_4:       DB  0FFh,000h,03Ch,0A0h,000h,03Ch,080h,000h
                 DB  022h,040h,000h,00Ah,000h,000h,00Ah
+;@ OpenLoopThrottle type=u8 count=8 colstride=2 formula=raw cols.axis=tbl_inj_pw_volt_6911 cols.stride=2 cols.formula=p13_rpm8 cols.unit=rpm cols.decimals=0 category="Fuel" desc="The throttle (less 5 counts when flag 11Ch.4 is set) above which, against rpm, the open-loop enrichment can start (1E5h)." at=tbl_inj_pw_volt_6911+1
 tbl_inj_pw_volt_6911:       DB  0FFh,098h,0E0h,098h,0D0h,080h,0C0h,073h
                 DB  0A0h,073h,080h,066h,040h,066h,000h,066h
+;@ FuelMapCap type=u8 formula="x * 100 / 64" inverse="x * 64 / 100" unit=% decimals=1 category="Fuel" desc="The most open-loop enrichment the fuel maps can give (half scale: 40h = 100 %, 58h = 137.5 % stock): a map value over twice this is held to it."
 tbl_dw_6921:                 DW  05858h
+;@ OpenLoopCurveHigh type=u8 count=20 formula=raw cols.axis=tbl_rpm_scalar_hi40 cols.type=u16 cols.formula=rpm_period_word category="Fuel" desc="High cam: an open-loop enrichment limit against rpm (all FFh: none) - the map's value is held to it when flag 11Ch.4 is set." at=tbl_allff_6923
 tbl_allff_6923:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
+;@ OpenLoopCurveLow type=u8 count=20 formula=raw cols.axis=tbl_rpm_scalar_lo40 cols.type=u16 cols.formula=rpm_period_word category="Fuel" desc="Low cam: an open-loop enrichment limit against rpm (all FFh: none) - the map's value is held to it when flag 11Ch.4 is set." at=tbl_allff_6937
 tbl_allff_6937:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
+;@ AccelRpm type=u16 count=7 colstride=3 formula=raw cols.axis=rpm_accel_clamp_tbl cols.stride=3 cols.formula=p13_rpm8 cols.unit=rpm cols.decimals=0 category="Tip-in" desc="Against rpm (a word): the acceleration count (198h) is checked against it and the period (0B2h)." at=rpm_accel_clamp_tbl+1
 rpm_accel_clamp_tbl:       DB  0FFh,056h,000h,0A0h,056h,000h,080h,056h
                 DB  000h,06Dh,074h,000h,060h,093h,000h,040h
                 DB  0AFh,000h,000h,0AFh,000h,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh
+;@ VtecChangeTiming2High type=u8 count=20 formula="(x - 128) / 4" inverse="x * 4 + 128" unit=° decimals=2 cols.axis=tbl_rpm_scalar_hi40 cols.type=u16 cols.formula=rpm_period_word category="VTEC" desc="High cam: the timing added while VTEC is asked for (1B4h) but not engaged yet (2C4h, 80h = none), against rpm." at=tipin_decay_zero_tbl_2
+;@ VtecChangeTiming2Low type=u8 count=20 formula="(x - 128) / 4" inverse="x * 4 + 128" unit=° decimals=2 cols.axis=tbl_rpm_scalar_lo40 cols.type=u16 cols.formula=rpm_period_word category="VTEC" desc="Low cam: the timing added while VTEC is asked for (1B4h) but not engaged yet (2C4h, 80h = none), against rpm." at=tipin_decay_zero_tbl_2-20
 tipin_decay_zero_tbl_2:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
+;@ IgnMinHighVtec type=u8 count=20 formula=p13_advance cols.axis=tbl_rpm_scalar_hi40 cols.type=u16 cols.formula=rpm_period_word category="Ignition" desc="High cam: the least advance against rpm (2B6h) during the VTEC change-over (21Dh.0)." at=scale_result_common_tbl
+;@ IgnMinLowVtec type=u8 count=20 formula=p13_advance cols.axis=tbl_rpm_scalar_lo40 cols.type=u16 cols.formula=rpm_period_word category="Ignition" desc="Low cam: the least advance against rpm (2B6h) during the VTEC change-over (21Dh.0)." at=scale_result_common_tbl+20
 scale_result_common_tbl:       DB  000h,000h,004h,00Ah,015h,01Eh,022h,037h,048h,04Ch
                 DB  051h,057h,05Eh,06Ah,077h,084h,084h,080h,075h,075h
                 DB  000h,000h,000h,000h,000h,000h,000h,001h,008h,011h
                 DB  01Ah,022h,02Fh,03Ah,040h,045h,04Ch,05Eh,07Bh,07Bh
+;@ AtShiftPoints type=u8 count=22 formula=raw category="Transmission" desc="Automatic: shift points against 0DEh, six to a gear (all FFh in this image)."
 ign_p40_toggle_tbl:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
+;@ VtecSolenoidDuty type=u8 count=32 formula=raw category="VTEC" desc="VTEC: the solenoid's drive value (1AEh) by state, while the change-over count (1B6h) is 8 or less."
 tbl_cfg_69c6:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,022h,06Eh,022h
                 DB  044h,022h,028h,022h,000h,022h,0FFh,000h
                 DB  087h,000h,057h,011h,013h,019h,000h,019h
+;@ TipInCoolantAsync type=u8 count=7 colstride=2 formula=raw cols.axis=overrev_hardcap_compare_tbl_4 cols.stride=2 cols.formula=honda_temp_c category="Tip-in" desc="The least tip-in pulse against coolant temperature (194h), for the pulse given between the injections." at=overrev_hardcap_compare_tbl_4+1
 overrev_hardcap_compare_tbl_4:       DB  0FFh,060h,0D0h,060h,0BAh,060h,087h,060h
                 DB  02Eh,050h,028h,040h,000h,040h
+;@ IdleRpmMargin type=u8 count=7 colstride=2 formula=raw cols.axis=idle_temp_hyst3_tbl_5 cols.stride=2 cols.formula=honda_temp_c category="Idle" desc="Idle: taken off the idle control rpm (295h), against coolant temperature, before it is compared with the rpm." at=idle_temp_hyst3_tbl_5+1
 idle_temp_hyst3_tbl_5:       DB  0FFh,006h,0EDh,006h,094h,006h,062h,006h
                 DB  044h,006h,02Eh,019h,000h,019h
+;@ KnockFallbackHigh type=u8 count=20 formula=degrees_quarter unit=° cols.axis=tbl_rpm_scalar_hi40 cols.type=u16 cols.formula=rpm_period_word category="Knock" desc="Timing taken out against rpm with VTEC engaged when the knock unit cannot be trusted (its reference check failing, or code 23/24 stored): a fixed retard in place of the knock unit's own (2B4h)."
 scale_result_common_tbl_2:       DB  024h,024h,024h,022h,031h,027h,026h,022h,028h,01Bh
                 DB  017h,017h,022h,02Ah,022h,019h,01Dh,01Dh,01Dh,01Dh
+;@ KnockFallbackLow type=u8 count=20 formula=degrees_quarter unit=° cols.axis=tbl_rpm_scalar_lo40 cols.type=u16 cols.formula=rpm_period_word category="Knock" desc="Timing taken out against rpm on the low cam when the knock unit cannot be trusted (its reference check failing, or code 23/24 stored): a fixed retard in place of the knock unit's own (2B4h)."
 scale_result_common_tbl_3:       DB  000h,000h,000h,000h,011h,019h,022h,01Bh,020h,028h
                 DB  028h,035h,02Ch,028h,024h,026h,024h,026h,01Dh,01Dh
 Cranking_tbl:       DB  0FFh,0FFh,080h,000h,000h,031h,080h,000h
                 DB  04Fh,012h,053h,000h,000h,000h,053h,000h
+;@ EgrLoadRpm type=u8 count=6 colstride=2 formula=raw cols.axis=injector_effective_pw_skip_tbl_6 cols.stride=2 cols.formula=p13_rpm8 cols.unit=rpm cols.decimals=0 category="EGR" desc="EGR: the load against rpm (flag 11Eh.2) over which the EGR is off (12Fh.4); 38h/40h otherwise." at=injector_effective_pw_skip_tbl_6+1
 injector_effective_pw_skip_tbl_6:       DB  0FFh,000h,0B0h,000h,0A0h,070h,060h,070h
                 DB  040h,070h,000h,000h
 tbl_knock_6a46:       DB  066h,073h,08Ch,099h,080h
+;@ IntakeAirTable2CB type=u8 count=2 colstride=2 formula=raw cols.axis=sensor_bank_gate3_tbl_4 cols.stride=2 cols.formula=honda_temp_c category="Sensors" desc="Against intake air temperature (2CBh)." at=sensor_bank_gate3_tbl_4+1
 sensor_bank_gate3_tbl_4:       DB  0B3h,000h,0A9h,080h
+;@ VtecLoadFloorLow type=u8 count=20 formula=raw cols.axis=tbl_rpm_scalar_lo40 cols.type=u16 cols.formula=rpm_period_word category="VTEC" desc="Low cam: a load floor against rpm (135h: the load 0E3h, or this if more)." at=tbl_6a4f
 tbl_6a4f:       DB  008h,005h,004h,004h,006h,009h,009h,009h,005h,009h
                 DB  00Bh,00Ah,009h,005h,00Ah,007h,007h,005h,00Eh,018h
+;@ VtecLoadFloorHigh type=u8 count=20 formula=raw cols.axis=tbl_rpm_scalar_hi40 cols.type=u16 cols.formula=rpm_period_word category="VTEC" desc="High cam: a load floor against rpm (135h: the load 0E3h, or this if more)." at=tbl_6a63
 tbl_6a63:       DB  034h,034h,034h,034h,034h,034h,034h,026h,028h,028h
                 DB  024h,024h,01Bh,012h,00Ah,00Bh,00Eh,012h,016h,016h
+;@ FuelRpmMultLow type=u8 count=20 formula="x * 100 / 128" inverse="x * 128 / 100" unit=% decimals=1 cols.axis=tbl_rpm_scalar_lo40 cols.type=u16 cols.formula=rpm_period_word category="Fuel" desc="Low cam: a multiplier against rpm on the fuel map's value (80h = 100 %)."
 tbl_corr_map_lo_6a77:       DB  080h,080h,080h,080h,080h,080h,080h,080h,080h,080h
                 DB  080h,080h,080h,080h,080h,080h,080h,085h,086h,086h
+;@ FuelRpmMultHigh type=u8 count=20 formula="x * 100 / 128" inverse="x * 128 / 100" unit=% decimals=1 cols.axis=tbl_rpm_scalar_hi40 cols.type=u16 cols.formula=rpm_period_word category="Fuel" desc="High cam: a multiplier against rpm on the fuel map's value (80h = 100 %): a few per cent more near the top."
 tbl_corr_map_hi_6a8b:       DB  080h,080h,080h,080h,080h,080h,080h,080h,080h,080h
                 DB  080h,080h,080h,080h,083h,088h,088h,084h,086h,086h
+;@ KnockLevels5 type=u16 count=12 formula=raw category="Knock" desc="Knock: detection levels by rpm band (166h; automatic, flag 21Fh.3 set)."
 tbl_knock_retard_6a9f:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,000h,000h,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,000h,000h
+;@ KnockLevels4 type=u16 count=12 formula=raw category="Knock" desc="Knock: detection levels by rpm band (166h; manual, flag 21Fh.3 set)."
 tbl_knock_ptr_6ab7:       DB  039h,005h,0A9h,005h,018h,006h,088h,006h
                 DB  0F7h,006h,000h,000h,018h,006h,088h,006h
                 DB  0F7h,006h,067h,007h,0D6h,007h,000h,000h
-int_serial_tbl:       DB  0C1h,003h,0C0h,003h,080h,04Fh,0FFh,0FFh
-                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
-                DB  0C4h,003h,0C5h,003h,0FFh,0FFh,0C6h,003h
-                DB  0C7h,003h,0C8h,003h,0FFh,0FFh,0C9h,003h
-                DB  0DAh,003h,0D2h,003h,075h,000h,0D3h,003h
-                DB  077h,000h,0D0h,003h,0FFh,0FFh,0D7h,003h
-                DB  06Dh,000h,0D8h,003h,073h,000h,06Fh,000h
-                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
-                DB  061h,001h,0FFh,0FFh,009h,003h,0FFh,0FFh
-                DB  0C3h,003h,0C2h,003h,082h,002h,043h,04Ch
-                DB  02Ch,04Ch,071h,000h,03Bh,04Ch,094h,002h
-                DB  091h,002h,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
-                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
-                DB  0FFh,0FFh,0A1h,001h,0A2h,001h,0A0h,001h
-                DB  0A9h,001h,0AAh,001h,0A8h,001h,0F8h,000h
-                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
-                DB  070h,04Eh,049h,003h,04Ah,003h,04Bh,003h
-                DB  04Ch,003h,04Dh,003h,04Eh,003h,04Fh,003h
-                DB  050h,003h,051h,003h,052h,003h,053h,003h
-                DB  054h,003h,055h,003h,056h,003h,057h,003h
-                DB  058h,003h,059h,003h,05Ah,003h,05Bh,003h
-                DB  05Ch,003h,05Dh,003h,0FFh,0FFh,0FFh,0FFh
-                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
-                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
-                DB  038h,003h,039h,003h,03Ah,003h,03Bh,003h
-                DB  03Ch,003h,03Dh,003h,03Eh,003h,03Fh,003h
-                DB  040h,003h,041h,003h,042h,003h,043h,003h
-                DB  044h,003h,045h,003h,046h,003h,047h,003h
-                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
-                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
-                DB  090h,04Eh,054h,06Dh,04Bh,04Ch,056h,04Ch
-                DB  025h,04Ch,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
+int_serial_tbl: DW  003C1h                        ; 6ACF
+                DW  003C0h                        ; 6AD1
+                DW  serial_cmd_4F80               ; 6AD3
+                DW  0FFFFh                        ; 6AD5
+                DW  0FFFFh                        ; 6AD7
+                DW  0FFFFh                        ; 6AD9
+                DW  0FFFFh                        ; 6ADB
+                DW  0FFFFh                        ; 6ADD
+                DW  003C4h                        ; 6ADF
+                DW  003C5h                        ; 6AE1
+                DW  0FFFFh                        ; 6AE3
+                DW  003C6h                        ; 6AE5
+                DW  003C7h                        ; 6AE7
+                DW  003C8h                        ; 6AE9
+                DW  0FFFFh                        ; 6AEB
+                DW  003C9h                        ; 6AED
+                DW  003DAh                        ; 6AEF
+                DW  003D2h                        ; 6AF1
+                DW  00075h                        ; 6AF3
+                DW  003D3h                        ; 6AF5
+                DW  00077h                        ; 6AF7
+                DW  003D0h                        ; 6AF9
+                DW  0FFFFh                        ; 6AFB
+                DW  003D7h                        ; 6AFD
+                DW  0006Dh                        ; 6AFF
+                DW  003D8h                        ; 6B01
+                DW  00073h                        ; 6B03
+                DW  0006Fh                        ; 6B05
+                DW  0FFFFh                        ; 6B07
+                DW  0FFFFh                        ; 6B09
+                DW  0FFFFh                        ; 6B0B
+                DW  0FFFFh                        ; 6B0D
+                DW  00161h                        ; 6B0F
+                DW  0FFFFh                        ; 6B11
+                DW  00309h                        ; 6B13
+                DW  0FFFFh                        ; 6B15
+                DW  003C3h                        ; 6B17
+                DW  003C2h                        ; 6B19
+                DW  00282h                        ; 6B1B
+                DW  serial_cmd_4C43               ; 6B1D
+                DW  serial_cmd_4C2C               ; 6B1F
+                DW  00071h                        ; 6B21
+                DW  serial_cmd_4C3B               ; 6B23
+                DW  00294h                        ; 6B25
+                DW  00291h                        ; 6B27
+                DW  0FFFFh                        ; 6B29
+                DW  0FFFFh                        ; 6B2B
+                DW  0FFFFh                        ; 6B2D
+                DW  0FFFFh                        ; 6B2F
+                DW  0FFFFh                        ; 6B31
+                DW  0FFFFh                        ; 6B33
+                DW  0FFFFh                        ; 6B35
+                DW  0FFFFh                        ; 6B37
+                DW  001A1h                        ; 6B39
+                DW  001A2h                        ; 6B3B
+                DW  001A0h                        ; 6B3D
+                DW  001A9h                        ; 6B3F
+                DW  001AAh                        ; 6B41
+                DW  001A8h                        ; 6B43
+                DW  000F8h                        ; 6B45
+                DW  0FFFFh                        ; 6B47
+                DW  0FFFFh                        ; 6B49
+                DW  0FFFFh                        ; 6B4B
+                DW  0FFFFh                        ; 6B4D
+                DW  serial_cmd_4E70               ; 6B4F
+                DW  00349h                        ; 6B51
+                DW  0034Ah                        ; 6B53
+                DW  0034Bh                        ; 6B55
+                DW  0034Ch                        ; 6B57
+                DW  0034Dh                        ; 6B59
+                DW  0034Eh                        ; 6B5B
+                DW  0034Fh                        ; 6B5D
+                DW  00350h                        ; 6B5F
+                DW  00351h                        ; 6B61
+                DW  00352h                        ; 6B63
+                DW  00353h                        ; 6B65
+                DW  00354h                        ; 6B67
+                DW  00355h                        ; 6B69
+                DW  00356h                        ; 6B6B
+                DW  00357h                        ; 6B6D
+                DW  00358h                        ; 6B6F
+                DW  00359h                        ; 6B71
+                DW  0035Ah                        ; 6B73
+                DW  0035Bh                        ; 6B75
+                DW  0035Ch                        ; 6B77
+                DW  0035Dh                        ; 6B79
+                DW  0FFFFh                        ; 6B7B
+                DW  0FFFFh                        ; 6B7D
+                DW  0FFFFh                        ; 6B7F
+                DW  0FFFFh                        ; 6B81
+                DW  0FFFFh                        ; 6B83
+                DW  0FFFFh                        ; 6B85
+                DW  0FFFFh                        ; 6B87
+                DW  0FFFFh                        ; 6B89
+                DW  0FFFFh                        ; 6B8B
+                DW  0FFFFh                        ; 6B8D
+                DW  00338h                        ; 6B8F
+                DW  00339h                        ; 6B91
+                DW  0033Ah                        ; 6B93
+                DW  0033Bh                        ; 6B95
+                DW  0033Ch                        ; 6B97
+                DW  0033Dh                        ; 6B99
+                DW  0033Eh                        ; 6B9B
+                DW  0033Fh                        ; 6B9D
+                DW  00340h                        ; 6B9F
+                DW  00341h                        ; 6BA1
+                DW  00342h                        ; 6BA3
+                DW  00343h                        ; 6BA5
+                DW  00344h                        ; 6BA7
+                DW  00345h                        ; 6BA9
+                DW  00346h                        ; 6BAB
+                DW  00347h                        ; 6BAD
+                DW  0FFFFh                        ; 6BAF
+                DW  0FFFFh                        ; 6BB1
+                DW  0FFFFh                        ; 6BB3
+                DW  0FFFFh                        ; 6BB5
+                DW  0FFFFh                        ; 6BB7
+                DW  0FFFFh                        ; 6BB9
+                DW  0FFFFh                        ; 6BBB
+                DW  0FFFFh                        ; 6BBD
+                DW  serial_cmd_4E90               ; 6BBF
+                DW  06D54h                        ; 6BC1
+                DW  serial_cmd_4C4B               ; 6BC3
+                DW  serial_cmd_4C56               ; 6BC5
+                DW  serial_cmd_4C25               ; 6BC7
+                DW  0FFFFh                        ; 6BC9
+                DW  0FFFFh                        ; 6BCB
+                DW  0FFFFh                        ; 6BCD
 int_serial_tbl_2:       DB  001h,001h,000h,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  001h,001h,0FFh,001h,001h,001h,0FFh,001h
                 DB  001h,001h,001h,001h,001h,001h,0FFh,001h
@@ -10058,26 +10458,59 @@ int_serial_tbl_2:       DB  001h,001h,000h,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  001h,001h,001h,001h,001h,001h,001h,001h
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  000h,002h,000h,000h,000h,0FFh,0FFh,0FFh
+;@ Stock_idle_init_start_tbl type=u8 count=16 formula=raw category="Internal" desc="Stock data, 16 bytes, read by the code at idle_init_start_load_ram0f8; its role not traced."
 idle_init_start_tbl:       DB  014h,002h,024h,001h,02Ch,0A2h,024h,011h
                 DB  024h,051h,000h,000h,000h,000h,025h,0C1h
+;@ Stock_idle_init_start_tbl_2 type=u8 count=16 formula=raw category="Internal" desc="Stock data, 16 bytes, read by the code at idle_init_start_load_ram0f8; its role not traced."
 idle_init_start_tbl_2:       DB  000h,000h,000h,000h,000h,000h,024h,021h
                 DB  029h,082h,029h,0A2h,024h,0B1h,000h,000h
+;@ Stock_idle_init_start_tbl_3 type=u8 count=16 formula=raw category="Internal" desc="Stock data, 16 bytes, read by the code at idle_init_start_load_ram0f8; its role not traced."
 idle_init_start_tbl_3:       DB  025h,012h,025h,002h,025h,072h,025h,062h
                 DB  000h,000h,026h,032h,025h,0A0h,000h,000h
+;@ Stock_idle_init_start_tbl_4 type=u8 count=16 formula=raw category="Internal" desc="Stock data, 16 bytes, read by the code at idle_init_start_load_ram0f8; its role not traced."
 idle_init_start_tbl_4:       DB  025h,032h,025h,022h,025h,042h,01Ah,012h
                 DB  000h,000h,026h,022h,026h,052h,000h,000h
+;@ Stock_idle_init_start_tbl_5 type=u8 count=16 formula=raw category="Internal" desc="Stock data, 16 bytes, read by the code at idle_init_start_load_ram0f8; its role not traced."
 idle_init_start_tbl_5:       DB  025h,052h,000h,000h,000h,000h,000h,000h
                 DB  000h,000h,000h,000h,000h,000h,000h,000h
+;@ Stock_idle_init_start_tbl_6 type=u8 count=16 formula=raw category="Internal" desc="Stock data, 16 bytes, read by the code at idle_init_start_load_ram0f8; its role not traced."
 idle_init_start_tbl_6:       DB  01Bh,002h,000h,000h,000h,000h,000h,000h
                 DB  000h,000h,000h,000h,000h,000h,000h,000h
-dtc_active_confirm_tbl_2:       DB  094h,045h,04Fh,046h,09Eh,045h,0A9h,045h,041h,046h
-                DB  0B2h,045h,0BDh,045h,0C7h,045h,0D4h,045h,0DCh,045h
-                DB  04Fh,046h,0E6h,045h,0FAh,045h,041h,046h,041h,046h
-                DB  041h,046h,041h,046h,04Fh,046h,04Fh,046h,004h,046h
-                DB  041h,046h,041h,046h,041h,046h,00Eh,046h,011h,046h
-                DB  015h,046h,021h,046h,04Fh,046h,025h,046h,031h,046h
-                DB  039h,046h,04Fh,046h,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
+dtc_active_confirm_tbl_2:DW  dtc_step_4594                 ; 6CAF
+                DW  dtc_step_464F                 ; 6CB1
+                DW  dtc_step_459E                 ; 6CB3
+                DW  dtc_step_45A9                 ; 6CB5
+                DW  dtc_step_4641                 ; 6CB7
+                DW  dtc_step_45B2                 ; 6CB9
+                DW  dtc_step_45BD                 ; 6CBB
+                DW  dtc_step_45C7                 ; 6CBD
+                DW  dtc_step_45D4                 ; 6CBF
+                DW  dtc_step_45DC                 ; 6CC1
+                DW  dtc_step_464F                 ; 6CC3
+                DW  dtc_step_45E6                 ; 6CC5
+                DW  dtc_step_45FA                 ; 6CC7
+                DW  dtc_step_4641                 ; 6CC9
+                DW  dtc_step_4641                 ; 6CCB
+                DW  dtc_step_4641                 ; 6CCD
+                DW  dtc_step_4641                 ; 6CCF
+                DW  dtc_step_464F                 ; 6CD1
+                DW  dtc_step_464F                 ; 6CD3
+                DW  dtc_step_4604                 ; 6CD5
+                DW  dtc_step_4641                 ; 6CD7
+                DW  dtc_step_4641                 ; 6CD9
+                DW  dtc_step_4641                 ; 6CDB
+                DW  dtc_step_460E                 ; 6CDD
+                DW  dtc_step_4611                 ; 6CDF
+                DW  dtc_step_4615                 ; 6CE1
+                DW  dtc_step_4621                 ; 6CE3
+                DW  dtc_step_464F                 ; 6CE5
+                DW  dtc_step_4625                 ; 6CE7
+                DW  dtc_step_4631                 ; 6CE9
+                DW  dtc_step_4639                 ; 6CEB
+                DW  dtc_step_464F                 ; 6CED
+                DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh ; 6CEF
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
+;@ Stock_clamp_result_store_tbl_2 type=u8 count=84 formula=raw category="Internal" desc="Stock data, 84 bytes, read by the code at clamp_result_store_andb_acc; its role not traced."
 clamp_result_store_tbl_2:       DB  000h,000h,000h,000h,000h,020h,008h,004h
                 DB  001h,004h,00Ch,000h,001h,008h,00Ch,000h
                 DB  001h,002h,00Ch,000h,002h,001h,00Ch,003h
@@ -10088,7 +10521,10 @@ clamp_result_store_tbl_2:       DB  000h,000h,000h,000h,000h,020h,008h,004h
                 DB  000h,001h,004h,000h,000h,001h,00Ch,002h
                 DB  000h,001h,01Ch,002h,000h,001h,004h,000h
                 DB  002h,004h,00Ch,003h,002h,008h,00Ch,003h
-                DB  002h,020h,008h,005h,003h,093h,0F0h
+                DB  002h,020h,008h,005h ; 6D4F
+;@ Stock_rom_6d53 type=u8 count=3 formula=raw category="Internal" desc="Stock data, 3 bytes, read by the code at serial_cmd_4E90; its role not traced."
+rom_6d53:       DB  003h,093h,0F0h ; 6D53
+;@ Stock_clamp_result_store_tbl_3 type=u8 count=26 formula=raw category="Internal" desc="Stock data, 26 bytes, read by the code at clamp_result_store_addb_acc; its role not traced."
 clamp_result_store_tbl_3:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,012h,013h,0FFh,0FFh,0FFh,0FFh,0FFh
@@ -10127,9 +10563,9 @@ sensor_bank_gate3_if_ram216_bit1_set:     JBS     off(00216h).1, sensor_bank_gat
                 LB      A, #005h
                 CMPB    A, 0dfh
                 JGE     sensor_bank_gate3_goto_16a8
-                MOV     X1, #053dbh
+                MOV     X1, #rom_53db
                 JBS     off(0021dh).1, sensor_bank_gate3_load_ram289
-                MOV     X1, #053cfh
+                MOV     X1, #rom_53cf
 sensor_bank_gate3_load_ram289:     LB      A, off(00289h)
                 VCAL    0
                 ADDB    A, #020h
@@ -10364,7 +10800,7 @@ rpm_decel_limit_check_if_ram230_bit1_set:     JBS     off(00230h).1, rpm_decel_l
                 RC
                 LB      A, off(002bah)
                 JEQ     rpm_decel_limit_check_goto_20dc
-                CMPCB   A, 020d9h
+                CMPCB   A, rom_20d9
 rpm_decel_limit_check_goto_20dc:     J       rpm_decel_limit_check_store_carry_ram223_bit5
                 DB  0FFh
 crankfuel_clamp_max_clear_x1:     CLR     X1
@@ -10383,9 +10819,9 @@ vss_ect_gate_if_ram218_bit0_clr:     JBR     off(00218h).0, vss_ect_gate_load_ra
 vss_ect_gate_load_ram2f1_2:     MOVB    off(002f1h), r4
                 J       vss_ect_gate_load_ram2d3
 vss_ect_gate_load_stk:     L       A, (00160h-00180h)[USP]
-                CMPC    A, 017a8h
+                CMPC    A, rom_17a8
                 JGE     vss_ect_gate_nop_acc
-                CMPC    A, 017adh
+                CMPC    A, rom_17ad
                 JGT     vss_ect_gate_load_ram2f1_3
 vss_ect_gate_nop_acc:     NOP
                 NOP
@@ -10455,6 +10891,7 @@ vss_ect_gate_goto_17b1:     J       vss_ect_gate_load_r3
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
+;@ Stock_vcal_4_tbl type=u16 count=4 formula=raw category="Internal" desc="Stock data, 8 bytes, read by the code at vcal_4_load_imm; its role not traced."
 vcal_4_tbl:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
@@ -10870,9 +11307,6 @@ vss_clamp_common_tbl:       DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
                 DB  0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh,0FFh
-;  [info] end of programmed ROM (image stops at 7FF0h; asm662 pads to 8000h). There is no version
-;    signature here (unlike the HTS TunerSuite ROMs). Reads of 07FF0h..07FF3h therefore return 0:
-;    these are the p13info 'Debug/Test mode' flags -- 00h = disabled, writing FFh in an EPROM that
-;    extends past 7FF0h enables the alt paths listed at 0D22. The 5441h pointer words seen at
-;    6AB7h are the knock handler table, not code.
                 DB  0FFh,0FFh,0FFh,000h
+                org     07fffh
+checksum_fix:   checksum                ; 7FFF: set by the assembler so the 8-bit sum of the image is 0 (what the ROM checks: at boot and in the background)

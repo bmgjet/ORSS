@@ -53,6 +53,14 @@ public static class CalCommands
     }
     static bool Flag(List<string> a, string name) { int i = a.IndexOf(name); if (i < 0) return false; a.RemoveAt(i); return true; }
 
+    /// The --defs option taken out of the arguments first, then the target: an option written before the ROM path is not taken for the path.
+    static Target LoadWithDefs(List<string> args)
+    {
+        var defs = Opt(args, "--defs");
+        if (args.Count == 0) throw new ArgumentException("no ROM given");
+        return Load(args[0], defs);
+    }
+
     static Target Load(string path, string? defsPath)
     {
         var t = new Target { Rom = [], Defs = new DefinitionSet(), Path = path };
@@ -192,7 +200,7 @@ public static class CalCommands
                 {
                     var atOpt = Opt(args, "--at") ?? Opt(args, "--near");
                     if (args.Count < 1) { Console.WriteLine(Usage); return 2; }
-                    var t = Load(args[0], Opt(args, "--defs"));
+                    var t = LoadWithDefs(args);
                     if (atOpt != null)
                     {
                         if (!t.Defs.TryResolve(atOpt, out var addr)) { Console.Error.WriteLine($"cannot resolve {atOpt}"); return 1; }
@@ -228,7 +236,7 @@ public static class CalCommands
             case "defs":
                 {
                     if (args.Count < 1) { Console.WriteLine(Usage); return 2; }
-                    var t = Load(args[0], Opt(args, "--defs"));
+                    var t = LoadWithDefs(args);
                     var filter = Opt(args, "--filter");
                     var cat = Opt(args, "--category");
                     var items = t.Defs.Items
@@ -251,7 +259,7 @@ public static class CalCommands
             case "get":
                 {
                     if (args.Count < 2) { Console.WriteLine(Usage); return 2; }
-                    var t = Load(args[0], Opt(args, "--defs"));
+                    var t = LoadWithDefs(args);
                     var item = AdHoc(t, args[1], args);
                     Console.Write(RomData.Render(t.Defs, t.Rom, item));
                     return 0;
@@ -269,6 +277,9 @@ public static class CalCommands
                     var t = Load(args[0], defsPath);
                     if (t.Asm != null && outPath == null)
                     { Console.Error.WriteLine("editing assembles from source: pass --out image.bin, or edit the source"); return 1; }
+                    // a definitions file on its own has no ROM bytes to change: written back "in place" it was replaced by a blank 32 KB image
+                    if (outPath == null && !(args[0].EndsWith(".bin", StringComparison.OrdinalIgnoreCase) || args[0].EndsWith(".rom", StringComparison.OrdinalIgnoreCase)))
+                    { Console.Error.WriteLine($"set changes a ROM image: give the .bin (with --defs {Path.GetFileName(args[0])} for its definitions), or --out image.bin"); return 1; }
                     var item = AdHoc(t, args[1], args);
                     double value = double.Parse(args[2], CultureInfo.InvariantCulture);
                     var indices = new List<int>();
@@ -311,7 +322,7 @@ public static class CalCommands
                 {
                     if (args.Count < 2) { Console.WriteLine(Usage); return 2; }
                     int max = int.Parse(Opt(args, "--max") ?? "50");
-                    var t = Load(args[0], Opt(args, "--defs"));
+                    var t = LoadWithDefs(args);
                     if (!t.Defs.TryResolve(args[1], out var addr)) { Console.Error.WriteLine($"cannot resolve {args[1]}"); return 1; }
                     var labels = t.Defs.Symbols.GroupBy(kv => kv.Value).ToDictionary(g => g.Key, g => g.First().Key);
                     var hits = Xref.Find(t.Rom, addr,

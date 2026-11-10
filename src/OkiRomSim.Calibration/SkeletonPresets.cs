@@ -14,11 +14,19 @@ public static class SkeletonPresets
         "FEAT_SPEEDCORR", "FEAT_GEAR", "FEAT_VTECCTL",
     ];
 
+    /// What Default adds on a P13: its engines have a knock sensor, so the stock knock retard stays in.
+    static readonly string[] DefaultP13 = ["FEAT_STOCK_KNOCK"];
+
+    /// The preset for this skeleton: Default with the P13's own additions on a P13; any other preset as it is.
+    public static IEnumerable<string> ForSkeleton(Skeleton sk, IEnumerable<string> preset) =>
+        ReferenceEquals(preset, Default) && sk.Platform.Equals("P13", StringComparison.OrdinalIgnoreCase)
+            ? [.. Default.Take(7), .. DefaultP13, .. Default.Skip(7)] : preset;
+
     /// The preset as far as it goes on this skeleton: in order, each function that is there and can be built with the ones before it, then cut from the end until the ROM fits (its space and its module RAM).
     public static List<string> Fit(Skeleton sk, IEnumerable<string> preset)
     {
         var chosen = new List<string>();
-        foreach (var d in preset)
+        foreach (var d in ForSkeleton(sk, preset))
             if (sk.Feature(d) != null && sk.Problems([.. chosen, d]).Count == 0) chosen.Add(d);
         while (chosen.Count > 0 && !sk.Build(chosen).Success) chosen.RemoveAt(chosen.Count - 1);
         return chosen;

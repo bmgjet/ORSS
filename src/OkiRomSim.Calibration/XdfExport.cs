@@ -97,7 +97,11 @@ public static class XdfExport
                 int cat = categories.IndexOf(string.IsNullOrWhiteSpace(item.Category) ? "General" : item.Category) + 1;
                 FormulaDef f;
                 try { f = defs.Formula(item.Formula); } catch { f = Builtin.Raw; }
-                if (item.Flag || item.Type == CellType.Bit) WriteFlag(w, item, cat, id++);
+                // a switch TunerPro can show as a tick box: a bit, or a byte that is 0 when off and on in one set of bits. A byte switch whose
+                // off value is not 0 (the skeleton's ROM sum check: on 01h, off FFh) has no mask that tells the two apart - exported as a
+                // flag, its off value showed ticked, and unticking it wrote FEh (still off) - so it goes out as a number with both values said
+                if (item.Type == CellType.Bit || (item.Flag && FlagFitsMask(item))) WriteFlag(w, item, cat, id++);
+                else if (item.Flag) WriteConstant(w, item, Builtin.Raw, cat, id++, SwitchNote(item));
                 else if (item.IsTable && item.Count > 1) id = WriteTable(w, defs, rom, item, f, cat, id);
                 else WriteConstant(w, item, f, cat, id++);
             }
@@ -175,13 +179,14 @@ public static class XdfExport
         w.WriteEndElement();
     }
 
-    static void WriteConstant(XmlWriter w, ItemDef item, FormulaDef f, int cat, int id)
+    static void WriteConstant(XmlWriter w, ItemDef item, FormulaDef f, int cat, int id, string? note = null)
     {
         var eq = Equation(item, f);
         w.WriteStartElement("XDFCONSTANT");
         w.WriteAttributeString("uniqueid", "0x" + id.ToString("X"));
         w.WriteElementString("title", item.Name);
         var desc = Describe(item, f, eq);
+        if (note != null) desc = desc.Length > 0 ? desc + " " + note : note;
         if (desc.Length > 0) w.WriteElementString("description", desc);
         Category(w, cat);
         EmbeddedData(w, item);
@@ -194,6 +199,12 @@ public static class XdfExport
         WriteMath(w, eq ?? "X");
         w.WriteEndElement();
     }
+
+    /// A byte switch TunerPro's mask can show: off is 0 and on is a value whose bits are the mask.
+    static bool FlagFitsMask(ItemDef item) => (int)item.OffRaw == 0 && ((int)item.OnRaw & 0xFF) != 0;
+
+    /// What a byte switch exported as a number means, for its description.
+    static string SwitchNote(ItemDef item) => $"A switch: {(int)item.OnRaw & 0xFF:X2}h = on, {(int)item.OffRaw & 0xFF:X2}h = off.";
 
     static void WriteFlag(XmlWriter w, ItemDef item, int cat, int id)
     {

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Virtual dyno — Rom Sim Studio guide</title>
+<link rel="icon" href="../favicon.ico">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<header class="topbar"><button class="menu-btn" aria-label="Contents">☰</button><a class="logo" href="index.html">ROM SIM <b>STUDIO</b></a><span class="sp"></span><span class="links"><a href="../">Website</a> &nbsp;·&nbsp; <a href="../#start">Download</a></span></header>
+<div class="frame"><nav class="side"></nav><main>
+
+<h1>Virtual dyno</h1>
+<p class="lead">Datalogging &gt; Virtual dyno works out power and torque from the ECU's own datalog: on a roller dyno, or from the car's weight on a straight, flat stretch of road or track.</p>
+
+<figure><img src="img/dyno.png" alt="The virtual dyno: the settings on the left, two runs overlaid with power solid and torque dashed against rpm, AFR in a strip under them, the saved runs below"><figcaption>Two saved runs overlaid, with AFR under them.</figcaption></figure>
+
+<h2>The two modes</h2>
+<table>
+  <tr><th>Mode</th><th>How it works</th><th>What it needs</th></tr>
+  <tr><td>Inertia dyno</td><td>The car spins a roller of known inertia. Power is how fast the roller speeds up times its inertia.</td><td>The roller's inertia (kg m², from the dyno maker) and diameter. Optionally the car's own spinning parts and the roller's friction.</td></tr>
+  <tr><td>Strip</td><td>The car's own mass is accelerated. Air drag and rolling resistance are added back.</td><td>The car's weight (pick a car to fill it in), driver and fuel, drag coefficient, frontal area, and rolling resistance. Use the same flat, straight stretch every time, in the same direction if there is wind.</td></tr>
+</table>
+<p>Both use the same sum: power = (mass × acceleration + drag) × speed. The acceleration comes from a straight line fitted through the speed over a short window (<b>Smoothing</b> sets how long). Torque is the power divided by engine speed. The curve is averaged in rpm steps.</p>
+
+<h2>Road speed</h2>
+<p>The speed sensor only reads whole km/h, which is too coarse to differentiate. By default the dyno uses engine rpm instead, scaled by the ratio between rpm and road speed that the run itself shows. Keep the run in one gear with the clutch fully engaged. If there is no speed sensor, type in the km/h per 1000 rpm for the gear.</p>
+
+<h2>Cars</h2>
+<p>The car list fills in the weight, drag and frontal area. It covers the Civic EF, EG and EK, the CRX, Integra DA, DB and DC, Accord CB, CD, CL and the US CG, and Prelude BA and BB, in their JDM, EDM and USDM versions. Weights are the makers' curb weights for base trims with manual gearboxes. Weigh your car if you can: every kilogram wrong makes the power wrong by the same share.</p>
+
+<h2>The window and Settings &gt; Dyno</h2>
+<p>The dyno window keeps what changes from car to car, saved by name as a <b>profile</b>: the mode, the car or the roller, how road speed is found, the <b>air on the day</b>, the triggers and the channels drawn under the graph. The rest is the same for every profile and lives in <b>Settings &gt; Dyno</b> (the ⚙ button): crank estimate or wheel figures and the drivetrain loss, smoothing, the rpm step, what the graph is drawn against, the correction standard, whether air comes from the ECU's sensors, humidity, the AFR source and its conversion, the hotkey, and whether auto start is on when the window opens. Its buttons <b>restore the default profiles</b> (if one was deleted or spoilt), clear every saved run, and open the dyno folder. Weight, power, torque, speed, pressure, length, area, inertia and force are shown in the units picked in <b>Settings &gt; Units</b>.</p>
+
+<h2>Air and correction</h2>
+<p>Power is corrected to standard air (SAE J1349, DIN 70020, SAE J607 / STD, or ECE) using the ECU's intake air temperature and baro sensor, or the air on the day from the profile. <b>None</b> shows it as measured. Power is shown at the wheels, or as a crank estimate using the drivetrain loss.</p>
+
+<h2>AFR</h2>
+<p>AFR comes from any channel (Settings &gt; Dyno). Use <b>afr</b> for a wideband on its own serial port or an aux channel. For a wideband's analog output wired to an ECU input, pick that input's volts (O2, the HTS wideband input, EGR or B6) and tick <b>the channel is volts</b>, with the AFR at 0 V and at 5 V from the wideband's manual. An <b>offset</b> is added after the conversion.</p>
+
+<h2>Starting a run</h2>
+<p>The line under the top bar says what the dyno is waiting for: each start or end condition with a tick or a cross for the latest reading. It also says when no datalog readings are coming in. Connect the datalog, or play a log on the datalog page, first.</p>
+<ul>
+  <li><b>Start run</b> (or the hotkey, Space by default; change it in Settings &gt; Dyno) starts a run straight away. Press it again to end the run and keep it. The hotkey works wherever the focus is in the window: it never presses the button or box that has the focus.</li>
+  <li><b>Auto start: on</b> starts a run by itself when the start conditions hold, and ends it on the end conditions. Turn it off to start runs only by hand.</li>
+  <li><b>One shot</b> (under Triggers, on by default): after a run, auto start turns itself off, so one pull is logged and kept and the dyno waits while you look at it. Press <b>Auto start</b> for the next pull. Untick it to wait for the next pull straight away.</li>
+  <li>With <b>Hotkey pressed</b> as a start condition, the hotkey gets the run <b>ready</b>, and it starts once the other conditions hold too: press it, then floor it.</li>
+</ul>
+<h2>Triggers</h2>
+<p>Start when all (or any one) of the start conditions hold; end on any (or all) of the end conditions. With no end conditions, a run ends when its start conditions stop holding. Each condition keeps to a sensible range: throttle 0–100 %, MAP 10–400 kPa, boost −15 to 45 psi, speed 0–300 km/h, rpm 0–12,500 in 100s, gear 0–6. A run shorter than the <b>shortest run kept</b> is thrown away.</p>
+<table>
+  <tr><th>Condition</th><th>Example</th></tr>
+  <tr><td>Throttle</td><td>Throttle &gt; 90 % starts it, &lt; 80 % ends it.</td></tr>
+  <tr><td>MAP, or boost (MAP less baro, psi)</td><td>Boost &gt; 2 psi.</td></tr>
+  <tr><td>Road speed, rpm, gear</td><td>Over 30 km/h, gear = 3, ends over 7800 rpm.</td></tr>
+  <tr><td>Hotkey pressed</td><td>Hotkey pressed and throttle &gt; 90 %.</td></tr>
+</table>
+<h2>Runs from logs</h2>
+<p><b>From logs…</b> finds every pull in logs already made that the profile's triggers would have caught live: in the log loaded on the datalog page, in log files you pick, or in every log in a folder and the folders inside it (<span class="path">.rlog</span>, CSV and the binary logger formats). Each one is kept as a run named after its log. A recorded log cannot press a hotkey, so the profile needs a start condition such as throttle &gt; 90 %. If they turn out to be junk, <b>Clear all…</b> under the saved runs deletes every run.</p>
+
+<h2>Runs</h2>
+<p>Every run is kept in <span class="path">Documents\Rom Sim Studio\Dyno\Runs</span>, with the profile it was made with, and profiles are kept in <span class="path">Profiles</span> beside it. A project (File &gt; Save project) carries the profiles, the runs and what the dyno was showing too. Tick runs to overlay them. A saved run is worked out again with its own car, roller and air, and shown with today's settings and units.</p>
+<h3>Reading the graph</h3>
+<ul>
+  <li><b>Point</b> at the graph: a line follows the pointer and every run is read off there: rpm, power, torque, AFR, MAP and ignition.</li>
+  <li>The <b>mouse wheel</b> zooms in and out round the pointer; <b>drag</b> to move along while zoomed in; a <b>middle-click</b> (or right-click &gt; Reset zoom) shows it all again.</li>
+  <li><b>Double-click</b> a point: a window lists what the engine was doing there (rpm, speed, gear, power, torque, MAP and boost, throttle, AFR, the final ignition and the ignition from the map, injector time and duty, VTEC, knock, temperatures), where the ECU said it was in its maps, and the cell it was in on each fuel and ignition map of the ROM open, with its value. <b>Show it on the maps</b> lights that place on the table open on the calibration page.</li>
+  <li><b>Right-click a line</b> for that run's own settings: its colour and line width, power and torque on or off, a dashed power line, its own correction, smoothing, drivetrain loss and rpm step, a scale factor (a known difference between dynos), rename, replay, take it off the graph, or delete it. They are saved with the run. A right-click off the lines has the x axis, crank or wheel, the report and the settings.</li>
+</ul>
+<ul>
+  <li><b>Replay</b> plays the ticked run back as it happened.</li>
+  <li><b>Head to head</b> plays two ticked runs together from their start at the same speed, so the two coloured lines race each other. Set the x axis to <b>time</b> to see which pulls ahead.</li>
+  <li>The strips under the graph show any channels you tick (AFR, MAP, boost, ignition, injector time, intake air, knock, speed, gear) against the same axis.</li>
+  <li><b>Report…</b> renders the graph and the figures (peaks, conditions, correction) on a white sheet. Save it as a picture, or open it in the browser to print.</li>
+</ul>
+
+<div class="note warn"><b>Safety</b>Strip runs belong on a closed track, not a public road. Strap the car down properly on a roller dyno.</div>
+
+<footer>Rom Sim Studio 0.0.0.8 · by bmgjet · <a href="licence.html">Licence</a></footer>
+</main></div>
+<script src="guide.js"></script>
+</body>
+</html>

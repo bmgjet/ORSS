@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Remote control and serial commands — Rom Sim Studio guide</title>
+<link rel="icon" href="../favicon.ico">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<header class="topbar"><button class="menu-btn" aria-label="Contents">☰</button><a class="logo" href="index.html">ROM SIM <b>STUDIO</b></a><span class="sp"></span><span class="links"><a href="../">Website</a> &nbsp;·&nbsp; <a href="../#start">Download</a></span></header>
+<div class="frame"><nav class="side"></nav><main>
+
+<h1>Remote control and serial commands</h1>
+<p class="lead">Every byte a skeleton ROM understands on its datalog cable, and how to build your own remote control panel — a phone, a tablet or a box of buttons — that switches the fan, sets limits, unlocks the engine and more.</p>
+
+<h2>What you need in the ROM</h2>
+<p>The commands live in modules of a <a href="new-rom.html">skeleton ROM</a>. Tick the ones you want when you create it (or later, with <b>Change functions</b>):</p>
+<table>
+  <tr><th>Module</th><th>What it adds</th></tr>
+  <tr><td>Datalogging: HTS / ISR frame</td><td>The serial link itself (every other module here needs it) and the 51-byte frame existing loggers read.</td></tr>
+  <tr><td>Datalogging: channel stream</td><td>The app's fast datalog: only the channels you ask for.</td></tr>
+  <tr><td>Datalog service commands</td><td>Clear codes, injectors off, timing locked, maps chosen, GIO outputs forced on.</td></tr>
+  <tr><td>Serial inputs</td><td>Values sent <i>to</i> the ECU, used as extra sensor or switch inputs.</td></tr>
+  <tr><td>Memory read</td><td>Any 32 bytes of the ECU's RAM, read while it runs.</td></tr>
+  <tr><td><b>Remote control commands</b></td><td>Fan on/off, rev and speed limits, the boost cut, VTEC point, shift light, launch rpm, limiter cut type and rolling idle set, popcorn mode, an anti-start lock with a main and a guest (valet) password.</td></tr>
+</table>
+<p>The remote control commands are <b>off until enabled</b>: tick <b>Take the remote control commands</b> on the ROM's <b>Added features &gt; Serial port</b> page. Until then every one of them is answered <code>7Fh</code> and nothing changes. The same page holds the lock, the two passwords, valet mode's limits and popcorn mode's settings.</p>
+<div class="note"><b>Forgotten at key-on</b>Everything set over the cable — a rev limit, the fan forced, popcorn on, a boost cut — lasts until the ECU is switched off. At the next key-on the ROM runs exactly as calibrated (and locked again, when the anti-start lock is on). A panel that wants a setting kept sends it again after each start.</div>
+
+<h2>The line</h2>
+<ul>
+  <li><b>38400 baud, 8 data bits, no parity, 1 stop bit</b> (62500 when the ROM has <b>62,500 baud</b> on, Serial port page), on the ECU's datalog transmit and receive pins — the same wiring a datalog cable uses. Logic level serial: a USB-serial adapter, a Bluetooth serial module or a microcontroller's UART, with a common ground.</li>
+  <li><b>One byte at a time.</b> The ECU has a one-byte receive buffer: leave about <b>1 ms between bytes</b> of a command (the value bytes after 2Ch, 33h, 35h, 2Fh).</li>
+  <li><b>Every command is answered with one byte</b>, normally within a few milliseconds. Wait for it (allow 200 ms) before sending the next command. <code>7Fh</code> means "this ROM cannot": the module is not built in, not enabled, or (after a password) the password was wrong.</li>
+  <li><b>Only one talker.</b> The ECU has one receive line: a laptop logging and a panel cannot both send at the same time. A panel can be the logger as well, or the laptop can send the commands for you (Codes and service).</li>
+</ul>
+
+<h3>While the channel stream is running</h3>
+<p>The channel stream (<code>71h</code>) sends frames back to back until <i>any</i> other byte arrives. To send a command in the middle of a log:</p>
+<ol>
+  <li>send <code>00h</code> (a byte the ROM ignores): the stream stops after the frame it is sending;</li>
+  <li>wait about 30 ms and throw away what has arrived;</li>
+  <li>send the command and read its answer;</li>
+  <li>send <code>71h</code> to start the stream again.</li>
+</ol>
+<p>Serial inputs (<code>FFh</code>, input, value) are the exception: they do not stop the stream and get no answer.</p>
+
+<h2>Remote control commands</h2>
+<table>
+  <tr><th>Send</th><th>Does</th><th>Answer</th></tr>
+  <tr><td><code>30h</code></td><td>Fan: back to the ECU's own control</td><td><code>30h</code></td></tr>
+  <tr><td><code>31h</code></td><td>Fan on (radiator fan relay pulled in, whatever the temperature)</td><td><code>31h</code></td></tr>
+  <tr><td><code>32h</code></td><td>Fan held off — watch the temperature</td><td><code>32h</code></td></tr>
+  <tr><td><code>33h n</code></td><td>Rev limit: <i>n</i> × 50 rpm (60 = 3000 rpm). <code>33h 00h</code> clears it. Fuel cut, 100 rpm of hysteresis. Never raises the ROM's own limit.</td><td><i>n</i></td></tr>
+  <tr><td><code>34h</code></td><td>Read the rev limit set</td><td><i>n</i> (0 = none)</td></tr>
+  <tr><td><code>35h n</code></td><td>Speed limit: <i>n</i> km/h. <code>35h 00h</code> clears it. Fuel cut, 2 km/h of hysteresis.</td><td><i>n</i></td></tr>
+  <tr><td><code>36h</code></td><td>Read the speed limit set</td><td><i>n</i> (0 = none)</td></tr>
+  <tr><td><code>37h n</code></td><td>The boost cut at <i>n</i>, in the MAP sensor's own counts (the ROM's MAP scaling turns a pressure into it; needs the boost cut module). <code>37h 00h</code>: the tune's own. <b>Never above the tune's own cut point</b> unless <b>Boost cut may be set above the tune's by</b> allows it (0 by default) — a panel can set the boost cut lower and put it back, not higher than the tune allows.</td><td><i>n</i></td></tr>
+  <tr><td><code>38h</code></td><td>Read the boost cut set</td><td><i>n</i> (0 = the tune's)</td></tr>
+  <tr><td><code>39h n</code></td><td>The VTEC engage point at rpm byte <i>n</i> (the ROM's rpm-axis byte: 2000 rpm is 80h, 3000 A0h, 4000 C0h, 5000 D0h, 6000 E0h; needs the VTEC module). <code>39h 00h</code>: the tune's own points.</td><td><i>n</i></td></tr>
+  <tr><td><code>3Ah</code></td><td>Read the VTEC point set</td><td><i>n</i> (0 = the tune's)</td></tr>
+  <tr><td><code>2Ch k n</code></td><td>Set value <i>k</i> (the table below) to <i>n</i>. <i>n</i> = 0: the tune's own again. A <i>k</i> past the last one: <code>7Fh</code>.</td><td><i>n</i></td></tr>
+  <tr><td><code>2Bh k</code></td><td>Read value <i>k</i></td><td><i>n</i> (0 = the tune's own)</td></tr>
+  <tr><td><code>3Dh</code></td><td>Popcorn mode on</td><td><code>3Dh</code></td></tr>
+  <tr><td><code>3Eh</code></td><td>Popcorn mode off</td><td><code>3Eh</code></td></tr>
+  <tr><td><code>3Fh</code></td><td>Read the state (below)</td><td>the state byte</td></tr>
+  <tr><td><code>2Dh</code></td><td>Everything set over the cable back to normal: fan to the ECU and every value (33h–3Ah and 2Ch) the tune's own again, popcorn off. The lock and valet mode stay.</td><td><code>2Dh</code></td></tr>
+  <tr><td><code>2Eh</code></td><td>Lock again (only with the anti-start lock on): <b>the engine stops at once</b> — or, with <b>valet mode instead of no start</b> ticked, drops to valet mode</td><td><code>2Eh</code></td></tr>
+  <tr><td><code>2Fh hi lo</code></td><td>A password, a number 0–65535, high byte first</td><td><code>80h</code> the main one (as tuned), <code>81h</code> the guest one (valet mode), <code>7Fh</code> neither</td></tr>
+</table>
+<h3>The values 2Ch sets (and 2Bh reads)</h3>
+<table>
+  <tr><th><i>k</i></th><th>Value</th><th><i>n</i></th></tr>
+  <tr><td><code>00h</code></td><td>Rev limit (the same as 33h / 34h)</td><td>× 50 rpm</td></tr>
+  <tr><td><code>01h</code></td><td>Speed limit (as 35h / 36h)</td><td>km/h</td></tr>
+  <tr><td><code>02h</code></td><td>Boost cut (as 37h / 38h)</td><td>MAP sensor counts</td></tr>
+  <tr><td><code>03h</code></td><td>VTEC point (as 39h / 3Ah)</td><td>rpm-axis byte</td></tr>
+  <tr><td><code>04h</code></td><td>Shift light point, every gear (needs the shift light module)</td><td>× 50 rpm</td></tr>
+  <tr><td><code>05h</code></td><td>How the rev limiter and launch control cut</td><td>1 fuel, 2 ignition, 3 both</td></tr>
+  <tr><td><code>06h</code></td><td>Two-step launch control rpm (needs launch control)</td><td>× 50 rpm</td></tr>
+  <tr><td><code>07h</code></td><td>Rolling idle (needs rolling idle; its throttle, speed, rpm and coolant conditions still apply)</td><td>1 off, 2 on</td></tr>
+  <tr><td><code>08h</code></td><td>What rolling idle leaves out</td><td>1 an injector opening, 2 a spark</td></tr>
+  <tr><td><code>09h</code></td><td>Rolling idle: one event left out in every <i>n</i></td><td>3–19</td></tr>
+</table>
+<p>Example: <code>2Ch 06h 46h</code> sets launch control to 70 × 50 = 3500 rpm; <code>2Ch 05h 01h</code> makes the rev limiter a fuel cut; <code>2Ch 06h 00h</code> puts the tune's launch rpm back. Whatever cut type is chosen, the limiters never let the engine past their limit.</p>
+<p>Values are set exactly as sent — no steps. A new setting takes effect within about 35 ms. A rev or speed limit set over the cable is always an extra limit: the tune's own rev limit and boost cut stay in force above it.</p>
+
+<h3>The state byte (answer to 3Fh)</h3>
+<table>
+  <tr><th>Bit</th><th>Means</th></tr>
+  <tr><td>0</td><td>the fan is forced (by 31h or 32h)</td></tr>
+  <tr><td>1</td><td>forced on (with bit 0); off when clear</td></tr>
+  <tr><td>2</td><td>popcorn mode on</td></tr>
+  <tr><td>3</td><td>unlocked (always set when the anti-start lock is off)</td></tr>
+  <tr><td>4</td><td>valet mode (the guest password was sent)</td></tr>
+  <tr><td>5</td><td>0</td></tr>
+  <tr><td>6</td><td>locked now: the engine will not run</td></tr>
+  <tr><td>7</td><td>the remote commands are enabled (always set in a real answer; <code>7Fh</code> means not enabled)</td></tr>
+</table>
+<p>Example: <code>88h</code> = enabled, unlocked, as tuned, nothing forced. <code>C0h</code> = enabled and locked. <code>9Fh</code> = valet mode, popcorn on, fan forced on.</p>
+
+<h3>Anti-start lock: main and guest passwords</h3>
+<p>With <b>No password, no start</b> ticked, every key-on starts locked: the engine cranks but gets no fuel and no spark until a password is sent. Tick <b>No or a wrong password: valet mode instead of no start</b> as well and it starts anyway, held to valet mode, until the main password is sent. There are two passwords:</p>
+<ul>
+  <li><b>The main password</b> runs the engine as tuned.</li>
+  <li><b>The guest password</b> (when <b>Take the guest password</b> is ticked) runs it in <b>valet mode</b>: its own rev limit, speed limit and softer timing, set on the same page — 4000 rpm, 60 km/h and 4° less by default.</li>
+</ul>
+<p>Each password is a number from 0 to 65535 (two bytes, as a ushort), sent high byte first: 1234 is <code>04D2h</code>, so send <code>2Fh 04h D2h</code>; 12345 is <code>3039h</code>: <code>2Fh 30h 39h</code>; 65535 is <code>2Fh FFh FFh</code>. Keep the two different. A rev or speed limit sent with 33h / 35h wins over valet mode's. Sending the main password while in valet mode puts the engine back as tuned; the guest password works with the lock off too, to switch valet mode on.</p>
+<div class="note"><b>Not a security system</b>Anyone with a laptop and this page can send passwords; the ECU can be swapped. It stops a casual start, a valet or a learner — like a hidden switch — and is as strong as your password and your wiring.</div>
+
+<h3>Popcorn mode</h3>
+<p>Off the throttle above its rpm (Serial port page: <b>Works above</b>, <b>With the throttle at or under</b>), the ROM keeps the fuel on instead of the overrun cut, adds fuel, takes timing out and cuts the sparks every other tick, so fuel burns in the exhaust and pops. Back on the throttle, or below the rpm, everything is normal again. Above the ROM's own rev limit the fuel cut always wins.</p>
+<div class="note"><b>Hard on parts</b>Popcorn mode heats the exhaust, the catalytic converter (it will not survive long) and the turbo. Use it for short spells.</div>
+
+<h2>The other commands</h2>
+<table>
+  <tr><th>Send</th><th>Module</th><th>Does / answer</th></tr>
+  <tr><td><code>10h</code></td><td>HTS / ISR frame</td><td>hello: <code>CDh</code></td></tr>
+  <tr><td><code>20h</code></td><td>HTS / ISR frame</td><td>the 51-byte frame and its checksum (byte 8 status, 12–15 the stored codes)</td></tr>
+  <tr><td><code>C0h</code>+<i>n</i></td><td>HTS / ISR frame</td><td>byte <i>n</i> of that frame</td></tr>
+  <tr><td><code>7Eh</code></td><td>channel stream</td><td>identify: <code>7Eh</code>, version <code>04h</code>, channels, what is built in (bit 1 serial inputs, 2 memory read, 3 service commands, 4 slow ranges, <b>5 remote control</b>, 6 trigger pattern log), checksum (the five sum to 00h). A panel can check bit 5 before offering remote buttons.</td></tr>
+  <tr><td><code>75h</code> / <code>74h</code></td><td>channel stream</td><td>the channels to stream (see <a href="datalogging.html#channels">Datalogging</a>)</td></tr>
+  <tr><td><code>71h</code> / <code>72h</code></td><td>channel stream</td><td>stream frames until another byte comes / one frame</td></tr>
+  <tr><td><code>50h</code></td><td>service commands</td><td>clear the stored codes (the lamp goes off)</td></tr>
+  <tr><td><code>51h</code> / <code>52h</code></td><td>service commands</td><td>injectors off / on</td></tr>
+  <tr><td><code>53h</code> / <code>54h</code></td><td>service commands</td><td>timing locked / normal</td></tr>
+  <tr><td><code>55h</code>–<code>57h</code></td><td>service commands</td><td>maps by their switch / first / second</td></tr>
+  <tr><td><code>58h</code>–<code>5Bh</code></td><td>service commands</td><td>GIO 1–4 forced on (again: back to its conditions)</td></tr>
+  <tr><td><code>5Eh</code> / <code>5Fh</code></td><td>service commands</td><td>all back to normal (the cylinder test too) / the service state</td></tr>
+  <tr><td><code>63h</code></td><td>service commands</td><td>the cylinder test off: every injector firing</td></tr>
+  <tr><td><code>64h</code>–<code>67h</code></td><td>service commands</td><td>cylinder 1–4's injector cut, one at a time (the one cut before comes back); the lamp flashes meanwhile</td></tr>
+  <tr><td><code>60h lo hi chk</code></td><td>memory read</td><td><code>60h</code>, 32 RAM bytes from that address (80h–460h), checksum</td></tr>
+  <tr><td><code>61h</code> / <code>62h</code></td><td>trigger pattern log</td><td>capture the next cam revolution (answer <code>61h</code>) / send it: <code>62h</code>, state (25 = done), scale, 24 teeth (bits 0–5 the tooth's time, 6 CYP, 7 TDC), sum</td></tr>
+  <tr><td><code>FFh in val</code></td><td>serial inputs</td><td>serial input <i>in</i> (00h–FDh) = <i>val</i> (00h–FEh); no answer</td></tr>
+</table>
+<p>Serial inputs make a panel's switches into ECU inputs too: a button that sends <code>FFh 05h 01h</code> while held (and <code>FFh 05h 00h</code> when let go), with input 5 kept as serial input 1, can be the launch control or speed limiter switch — pick <b>serial input 1</b> in that module's input list.</p>
+
+<h2>Building a remote control panel</h2>
+<p>Any device that can send bytes at 38400 baud will do. Three common ways:</p>
+<ul>
+  <li><b>A phone or tablet</b> with a <b>Bluetooth serial module</b> (an HC-05 or similar, set to 38400 baud) wired to the datalog pins: a serial terminal app with buttons, or your own app.</li>
+  <li><b>A microcontroller</b> (Arduino, ESP32) with real buttons and an LCD, its UART on the datalog pins.</li>
+  <li><b>A small computer</b> (a Raspberry Pi, a laptop) with a USB-serial adapter: a script or a web page served on the car's Wi-Fi.</li>
+</ul>
+<p>Wiring: the device's TX to the ECU's datalog receive, its RX to the ECU's datalog transmit, ground to ground. Power the device from a switched 12 V supply through a proper 5 V regulator, not from the ECU.</p>
+
+<h3>The pattern every panel follows</h3>
+<ol>
+  <li>At start (and every few seconds): send <code>3Fh</code>. No answer: the ECU is off. <code>7Fh</code>: the remote commands are not enabled. Otherwise show the state — locked, valet mode, fan and popcorn.</li>
+  <li>When locked: ask for the password and send <code>2Fh hi lo</code>. Show "wrong password" on <code>7Fh</code>.</li>
+  <li>A button press: send its command, wait for the answer, then send <code>3Fh</code> (or 34h / 36h / 38h / 3Ah) to show what the ECU now has. Show what the ECU says, not what the button was meant to do.</li>
+  <li>After the ECU restarts (no answer for a while, then answers again), send again whatever the panel wants kept.</li>
+</ol>
+
+<h3>Example: a Python script (a laptop or a Raspberry Pi)</h3>
+<pre><code>import serial, time
+
+ecu = serial.Serial("COM5", 38400, timeout=0.2)   # /dev/ttyUSB0 on Linux
+
+def command(*data):
+    """Send one command (and its value bytes), return the ECU's one-byte answer or None."""
+    ecu.reset_input_buffer()
+    for b in data:
+        ecu.write(bytes([b]))
+        time.sleep(0.002)                  # the ECU takes one byte at a time
+    answer = ecu.read(1)
+    return answer[0] if answer else None
+
+state = command(0x3F)
+if state is None:
+    print("no answer: is the ECU on?")
+elif state == 0x7F:
+    print("remote commands not enabled in this ROM")
+else:
+    if state &amp; 0x40:                      # locked
+        pw = 1234
+        r = command(0x2F, pw &gt;&gt; 8, pw &amp; 0xFF)
+        print("wrong password" if r == 0x7F else "unlocked, valet mode" if r == 0x81 else "unlocked")
+    command(0x31)                          # fan on
+    command(0x33, 4000 // 50)              # rev limit 4000 rpm
+    print("rev limit now", command(0x34) * 50, "rpm")
+    command(0x39, 0xD0)                    # VTEC at 5000 rpm (the rpm byte)
+    command(0x2D)                          # all back to normal</code></pre>
+
+<h3>Example: an Arduino with three buttons</h3>
+<pre><code>// Buttons on pins 2, 3, 4 to ground: fan on, fan auto, popcorn toggle. Serial1 on the datalog pins.
+const byte FAN_ON = 0x31, FAN_AUTO = 0x30, POP_ON = 0x3D, POP_OFF = 0x3E, STATE = 0x3F;
+bool popcorn = false;
+
+int command(byte c) {                      // one command, its answer (-1: none)
+  while (Serial1.available()) Serial1.read();
+  Serial1.write(c);
+  unsigned long t = millis();
+  while (!Serial1.available()) if (millis() - t &gt; 200) return -1;
+  return Serial1.read();
+}
+
+void setup() {
+  Serial1.begin(38400);
+  for (byte p = 2; p &lt;= 4; p++) pinMode(p, INPUT_PULLUP);
+}
+
+void loop() {
+  if (digitalRead(2) == LOW) command(FAN_ON);
+  if (digitalRead(3) == LOW) command(FAN_AUTO);
+  if (digitalRead(4) == LOW) {
+    int s = command(popcorn ? POP_OFF : POP_ON);
+    if (s != -1 &amp;&amp; s != 0x7F) popcorn = !popcorn;
+  }
+  int st = command(STATE);                 // keep the panel's idea in step with the ECU
+  if (st &gt;= 0x80 &amp;&amp; st != 0x7F) popcorn = st &amp; 0x04;
+  delay(250);                              // a crude debounce, and a gentle poll
+}</code></pre>
+
+<h3>Trying it without a car</h3>
+<p>Open the ROM in Rom Sim Studio, start the simulator and connect the datalog to it (Datalogging menu). <b>Datalogging &gt; Codes and service</b> has a <b>Remote control</b> section with every command as a button — fan, popcorn, and the rev limit, speed limit, boost cut and VTEC point each typed in your units with Set, Clear and Read (all read when the window opens), password and lock — and shows what the ECU answers, so a panel's behaviour can be checked before it goes in a car. The <b>Limiters cutting</b> channel shows <b>remote</b> (its limits and the lock) and <b>popcorn</b> while they cut.</p>
+
+<footer>Rom Sim Studio 0.0.0.8 · by bmgjet · <a href="licence.html">Licence</a></footer>
+</main></div>
+<script src="guide.js"></script>
+</body>
+</html>

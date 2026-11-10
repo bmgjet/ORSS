@@ -42,7 +42,7 @@ endif
 if XP == XP_CODE
 boostman_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -54,10 +54,10 @@ boostman_tick:
                 CMPB    A, #000h
                 JEQ     boostman_off
                 LCB     A, boostman_tps
-                CMPB    0b9h, A
+                CMPB    ENG_TPS, A
                 JLT     boostman_off
                 LC      A, boostman_rpm
-                CMP     0ach, A                ; period past the point's: below the rpm
+                CMP     ENG_RPMP, A                ; period past the point's: below the rpm
                 JGT     boostman_off
                 CLR     A
                 LCB     A, boostman_duty

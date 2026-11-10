@@ -57,7 +57,7 @@ endif
 if XP == XP_CODE
 flex_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1

@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Every function and module — Rom Sim Studio guide</title>
+<link rel="icon" href="../favicon.ico">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<header class="topbar"><button class="menu-btn" aria-label="Contents">☰</button><a class="logo" href="index.html">ROM SIM <b>STUDIO</b></a><span class="sp"></span><span class="links"><a href="../">Website</a> &nbsp;·&nbsp; <a href="../#start">Download</a></span></header>
+<div class="frame"><nav class="side"></nav><main>
+
+<h1>Every function and module</h1>
+<p class="lead">The 57 modules and 13 stock functions File &gt; New ROM &gt; Create can build into the P30 skeleton, from the modules' own headers. The bare skeleton leaves 11,709 bytes of the 32 KB free. The modules share a library (the cut requests, the fuel and timing trims, the outputs) of about 736 bytes, built in once with the first module that needs it; the sizes below are what each adds on top of that, with anything it needs counted separately.</p>
+<p>The same functions on the P13 skeleton: <a href="modules-p13.html">Every function and module: P13</a>.</p>
+<p>Every module starts <b>switched off</b>: building one in changes nothing until it is set up and enabled on its page. See <a href="new-rom.html">Creating a custom ROM</a> for how they are picked and checked.</p>
+<p><a href="#boost">Boost</a> · <a href="#diagnostics">Diagnostics</a> · <a href="#driver-aids">Driver aids</a> · <a href="#fuel">Fuel</a> · <a href="#idle">Idle</a> · <a href="#ignition">Ignition</a> · <a href="#limits">Limits</a> · <a href="#options">Options</a> · <a href="#outputs">Outputs</a> · <a href="#protection">Protection</a> · <a href="#sensors">Sensors</a> · <a href="#stock-functions">Stock functions</a></p>
+
+<h2 id="boost">Boost</h2>
+<div class="mod" id="feat_boostcut"><h3>Boost cut</h3>
+<p>Cuts fuel (or spark) the moment manifold pressure reaches the cut point - a lower one while the engine is cold - and lets it back in once the pressure has dropped a little under it. The safety net for a wastegate that sticks or a boost controller that runs away. Needs a MAP sensor that reads boost (a 2.5 or 3 bar sensor, with the MAP sensor scaling to match). Off until enabled.</p>
+<p class="meta"><code>FEAT_BOOSTCUT</code> · 162 bytes of ROM · 1 bytes of module RAM · RAM: 1F2h-1F5h (shared cut requests), module RAM (1 byte)</p></div>
+<div class="mod" id="feat_ebc"><h3>Electronic boost control</h3>
+<p>Drives a boost control solenoid on P4.3 (the stock A/T lock-up output) at 19.5 Hz: a base duty against rpm, corrected towards a target boost against rpm (closed loop, set the gain to 0 for open loop). Below a throttle opening the solenoid is off and the wastegate holds its spring pressure. With gear detection, a cap on the duty in each gear: less boost in the low gears. Off until enabled.</p>
+<p class="meta"><code>FEAT_EBC</code> · 185 bytes of ROM · 2 bytes of module RAM · RAM: module RAM (2 bytes) · cannot be built with <a href="#feat_boostmanual">Manual boost controller</a>, <a href="#feat_stock_at">Stock automatic transmission shift and lock-up control</a></p></div>
+<div class="mod" id="feat_boostmanual"><h3>Manual boost controller</h3>
+<p>One duty on a boost control solenoid on P4.3, above an rpm and a throttle opening: the electronic version of a bleed valve, for a second boost level over the wastegate spring. Off until enabled.</p>
+<p class="meta"><code>FEAT_BOOSTMANUAL</code> · 77 bytes of ROM · cannot be built with <a href="#feat_ebc">Electronic boost control</a>, <a href="#feat_stock_at">Stock automatic transmission shift and lock-up control</a></p></div>
+<div class="mod" id="feat_wmi"><h3>Water / methanol injection</h3>
+<p>Drives a water/methanol pump (or its solenoid) on a free output with a duty from a table against manifold pressure, as the boost controller does for its solenoid: 19.5 Hz, in 4 % steps. Only above an rpm and throttle and with the coolant warm. Off until enabled.</p>
+<p class="meta"><code>FEAT_WMI</code> · 399 bytes of ROM · 3 bytes of module RAM · RAM: module RAM (3 bytes, the software PWM)</p></div>
+
+<h2 id="diagnostics">Diagnostics</h2>
+<div class="mod" id="feat_dlstream"><h3>Datalogging: channel stream</h3>
+<p>Logging only what you need, as fast as the line allows: the logger says which channels it wants and the ECU streams them back in frames stamped with its own 2.048 ms tick (Datalogging &gt; Channels… picks them). Fast channels go in every frame; slow ones (temperatures, battery, codes) take turns, one a frame, so a frame stays short. Word values (rpm, injector time) are read in one go, never half old and half new. The app&#39;s own protocol, and the fastest; the HTS frame still answers alongside it. Paced by the spark calculation (datalog.asm&#39;s byte budget): it can never take the engine code&#39;s time, whatever the rpm or the line speed.</p>
+<p class="meta"><code>FEAT_DLSTREAM</code> · 1,884 bytes of ROM · 1 bytes of module RAM · RAM: 374h-377h, 3E0h-3EFh · cannot be built with <a href="#feat_stock_serial">Stock serial diagnostic link</a></p></div>
+<div class="mod" id="feat_dlextra"><h3>Datalogging: every channel</h3>
+<p>Everything worth logging, on top of the channel stream&#39;s own list: why the fuel is cut (the rev limiter, overrun, which limiter module), the fuel map&#39;s value before the corrections and each correction after it (warm-up, intake air, baro, acceleration, tip-in, post-start, dead time, knock), each ignition correction and the knock retard, dwell, the idle target and its corrections, VTEC&#39;s state, the map indexes, the engine&#39;s flag bytes, and eight RAM addresses of your own. Pick them in Datalogging &gt; Channels; &quot;Everything&quot; logs the lot (each slow one comes round in turn).</p>
+<p class="meta"><code>FEAT_DLEXTRA</code> · 307 bytes of ROM · needs <a href="#feat_dlstream">Datalogging: channel stream</a></p></div>
+<div class="mod" id="feat_datalog"><h3>Datalogging: HTS / ISR frame</h3>
+<p>The HTS / ISR protocol on the datalog pins at 38400 baud (the HTS wiring; 62,500 with DatalogFast): existing loggers work unchanged. 10h (or ABh) -&gt; CDh, then 20h (or 90h) -&gt; the 51-byte frame and its checksum, C0h+n -&gt; byte n of it, 40h -&gt; the HTS120 extra packet. The QD3 frame is a different protocol on the same pins: one or the other. The channel stream and the service commands go with either. Whatever is sent, the main loop&#39;s spark calculation sets how many bytes may go before the next one: fewer the higher the rpm, so logging can never take the time the engine code needs.</p>
+<p class="meta"><code>FEAT_DATALOG</code> · 611 bytes of ROM · 1 bytes of module RAM · RAM: 374h-37Eh (378h-37Eh is bank 6Fh), 0FDh bit 7 and module RAM (1 byte): the byte budget · cannot be built with <a href="#feat_stock_serial">Stock serial diagnostic link</a>, <a href="#feat_dlqd3">Datalogging: QD3 frame</a></p></div>
+<div class="mod" id="feat_dlmemread"><h3>Datalogging: memory read</h3>
+<p>The ECU&#39;s RAM read over the datalog cable while the engine runs, 32 bytes at a time: any value or module state on the car, not just the ones a datalog channel sends (Datalogging &gt; Codes and service… &gt; ECU memory). The ROM itself is never sent, so the code and the maps of a tune stay in the chip.</p>
+<p class="meta"><code>FEAT_DLMEMREAD</code> · 534 bytes of ROM · 1 bytes of module RAM · cannot be built with <a href="#feat_stock_serial">Stock serial diagnostic link</a></p></div>
+<div class="mod" id="feat_dlqd3"><h3>Datalogging: QD3 frame</h3>
+<p>The QD3 protocol, for scan tools and loggers that speak it: ABh -&gt; BCh, then 46h -&gt; a 40-byte frame (46h 26h first) and its checksum, the sum of the 40. Rpm, injector time, timing, knock retard, O2, VTEC, road speed, battery, MAP, throttle, intake air, coolant and the stored trouble codes; the other bytes hold what a QD3 ECU sends there. A different protocol from the HTS / ISR frame on the same pins: one or the other. The channel stream and the service commands go with either.</p>
+<p class="meta"><code>FEAT_DLQD3</code> · 547 bytes of ROM · 1 bytes of module RAM · cannot be built with <a href="#feat_stock_serial">Stock serial diagnostic link</a>, <a href="#feat_datalog">Datalogging: HTS / ISR frame</a></p></div>
+<div class="mod" id="feat_dlserialin"><h3>Datalogging: serial inputs</h3>
+<p>The datalog cable works both ways: the laptop (or a small board on the ECU&#39;s datalog receive line) sends values to the ECU, and modules use them as extra inputs - a wideband the laptop reads, a switch with no spare pin for it, a flex sensor. Each value is three bytes: FFh, the input&#39;s number (00h-FDh, 254 inputs) and the value (00h-FEh); nothing comes back, and a running channel stream carries on. The ROM keeps eight, picked by number on its page. Closed loop, lean protection and flex fuel can read one as an analog input (inputs 4-11); every module with a switch input can take one as a switch (on while it is not 0). With none for a while (a cable pulled out) each reads as its default. Datalog &gt; Channels… sends them from the log.</p>
+<p class="meta"><code>FEAT_DLSERIALIN</code> · 649 bytes of ROM · 1 bytes of module RAM · RAM: 392h-39Ah (the stock trouble codes&#39; own); with FEAT_STOCK_DTC module RAM (9 bytes) · cannot be built with <a href="#feat_stock_serial">Stock serial diagnostic link</a></p></div>
+<div class="mod" id="feat_dlservice"><h3>Datalogging: service commands</h3>
+<p>Over the datalog cable (Datalogging &gt; Codes and service…): clear the trouble codes, injectors off, the timing locked for a timing light, the maps picked, the GIO outputs forced on, and the cylinder test - one cylinder&#39;s injector cut at a time, to find the one that is not firing (cutting it changes nothing). The check-engine lamp flashes quickly while any of these is on.</p>
+<p class="meta"><code>FEAT_DLSERVICE</code> · 1,075 bytes of ROM · 1 bytes of module RAM · RAM: 1F7h, 2FFh · cannot be built with <a href="#feat_stock_serial">Stock serial diagnostic link</a></p></div>
+<div class="mod" id="feat_remote"><h3>Remote control commands</h3>
+<p>Commands over the datalog cable for a remote control panel (a phone, a dash button box): the fan on or off, the rev limit, the speed limit, the boost cut and the VTEC point set, popcorn mode (decel pops), and an anti-start lock: no password, no start. The main password runs the engine as tuned, the guest password in valet mode - a lower rev limit, a speed limit, softer timing (or, set so, no password at all means valet mode instead of no start). Also the shift light point, fuel or ignition cut for the rev limiter and launch control, the launch rpm and rolling idle. Everything set over the cable is forgotten at power-up. Off until enabled.</p>
+<p class="meta"><code>FEAT_REMOTE</code> · 1,421 bytes of ROM · 21 bytes of module RAM · RAM: 0FDh bit 1, module RAM (21 bytes), and the rev cap: 2 more shared by every rev limit (lib.asm) · needs <a href="#feat_datalog">Datalogging: HTS / ISR frame</a> · cannot be built with <a href="#feat_stock_serial">Stock serial diagnostic link</a></p></div>
+<div class="mod" id="feat_triglog"><h3>Trigger pattern log</h3>
+<p>The distributor&#39;s three signals as the ECU sees them, for a sensor that plays up: asked over the datalog cable, the ECU records one cam revolution - the 24 crank teeth, each one&#39;s time, and which of them the TDC and cylinder pulses came with - and sends it back (Datalogging &gt; Trigger pattern). A missed or extra crank tooth, a TDC pulse out of place or missing, no cylinder pulse: each shows in the bars. Nothing runs until a capture is asked for, and then only for one revolution.</p>
+<p class="meta"><code>FEAT_TRIGLOG</code> · 308 bytes of ROM · 29 bytes of module RAM · RAM: 0FDh bit 6 (capturing), module RAM (28 bytes) · needs <a href="#feat_dlstream">Datalogging: channel stream</a> · cannot be built with <a href="#feat_stock_serial">Stock serial diagnostic link</a></p></div>
+
+<h2 id="driver-aids">Driver aids</h2>
+<div class="mod" id="feat_shiftlight"><h3>Shift light on the check-engine lamp</h3>
+<p>Lights the dash check-engine lamp (P1.4) above a shift rpm, one rpm for every gear or one per gear. Below it the lamp is left to whatever else drives it (the stock trouble codes, when they are built in).</p>
+<p class="meta"><code>FEAT_SHIFTLIGHT</code> · 283 bytes of ROM · cannot be built with <a href="#feat_warnlamp">Warning lamp (coolant / battery)</a></p></div>
+
+<h2 id="fuel">Fuel</h2>
+<div class="mod" id="feat_wbcl"><h3>Closed loop on a wideband</h3>
+<p>Trims the fuel towards a target AFR read from a wideband O2 controller on an analog input: a target against manifold pressure, only with the engine warm and inside an rpm and throttle window, and never further than a set limit either way. Outside the window the trim goes back to nothing. Off until enabled.</p>
+<p class="meta"><code>FEAT_WBCL</code> · 190 bytes of ROM · 3 bytes of module RAM · RAM: module RAM (3 bytes) · cannot be built with <a href="#feat_stock_o2">Stock closed-loop o2 control</a></p></div>
+<div class="mod" id="feat_extmaps"><h3>Extended maps (20 load columns)</h3>
+<p>Widens the fuel, ignition and VE maps from 10 load columns to 20, with a 20-point load axis, for finer steps where the engine needs them. The new maps are made from the stock ones, so the engine runs exactly as before until they are changed. Every map grows by 10 bytes a row (about 1,000 bytes with the stock functions left out); the modules that switch maps use the same size.</p>
+<p class="meta"><code>FEAT_EXTMAPS</code> · 1,141 bytes of ROM</p></div>
+<div class="mod" id="feat_flex"><h3>Flex fuel</h3>
+<p>Reads the ethanol content from an ethanol sensor through an analog converter (0-5 V) on an analog input, and adds fuel and timing against it from two tables, so the car runs on anything from pump fuel to E85 without a retune. A sensor with a frequency output needs a converter to a voltage. Off until enabled.</p>
+<p class="meta"><code>FEAT_FLEX</code> · 210 bytes of ROM · 5 bytes of module RAM · RAM: module RAM (5 bytes)</p></div>
+<div class="mod" id="feat_gearfuel"><h3>Fuel by gear</h3>
+<p>Adds or takes away fuel in each gear: the long pull in top gear leaner or richer than the short ones. Needs gear detection. Off until enabled.</p>
+<p class="meta"><code>FEAT_GEARFUEL</code> · 77 bytes of ROM · 2 bytes of module RAM · RAM: module RAM (2 bytes) · needs <a href="#feat_gear">Gear detection</a></p></div>
+<div class="mod" id="feat_cyltrim"><h3>Individual cylinder fuel trims</h3>
+<p>A fuel trim for each cylinder, applied all the time. The skeleton already has the per-cylinder table (stock P30 uses it only in closed loop); this takes that condition out, as HTS120 does, so the trims hold at full throttle too. The trims (CylinderFuelTrim, in the skeleton calibration) default to 0 %, so building it in changes nothing until they are set.</p>
+<p class="meta"><code>FEAT_CYLTRIM</code></p></div>
+<div class="mod" id="feat_fueltrim"><h3>Injector size and fuel trim</h3>
+<p>Scales every pulse width for injectors of a different size (the size the calibration was written for against the size fitted) and adds a trim of its own, so a change of injectors or fuel is one setting instead of a new VE map. Off until enabled.</p>
+<p class="meta"><code>FEAT_FUELTRIM</code> · 154 bytes of ROM · 4 bytes of module RAM · RAM: module RAM (4 bytes)</p></div>
+<div class="mod" id="feat_alphan"><h3>Maps indexing (alpha-N)</h3>
+<p>Looks up the fuel and ignition maps on a load worked out from the throttle (alpha-N) instead of from MAP: for individual throttle bodies and big cams, where MAP barely moves. Crossover points pick where it takes over: at or above either the throttle or the MAP point the throttle table is used, below both the MAP sensor as stock. A throttle point of 0 % means always. Off until enabled.</p>
+<p class="meta"><code>FEAT_ALPHAN</code> · 102 bytes of ROM · RAM: 2F7h (the load used)</p></div>
+<div class="mod" id="feat_nitrous"><h3>Nitrous (N2O)</h3>
+<p>While the arming switch is on, the throttle is open and the rpm is inside its window, the nitrous maps (a second fuel and ignition map, low and high cam, set up for the base shot - a 50 hp jet, say) are used, and an output can drive the solenoid. A shot input - a voltage on a free analog pin, or a serial input over the datalog cable - scales how far the nitrous maps are from the normal ones: 100 % is the maps as tuned, 150 % half as much more fuel and timing out again (a 75 hp jet), 200 % twice the change (100 hp). The shot table says what each voltage means, blended between its points. Off until enabled.</p>
+<p class="meta"><code>FEAT_NITROUS</code> · 1,328 bytes of ROM · 1 bytes of module RAM · RAM: 0FDh bit 5 (spraying), module RAM (1 byte, the shot factor) · cannot be built with <a href="#feat_dualmaps">Secondary maps (full fuel and ignition maps)</a>, <a href="#feat_mapswitch">Secondary tune on a switch</a></p></div>
+<div class="mod" id="feat_dualmaps"><h3>Secondary maps (full fuel and ignition maps)</h3>
+<p>A complete second set of fuel and ignition maps, low and high cam (FuelLow2, FuelHigh2, IgnitionLow2, IgnitionHigh2), used instead of the first set while a switch input is on and, if set, above an rpm and a throttle: race fuel and pump fuel, a valet tune, a nitrous or boost map. They start as copies of the first maps. They are the same size as the first maps (twice as large with extended maps): about 820 bytes, 1,640 with FEAT_EXTMAPS. Off until enabled.</p>
+<p class="meta"><code>FEAT_DUALMAPS</code> · 948 bytes of ROM · RAM: 0FDh bit 0 · cannot be built with <a href="#feat_mapswitch">Secondary tune on a switch</a>, <a href="#feat_nitrous">Nitrous (N2O)</a></p></div>
+<div class="mod" id="feat_mapswitch"><h3>Secondary tune on a switch</h3>
+<p>A second tune for a switch input: while it is on, fuel and timing change by two tables against rpm - race fuel against pump fuel, a valet tune, or a nitrous map with the timing pulled. Off with the switch off. Off until enabled.</p>
+<p class="meta"><code>FEAT_MAPSWITCH</code> · 155 bytes of ROM · 5 bytes of module RAM · RAM: module RAM (5 bytes) · cannot be built with <a href="#feat_dualmaps">Secondary maps (full fuel and ignition maps)</a>, <a href="#feat_nitrous">Nitrous (N2O)</a></p></div>
+
+<h2 id="idle">Idle</h2>
+<div class="mod" id="feat_antistall"><h3>Anti-stall</h3>
+<p>When the rpm drops below a point with the engine running, it does what it can to keep it going: the idle valve opened to a set duty, timing added, and optionally the A/C compressor and the alternator switched off to take their load away. Back to normal above a higher rpm, after a hold time. Off until enabled.</p>
+<p class="meta"><code>FEAT_ANTISTALL</code> · 432 bytes of ROM · 3 bytes of module RAM · RAM: 0FDh bit 2, module RAM (3 bytes)</p></div>
+<div class="mod" id="feat_rollidle"><h3>Rolling idle</h3>
+<p>At idle, one injector opening (or one spark) in every few is left out, so a different cylinder misses each time round and the idle rolls and lopes like a big-cam engine. Only below an rpm and a throttle, at a standstill, with the coolant warm and (optionally) a switch on. Skipping an injector is the gentle way; skipping a spark sends that cylinder&#39;s fuel into the exhaust. Off until enabled.</p>
+<p class="meta"><code>FEAT_ROLLIDLE</code> · 322 bytes of ROM · 4 bytes of module RAM · RAM: 0FBh (event count), 0FCh bit 1, 0FDh bits 3-4, module RAM (4 bytes)</p></div>
+
+<h2 id="ignition">Ignition</h2>
+<div class="mod" id="feat_gearign"><h3>Timing by gear</h3>
+<p>Adds or takes away timing in each gear: less in the low gears where the load builds quickly, more in the high ones. Needs gear detection. Off until enabled.</p>
+<p class="meta"><code>FEAT_GEARIGN</code> · 96 bytes of ROM · 2 bytes of module RAM · RAM: module RAM (2 bytes) · needs <a href="#feat_gear">Gear detection</a></p></div>
+<div class="mod" id="feat_tpsretard"><h3>TPS tip-in retard</h3>
+<p>Pulls timing for a moment when the throttle opens quickly, then gives it back a step at a time: the knock-free way through the lean spike of a sudden tip-in. Only below a set rpm. Off until enabled.</p>
+<p class="meta"><code>FEAT_TPSRETARD</code> · 181 bytes of ROM · 5 bytes of module RAM · RAM: module RAM (5 bytes)</p></div>
+<div class="mod" id="feat_traction"><h3>Traction control</h3>
+<p>Watches how fast the rpm climbs in each gear: faster than the car can accelerate means the tyres have let go, and timing is pulled a step at a time until the climb slows, then given back. Needs gear detection. Off until enabled.</p>
+<p class="meta"><code>FEAT_TRACTION</code> · 187 bytes of ROM · 4 bytes of module RAM · RAM: module RAM (4 bytes) · needs <a href="#feat_gear">Gear detection</a></p></div>
+
+<h2 id="limits">Limits</h2>
+<div class="mod" id="feat_burnout"><h3>Burnout control</h3>
+<p>A second standing rpm limit on its own input, for a burnout or a water-box warm-up: while the input is on and the car is below a road speed, the revs are held at the burnout rpm. Separate from launch control, so both can be set up on different switches. Off until enabled.</p>
+<p class="meta"><code>FEAT_BURNOUT</code> · 58 bytes of ROM · RAM: 1F2h-1F5h (shared cut requests), the rev cap: 2 bytes of module RAM shared by every rev limit (lib.asm)</p></div>
+<div class="mod" id="feat_fts"><h3>Full throttle shift (flat shift)</h3>
+<p>Change gear without lifting: with the throttle past a point and the car moving, pressing the shift input (the clutch switch, or any switch input) holds the revs at the shift rpm with an ignition cut, so the turbo stays spooled and the engine does not flare while the clutch is in. Off until enabled.</p>
+<p class="meta"><code>FEAT_FTS</code> · 82 bytes of ROM · RAM: 1F2h-1F5h (shared cut requests), the rev cap: 2 bytes of module RAM shared by every rev limit (lib.asm)</p></div>
+<div class="mod" id="feat_igncutmod"><h3>Ignition cut modifier</h3>
+<p>Shapes every ignition cut the limiters ask for (rev limit, launch, full throttle shift...): the cut lasts a time (its own for launch and for the shift), then sparks come back for the re-fire time, and again while the limiter holds. While any ignition cut is wanted it can add fuel and hold the timing at one value, for the pops and bangs of a two-step. Re-fire 0 keeps the plain cut. Off until enabled.</p>
+<p class="meta"><code>FEAT_IGNCUTMOD</code> · 270 bytes of ROM · 2 bytes of module RAM · RAM: 2F8h-2F9h, module RAM (2 bytes)</p></div>
+<div class="mod" id="feat_launch"><h3>Launch control (two-step)</h3>
+<p>Holds the revs at a launch rpm while the car is standing (below a road speed) and the launch input is on - the clutch switch, or any of the switch inputs - so it leaves the line on boost and in the torque. Past the road speed, or with the input off, the normal limiter is back. Ignition cut (the usual two-step), fuel cut, or both. Off until enabled.</p>
+<p class="meta"><code>FEAT_LAUNCH</code> · 68 bytes of ROM · RAM: 1F2h-1F5h (shared cut requests), the rev cap: 2 bytes of module RAM shared by every rev limit (lib.asm)</p></div>
+<div class="mod" id="feat_gearlimit"><h3>Rev limit by gear</h3>
+<p>A rev limit of its own for each gear: lower in first and second to keep a car hooked up, the full limit in the tall gears. Fuel cut (or ignition) with a 3 % band. Needs gear detection. Off until enabled.</p>
+<p class="meta"><code>FEAT_GEARLIMIT</code> · 125 bytes of ROM · RAM: 1F2h-1F5h (shared cut requests) · needs <a href="#feat_gear">Gear detection</a></p></div>
+<div class="mod" id="feat_revlimit"><h3>Rev limiter (ignition or fuel cut, per cam)</h3>
+<p>A limiter of your own on top of the skeleton&#39;s: it cuts at one rpm and lets the engine back in at a lower one, separately for the low cam and the high cam (VTEC solenoid on), with fuel cut, ignition cut or both. Ignition cut keeps fuel flowing, the sharper-sounding &quot;pops and bangs&quot; limiter; fuel cut is kinder to the catalyst. Off until enabled.</p>
+<p class="meta"><code>FEAT_REVLIMIT</code> · 53 bytes of ROM · RAM: 1F2h-1F5h (shared cut requests), the rev cap: 2 bytes of module RAM shared by every rev limit (lib.asm)</p></div>
+<div class="mod" id="feat_ceiling"><h3>Rpm ceilings by road speed</h3>
+<p>A rev limit that depends on road speed: five speeds, falling, each with the rpm the engine may reach at or above it. For gentle running-in, for keeping a learner under a limit in the low gears, or for a lower limit at a standstill. Fuel cut (or ignition) with a 3 % band. Off until enabled.</p>
+<p class="meta"><code>FEAT_CEILING</code> · 132 bytes of ROM · RAM: 1F2h-1F5h (shared cut requests)</p></div>
+<div class="mod" id="feat_speedlimit"><h3>Speed limiter (always or by switch)</h3>
+<p>Cuts fuel at a road speed - all the time (a valet or a learner setting), or only while a switch input is on (a pit-lane limiter on a button). Lets it back in 2 km/h under the limit. Off until enabled.</p>
+<p class="meta"><code>FEAT_SPEEDLIMIT</code> · 106 bytes of ROM · RAM: 1F2h-1F5h (shared cut requests)</p></div>
+
+<h2 id="options">Options</h2>
+<div class="mod" id="feat_cfgoverride"><h3>Board options override</h3>
+<p>The ECU reads its equipment options (automatic, knock sensor, O2 closed loop, VTEC pressure switch...) from the option bytes or, when those say so, from resistors on the board. This sets any of them in software instead: force a flag on or off whatever the board says, for a swapped engine or a board with the wrong resistors fitted. Nothing is forced until a box is ticked.</p>
+<p class="meta"><code>FEAT_CFGOVERRIDE</code> · 89 bytes of ROM</p></div>
+<div class="mod" id="feat_watermark"><h3>Watermark</h3>
+<p>Up to 16 characters of your own (a name, a tune number, a date) stored in the ROM scrambled, so they do not show in a hex view, with a check word worked out from them. The app shows the text and whether it is intact: an edit made any other way than through the app (a hex editor, another tool) shows as modified. It also holds an open password: OkiRomSim asks for it before it opens the ROM (a salted hash is kept, not the password). Neither changes how the ROM runs. 46 bytes.</p>
+<p class="meta"><code>FEAT_WATERMARK</code> · 47 bytes of ROM</p></div>
+
+<h2 id="outputs">Outputs</h2>
+<div class="mod" id="feat_accut"><h3>A/C load disable</h3>
+<p>Keeps the A/C compressor clutch off at wide throttle, above an rpm, or below an rpm (at a low idle, where it could stall the engine), and for a hold time after. Needs the stock A/C control built in. Off until enabled.</p>
+<p class="meta"><code>FEAT_ACCUT</code> · 309 bytes of ROM · 1 bytes of module RAM · RAM: module RAM (1 byte) · needs <a href="#feat_stock_ac">Stock a/c clutch control</a></p></div>
+<div class="mod" id="feat_gio1"><h3>GIO 1: programmable output</h3>
+<p>An output of your choice, switched on when every condition set for it holds: a switch input, rpm (with hysteresis), throttle, manifold pressure, coolant, intake air, road speed, gear and battery windows, with an on and an off delay, or flashing while the conditions hold. A nitrous arming relay, an intercooler spray, a second fan, a warning light. Each of GIO 1-4 is its own function with its own page. Off until enabled.</p>
+<p class="meta"><code>FEAT_GIO1</code> · 572 bytes of ROM · 1 bytes of module RAM · RAM: 1F1h bit 4, module RAM (1 byte)</p></div>
+<div class="mod" id="feat_gio2"><h3>GIO 2: programmable output</h3>
+<p>An output of your choice, switched on when every condition set for it holds: a switch input, rpm (with hysteresis), throttle, manifold pressure, coolant, intake air, road speed, gear and battery windows, with an on and an off delay, or flashing while the conditions hold. A nitrous arming relay, an intercooler spray, a second fan, a warning light. Each of GIO 1-4 is its own function with its own page. Off until enabled.</p>
+<p class="meta"><code>FEAT_GIO2</code> · 572 bytes of ROM · 1 bytes of module RAM · RAM: 1F1h bit 5, module RAM (1 byte)</p></div>
+<div class="mod" id="feat_gio3"><h3>GIO 3: programmable output</h3>
+<p>An output of your choice, switched on when every condition set for it holds: a switch input, rpm (with hysteresis), throttle, manifold pressure, coolant, intake air, road speed, gear and battery windows, with an on and an off delay, or flashing while the conditions hold. A nitrous arming relay, an intercooler spray, a second fan, a warning light. Each of GIO 1-4 is its own function with its own page. Off until enabled.</p>
+<p class="meta"><code>FEAT_GIO3</code> · 572 bytes of ROM · 1 bytes of module RAM · RAM: 1F1h bit 6, module RAM (1 byte)</p></div>
+<div class="mod" id="feat_gio4"><h3>GIO 4: programmable output</h3>
+<p>An output of your choice, switched on when every condition set for it holds: a switch input, rpm (with hysteresis), throttle, manifold pressure, coolant, intake air, road speed, gear and battery windows, with an on and an off delay, or flashing while the conditions hold. A nitrous arming relay, an intercooler spray, a second fan, a warning light. Each of GIO 1-4 is its own function with its own page. Off until enabled.</p>
+<p class="meta"><code>FEAT_GIO4</code> · 572 bytes of ROM · 1 bytes of module RAM · RAM: 1F1h bit 7, module RAM (1 byte)</p></div>
+<div class="mod" id="feat_iab"><h3>IAB (intake butterflies)</h3>
+<p>Opens the intake manifold&#39;s secondary butterflies (IAB, on B16/B18C manifolds) above an rpm and shuts them again below a lower one, through one of the outputs the skeleton leaves free (the EVAP purge output is the usual one on a car without purge). Off until enabled.</p>
+<p class="meta"><code>FEAT_IAB</code> · 309 bytes of ROM · RAM: 1F1h bit 0 (its state)</p></div>
+<div class="mod" id="feat_rpmswitch"><h3>Rpm-switched output</h3>
+<p>A general-purpose switch: an output comes on above one rpm (and above a throttle opening, if set) and goes off below another - a second shift light, a nitrous arming signal, an intercooler spray, a relay for a fan. Uses one of the outputs the skeleton leaves free. Off until enabled.</p>
+<p class="meta"><code>FEAT_RPMSWITCH</code> · 330 bytes of ROM · RAM: 1F1h bit 1 (its state)</p></div>
+<div class="mod" id="feat_smartalt"><h3>Smart alternator</h3>
+<p>Turns the alternator&#39;s charging down (the alternator control line, P0.2, pin A16) under heavy load - wide throttle or high boost above an rpm - for the power it takes, and back to normal once the load has gone for the hold time or if the battery falls below a minimum. Which level of P0.2 turns charging down depends on the alternator and wiring: check it on the car. Off until enabled.</p>
+<p class="meta"><code>FEAT_SMARTALT</code> · 321 bytes of ROM · 1 bytes of module RAM · RAM: module RAM (1 byte)</p></div>
+<div class="mod" id="feat_tach"><h3>Tachometer output</h3>
+<p>A tachometer signal on one of the free outputs, for an aftermarket tacho or a shift light that wants one: the output changes state at every spark interrupt, two pulses per crank revolution: the signal a 4-cylinder tacho expects from the igniter. Off until enabled.</p>
+<p class="meta"><code>FEAT_TACH</code> · 328 bytes of ROM · RAM: 1F1h bit 3 (its state)</p></div>
+<div class="mod" id="feat_vtecctl"><h3>VTEC control and alternative output</h3>
+<p>The VTEC page as the established tuning software lays it out: switch VTEC off altogether (a non-VTEC head, or a conversion not wired yet), or engage it on your own points - an engage rpm at high throttle and one at low throttle, a drop-out margin, and minimum coolant, road speed and manifold pressure, each check able to be switched off. Can also repeat the VTEC solenoid on another free output: a VTEC lamp, or a solenoid wired to a different pin. Until &quot;Use these engage points&quot; is ticked the stock VTEC points decide, as without the module.</p>
+<p class="meta"><code>FEAT_VTECCTL</code> · 458 bytes of ROM</p></div>
+<div class="mod" id="feat_warnlamp"><h3>Warning lamp (coolant / battery)</h3>
+<p>Lights a lamp - the check-engine lamp unless another output is chosen - while the coolant is hotter than a set temperature, or the battery voltage is low with the engine running (a failed alternator). The skeleton has no trouble codes, so this is the one warning left on the dash. Off until enabled.</p>
+<p class="meta"><code>FEAT_WARNLAMP</code> · 269 bytes of ROM · RAM: 1F1h bit 2 (its state) · cannot be built with <a href="#feat_shiftlight">Shift light on the check-engine lamp</a></p></div>
+
+<h2 id="protection">Protection</h2>
+<div class="mod" id="feat_antistart"><h3>Anti-start</h3>
+<p>The ECU powers up with fuel and spark cut, and stays that way until the secret is given: a switch input on (or off, inverted) with the throttle pressed past a point, before cranking. The A/C switch by default: throttle alone would clash with clearing a flooded engine, and nobody reaches for the A/C to start a car. Any of the switch inputs can be picked instead. Once unlocked it stays unlocked until the ignition is switched off. Off until enabled.</p>
+<p class="meta"><code>FEAT_ANTISTART</code> · 94 bytes of ROM · RAM: 1F2h-1F6h (shared cut requests, lock flag)</p></div>
+<div class="mod" id="feat_ectpro"><h3>Coolant temperature protection</h3>
+<p>Once the coolant is hotter than a set temperature the engine is held to a lower rev limit, so an overheating engine limps home instead of being driven hard. Fuel cut, ignition cut or both. And a warm-up limit: a lower rev limit while the coolant is colder than a second temperature, so a cold engine is not driven hard. Each off until enabled.</p>
+<p class="meta"><code>FEAT_ECTPRO</code> · 194 bytes of ROM · 2 bytes of module RAM · RAM: 1F2h-1F5h (shared cut requests), the rev cap: 2 bytes of module RAM shared by every rev limit (lib.asm)</p></div>
+<div class="mod" id="feat_leanpro"><h3>Lean protection</h3>
+<p>Watches a wideband O2 controller on an analog input and cuts the engine when it runs lean under load: leaner than a set AFR, with manifold pressure and rpm above set points, for longer than a delay. It stays cut until the pressure falls back, so a lean pull on boost ends at once instead of melting a piston. Off until enabled.</p>
+<p class="meta"><code>FEAT_LEANPRO</code> · 146 bytes of ROM · 1 bytes of module RAM · RAM: module RAM (1 byte), 1F2h-1F5h (shared cut requests)</p></div>
+<div class="mod" id="feat_sensorpro"><h3>Sensor protection (oil / fuel pressure)</h3>
+<p>Watches a sender on an analog input - an oil pressure or fuel pressure sender, a second wideband - and cuts the engine when its reading is on the wrong side of a level above an rpm for longer than a delay: oil pressure lost at speed ends the pull at once. It stays cut until the reading is back, or the rpm is under the point, so the engine idles home. Off until enabled.</p>
+<p class="meta"><code>FEAT_SENSORPRO</code> · 131 bytes of ROM · 1 bytes of module RAM · RAM: module RAM (1 byte), 1F2h-1F5h (shared cut requests)</p></div>
+
+<h2 id="sensors">Sensors</h2>
+<div class="mod" id="feat_gear"><h3>Gear detection</h3>
+<p>Works out the gear from the ratio of rpm to road speed, for everything that depends on the gear: rpm ceilings, fuel and timing by gear, traction control, the gear-based shift light. Set the boundaries between gears for the gearbox and tyres fitted. Gear 0 below a road speed, or with the clutch in (a ratio no gear has).</p>
+<p class="meta"><code>FEAT_GEAR</code> · 102 bytes of ROM · RAM: 2FEh (the gear)</p></div>
+<div class="mod" id="feat_speedcorr"><h3>Road speed correction</h3>
+<p>Corrects the road speed for a different final drive or tyre size, so the speedometer signal the ECU works from (speed limits, gear detection, launch, the datalog) reads true. 100 % changes nothing.</p>
+<p class="meta"><code>FEAT_SPEEDCORR</code> · 39 bytes of ROM</p></div>
+<div class="mod" id="feat_tpscal"><h3>TPS sensor end points</h3>
+<p>Rescales the throttle sensor to the volts it gives closed and wide open, so a sensor that does not read like the stock one still gives 0-100 % to everything that uses the throttle. Off until enabled.</p>
+<p class="meta"><code>FEAT_TPSCAL</code> · 76 bytes of ROM</p></div>
+
+<h2 id="stock-functions">Stock functions</h2>
+<div class="mod" id="feat_stock_ac"><h3>Stock a/c clutch control</h3>
+<p>A/C clutch control (P0.0) and the A/C idle-up / compensation</p>
+<p class="meta"><code>FEAT_STOCK_AC</code> · 184 bytes of ROM</p></div>
+<div class="mod" id="feat_stock_at"><h3>Stock automatic transmission shift and lock-up control</h3>
+<p>Automatic transmission shift and lock-up control</p>
+<p class="meta"><code>FEAT_STOCK_AT</code> · 2,202 bytes of ROM · cannot be built with <a href="#feat_ebc">Electronic boost control</a>, <a href="#feat_boostmanual">Manual boost controller</a></p></div>
+<div class="mod" id="feat_stock_o2"><h3>Stock closed-loop o2 control</h3>
+<p>Closed-loop O2 control (narrowband)</p>
+<p class="meta"><code>FEAT_STOCK_O2</code> · 1,287 bytes of ROM · cannot be built with <a href="#feat_wbcl">Closed loop on a wideband</a></p></div>
+<div class="mod" id="feat_stock_egr"><h3>Stock egr valve control and maps</h3>
+<p>EGR valve control and maps</p>
+<p class="meta"><code>FEAT_STOCK_EGR</code> · 491 bytes of ROM</p></div>
+<div class="mod" id="feat_stock_purge"><h3>Stock evap purge control</h3>
+<p>EVAP purge control (P0.1)</p>
+<p class="meta"><code>FEAT_STOCK_PURGE</code> · 66 bytes of ROM</p></div>
+<div class="mod" id="feat_stock_knock"><h3>Stock knock control unit interface and knock retard</h3>
+<p>Knock control unit interface and knock retard</p>
+<p class="meta"><code>FEAT_STOCK_KNOCK</code> · 304 bytes of ROM</p></div>
+<div class="mod" id="feat_stock_o2heater"><h3>Stock o2 sensor heater</h3>
+<p>O2 sensor heater (P1.2) and its feedback check</p>
+<p class="meta"><code>FEAT_STOCK_O2HEATER</code> · 151 bytes of ROM</p></div>
+<div class="mod" id="feat_stock_selftest"><h3>Stock register, ram, stack and clock self-tests</h3>
+<p>Register, RAM, stack and clock self-tests</p>
+<p class="meta"><code>FEAT_STOCK_SELFTEST</code> · 584 bytes of ROM</p></div>
+<div class="mod" id="feat_stock_hicamve"><h3>Stock separate high-cam ve table</h3>
+<p>Separate high-cam VE table</p>
+<p class="meta"><code>FEAT_STOCK_HICAMVE</code> · 219 bytes of ROM</p></div>
+<div class="mod" id="feat_stock_serial"><h3>Stock serial diagnostic link</h3>
+<p>Serial diagnostic link (Honda tester protocol, one wire)</p>
+<p class="meta"><code>FEAT_STOCK_SERIAL</code> · 742 bytes of ROM · cannot be built with <a href="#feat_datalog">Datalogging: HTS / ISR frame</a>, <a href="#feat_dlstream">Datalogging: channel stream</a>, <a href="#feat_dlqd3">Datalogging: QD3 frame</a>, <a href="#feat_dlserialin">Datalogging: serial inputs</a>, <a href="#feat_dlmemread">Datalogging: memory read</a>, <a href="#feat_triglog">Trigger pattern log</a>, <a href="#feat_dlservice">Datalogging: service commands</a>, <a href="#feat_remote">Remote control commands</a></p></div>
+<div class="mod" id="feat_stock_speedlimit"><h3>Stock speed limiter</h3>
+<p>Speed limiter</p>
+<p class="meta"><code>FEAT_STOCK_SPEEDLIMIT</code> · 32 bytes of ROM</p></div>
+<div class="mod" id="feat_stock_dtc"><h3>Stock trouble codes</h3>
+<p>Trouble codes: detection, debounce, storage, check-engine lamp and code flashing, fail-safe sensor values, stored-code checksum; each code can be switched off for the lamp (the Check engine codes page)</p>
+<p class="meta"><code>FEAT_STOCK_DTC</code> · 3,105 bytes of ROM</p></div>
+<div class="mod" id="feat_stock_vtecpressure"><h3>Stock vtec oil-pressure switch monitoring</h3>
+<p>VTEC oil-pressure switch monitoring</p>
+<p class="meta"><code>FEAT_STOCK_VTECPRESSURE</code> · 637 bytes of ROM</p></div>
+
+<footer>Rom Sim Studio 0.0.0.8 · by bmgjet · <a href="licence.html">Licence</a></footer>
+</main></div>
+<script src="guide.js"></script>
+</body>
+</html>

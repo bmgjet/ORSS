@@ -85,7 +85,11 @@ public sealed class LogFrame
         { if (v != null) mask |= bit; bit <<= 1; }
         if (Vtec != null) mask |= bit; bit <<= 1;
         if (FuelPump != null) mask |= bit;
-        return HashCode.Combine(mask, _extra?.Count ?? 0, RawChannels);
+        // which extra channels, not only how many: a frame with {knock} after one with {afr} has the same count, and its channel was
+        // never listed (a CSV saved from the log had no column for it). A sum of the names' hashes does not depend on their order.
+        int names = 0;
+        if (_extra != null) foreach (var k in _extra.Keys) names = unchecked(names + StringComparer.OrdinalIgnoreCase.GetHashCode(k));
+        return HashCode.Combine(mask, _extra?.Count ?? 0, names, RawChannels);
     }
 
     /// Every channel any frame of a log has, in display order - quick on a long log (see Shape).
@@ -129,9 +133,16 @@ public static class HondaDatalog
 
     public static double Volts(byte b) => b * 5.0 / 255.0;
     /// The MAP sensor of the ROM open (mBar at 0 V and at 5 V): the stock one until a ROM says otherwise (MapSensorScale).
-    public static (double Zero, double Full) MapSensor { get; set; } = MapSensorScale.Stock;
+    public static (double Zero, double Full) MapSensor { get => _mapSensor ?? MapSensorScale.StockFor; set => _mapSensor = value; }
+    static (double Zero, double Full)? _mapSensor;   // (none set: the stock sensor of the part being run)
     public static double MapKpa(byte b) => (MapSensor.Zero + (b * (MapSensor.Full - MapSensor.Zero) / 255)) / 10;
+    /// The P13's load byte scale (its MapLoadGain / MapLoadOffset; the stock one until a ROM says otherwise).
+    public static (int Gain, int Offset) P13Load { get; set; } = (0x200, -48);
+    /// A P13 load byte (288h; the baro byte 0E0h is on the same scale) in mBar, on the sensor fitted.
+    public static double P13LoadMbar(double b) => MapSensor.Zero + (b - P13Load.Offset) * 65536.0 / P13Load.Gain * (MapSensor.Full - MapSensor.Zero) / 65535;
     public static double TpsPct(byte b) => Math.Clamp((b - 25.0) / 2.04, 0, 100);
+    /// The open ROM is for the P13 (MSM66911).
+    static bool P13 => OkiRomSim.Core.Chip.Is66911;
 
     /// The coolant / intake temperature curve for these sensors: byte -> degrees C, 0 = 141 C down to 255 = -26 C. The same 256-entry curve the established tuning tools use, so logged temperatures read the same everywhere.
     static readonly double[] TempC =
@@ -181,12 +192,13 @@ public static class HondaDatalog
         {
             T = t, Raw = [.. f],
             EctC = ThermistorC(f[0]), IatC = ThermistorC(f[1]), O2V = Math.Round(Volts(f[2]), 3),
-            BaroKpa = f[3] == 0 ? null : Math.Round(MapKpa((byte)Math.Min(255, (f[3] / 2) + 24)), 1),
+            BaroKpa = f[3] == 0 ? null : Math.Round(P13 ? P13LoadMbar(f[3]) / 10 : MapKpa((byte)Math.Min(255, (f[3] / 2) + 24)), 1),
             MapKpa = Math.Round(MapKpa(f[4]), 1), TpsPct = Math.Round(TpsPct(f[5]), 1),
             Rpm = period == 0 ? 0 : Math.Round(1875000.0 / period),
             SpeedKmh = f[16],
-            InjMs = Math.Round(inj * 3.2 / 1000, 2),
-            IgnDeg = (f[19] * 0.25) - 6, IgnTableDeg = (f[20] * 0.25) - 6,
+            InjMs = Math.Round(inj * (P13 ? 4.00839 : 3.2) / 1000, 2),
+            // (a P13 skeleton's frame: its injector word in 4 us ticks, its advance byte (x - 24) / 4, both bytes final)
+            IgnDeg = P13 ? (f[19] - 24) * 0.25 : (f[19] * 0.25) - 6, IgnTableDeg = P13 ? (f[20] - 24) * 0.25 : (f[20] * 0.25) - 6,
             BattV = Math.Round(26.0 * f[25] / 270.0, 2),
             Vtec = ((f[8] >> 3) & 1) != 0,
             FuelPump = (f[22] & 1) != 0,
@@ -244,7 +256,7 @@ public static class HondaDatalog
         {
             T = t, Raw = [.. f],
             Rpm = period == 0 ? 0 : Math.Round(1875000.0 / period),
-            IgnDeg = (f[9] * 0.25) - 6,
+            IgnDeg = P13 ? (f[9] - 24) * 0.25 : (f[9] * 0.25) - 6,
             O2V = Math.Round(Volts(f[11]), 3),
             SpeedKmh = f[20],
             BattV = Math.Round(26.0 * f[21] / 270.0, 2),
@@ -469,6 +481,9 @@ public abstract class DatalogProtocol
             }
             catch (Exception ex) { report.AppendLine($"{p.Name}: {ex.Message}"); }
         }
+        // nothing answered: the line back to a plain one at the datalog's speed. The last protocol tried (the stock tester link) leaves
+        // it at 9600 baud with echo on, and whatever is tried next on this link (a layout worked out from the ROM) would be asked there
+        try { link.SetEcho(false); link.SetBaud(DatalogChannels.LineBaud); } catch { }
         return (null, report.ToString());
     }
 }
@@ -675,6 +690,8 @@ public sealed class ChannelStream : DatalogProtocol
     public bool HasMemoryRead => (_caps & 4) != 0;
     public bool HasService => (_caps & 8) != 0;
     public bool HasRemote => (_caps & 0x20) != 0;
+    /// The trigger pattern log (FEAT_TRIGLOG): 61h captures a cam revolution, 62h sends it.
+    public bool HasTriggerLog => (_caps & 0x40) != 0;
     readonly List<byte> _buf = [];
     int _lastSeq = -1, _lastTick = -1;
     /// The last frame ended where the buffer now starts: the next is taken on its own checks.
@@ -821,6 +838,83 @@ public sealed class ChannelStream : DatalogProtocol
         if (r.Length < 34 || r[0] != 0x60 || HondaDatalog.Checksum(r, 33) != r[33]) { note = r.Length < 34 ? "no answer" : "bad checksum"; return null; }
         note = "ok";
         return r[1..33];
+    }
+
+    /// One cam revolution of the crank, TDC and cylinder signals (the trigger pattern log): armed, waited for, read. The stream
+    /// stops meanwhile (a second or two) and starts again after. Null when the ROM has none or did not answer (the note says why);
+    /// a revolution the crank signal stopped in comes back as it got.
+    public TriggerPattern? CaptureTrigger(IByteLink link, out string note)
+    {
+        if (!HasTriggerLog) { note = "this ROM has no trigger pattern log (Trigger pattern log, FEAT_TRIGLOG): add it with File > Change functions"; return null; }
+        using var hold = link.Hold();
+        try
+        {
+            Send(link, 0x00);
+            Drain(link, 30);
+            // armed: 61h back. The ECU's receive buffer is one byte and a crank interrupt can hold it off, so a byte can be lost:
+            // asked up to three times; a stream byte still on its way is passed over (the answer is looked for, not assumed first)
+            bool armed = false;
+            for (int k = 0; k < 3 && !armed; k++)
+            {
+                link.Discard();
+                Send(link, 0x61);
+                armed = Answer(link, 0x61, 1, 600).Length == 1;
+            }
+            if (!armed) { note = "no answer to the capture (61h)"; return null; }
+            OnPacket?.Invoke(new Packet(DateTime.Now, PacketDir.Tx, [0x61], "trigger pattern: capture"));
+            // a cam revolution: 0.14 s at idle, half a second cranking; asked until it is whole (or 3 s: the engine stopped)
+            TriggerPattern? last = null;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            link.Wait(120);
+            while (true)
+            {
+                link.Discard();
+                Send(link, 0x62);
+                // (paced bytes at high rpm: up to ~1.5 s; a reply that stops short - a byte lost on the line - is given up
+                // after 300 ms without a byte and asked for again, not waited out)
+                var r = Answer(link, 0x62, 28, 3000, gapMs: 300);
+                var p = r.Length == 28 ? TriggerPattern.Parse(r) : null;
+                if (p != null)
+                {
+                    last = p;
+                    OnPacket?.Invoke(new Packet(DateTime.Now, PacketDir.Rx, r, "trigger pattern"));
+                    if (p.Complete) break;
+                }
+                if (sw.ElapsedMilliseconds > 3000) break;
+                link.Wait(p == null ? 30 : Math.Clamp((TriggerPattern.Teeth + 1 - p.State) * 10, 30, 250));
+            }
+            note = last == null ? "no answer to the read (62h)" : last.Complete ? "ok" : $"only {last.Caught.Count} teeth in 3 s";
+            return last;
+        }
+        finally
+        {
+            _buf.Clear(); _lastTick = -1; _inStep = false;
+            Send(link, 0x71);
+        }
+    }
+
+    /// An answer that starts with `first` and is `length` long (with 28 or more: its last byte the sum of the others), found in
+    /// what comes within `timeoutMs`: a byte of something else before it (the end of a frame) is passed over. Empty: none came.
+    byte[] Answer(IByteLink link, byte first, int length, int timeoutMs, int gapMs = 0)
+    {
+        var got = new List<byte>();
+        var chunk = new byte[64];
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        long lastByte = 0;
+        while (sw.ElapsedMilliseconds < timeoutMs)
+        {
+            int n = link.Read(chunk, 0, chunk.Length, 20);
+            if (n > 0) { got.AddRange(chunk.Take(n)); lastByte = sw.ElapsedMilliseconds; }
+            // gapMs: a reply begun and then nothing for that long has lost a byte - it will not complete
+            else if (gapMs > 0 && got.Contains(first) && sw.ElapsedMilliseconds - lastByte > gapMs) break;
+            for (int i = got.IndexOf(first); i >= 0 && got.Count - i >= length; i = got.IndexOf(first, i + 1))
+            {
+                var c = got.Skip(i).Take(length).ToArray();
+                if (length < 28 || (c.Take(length - 1).Sum(b => b) & 0xFF) == c[^1]) return c;
+            }
+            if (n == 0 && got.Count == 0 && sw.ElapsedMilliseconds > timeoutMs) break;
+        }
+        return [];
     }
 
     /// Values for the ECU's serial inputs (the serial inputs module): FFh, the input, the value, each byte with a pause after it (the ECU's one-byte receive buffer), while the stream runs on. Inputs past FDh are left out; values are held to 0-254.
@@ -1184,9 +1278,16 @@ public sealed class EmulatorRelay : DatalogProtocol
         int len = _plan.Length;
         var r = Fetch(link, len + 1, Analog, "frame");
         if (r == null) { note = "timeout or bad checksum from the Demon"; return null; }
-        if (r[1] is 0x54 or 0x84) { note = "the ECU did not answer the Demon"; return null; }
+        // the footer (after the analog words) is 'T' when the ECU did not answer the Demon - the same test the onboard log's reader makes.
+        // The first answer byte is the frame's first byte (the coolant reading on the 90h and 20h frames), so 54h or 84h there is a
+        // reading like any other: taking it for "no answer" threw away every frame while the engine sat at 31 or 51 degrees C.
+        if (r[1 + len + 1 + (Analog * 2)] == 'T') { note = "the ECU did not answer the Demon"; return null; }
         var data = r[1..(1 + len)];
-        if (HondaDatalog.Checksum(data, len) != r[1 + len]) { note = "bad checksum from the ECU"; return null; }
+        if (HondaDatalog.Checksum(data, len) != r[1 + len])
+        {
+            note = r[1] is 0x54 or 0x84 ? "the ECU did not answer the Demon" : "bad checksum from the ECU";
+            return null;
+        }
         var f = _plan.Decode(data, t);
         f.T = t; f.Protocol = Name;
         // the Demon's own analog inputs, as volts
@@ -1802,7 +1903,11 @@ public static class LogFile
                     continue;
                 }
                 if (field == "protocol") { f.Protocol = cell.Length > 0 ? cell : null; continue; }
-                if (!double.TryParse(cell, NumberStyles.Float, CultureInfo.InvariantCulture, out var v)) continue;
+                // a ';' or tab separated log (a spreadsheet saved where the decimal mark is a comma) writes 12,5 for 12.5: with ',' not the
+                // separator, a comma in a cell can only be that mark. Read as the invariant culture alone, every such value was skipped
+                if (!double.TryParse(cell, NumberStyles.Float, CultureInfo.InvariantCulture, out var v)
+                    && !(sep != ',' && cell.Count(ch => ch == ',') == 1 && !cell.Contains('.')
+                         && double.TryParse(cell.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out v))) continue;
                 switch (field)
                 {
                     case "time_s": f.T = v; break;

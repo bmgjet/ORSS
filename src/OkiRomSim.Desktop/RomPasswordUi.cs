@@ -17,7 +17,7 @@ public static class RomPasswordUi
     /// The text a password block was opened with (or set to) this session, or null.
     public static string? KnownText(byte[] block) => Unlocked.GetValueOrDefault(Convert.ToHexString(block));
 
-    static TextBox Masked(string hint) => new() { PasswordChar = '●', Width = 260, Watermark = hint, FontFamily = MainWindow.MonoFont };
+    static TextBox Masked(string hint) => new() { PasswordChar = '●', Width = 260, Watermark = hint, FontFamily = UiFonts.Mono };
 
     /// A ROM about to be opened: when it has a password set, ask for it (three tries). False: do not open it.
     public static async Task<bool> Unlock(Window owner, byte[] rom, string name)
@@ -59,9 +59,9 @@ public static class RomPasswordUi
     }
 
     /// The watermark: its text is the ROM's open password. What is typed is applied as it is typed (after a short pause, and at once on Enter or on leaving the box): the password block gets a salted hash of it and the old scrambled copy of the text is blanked, so the text cannot be read back out of the ROM. Empty: no password.
-    public static Control WatermarkEditor(SimHost host, ItemDef wm, Func<Window?> owner, Action<string> status)
+    public static Control WatermarkEditor(AppHost host, ItemDef wm, Func<Window?> owner, Action<string> status)
     {
-        var box = new TextBox { Width = 190, MaxLength = WatermarkCodec.Length, FontFamily = MainWindow.MonoFont, VerticalAlignment = VerticalAlignment.Center };
+        var box = new TextBox { Width = 190, MaxLength = WatermarkCodec.Length, FontFamily = UiFonts.Mono, VerticalAlignment = VerticalAlignment.Center };
         var state = new TextBlock { FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0) };
         var pause = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
         ItemDef? Block() => host.Defs().Items.FirstOrDefault(i => i.Text == "password" && i.Address == wm.Address + WatermarkCodec.Bytes)
@@ -129,7 +129,7 @@ public static class RomPasswordUi
     }
 
     /// The Watermark page's editor for the password block: whether one is set, and buttons to set, change or remove it.
-    public static Control Editor(SimHost host, ItemDef it, Func<Window?> owner, Action<string> status)
+    public static Control Editor(AppHost host, ItemDef it, Func<Window?> owner, Action<string> status)
     {
         var state = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Width = 110, FontSize = 12 };
         var set = new Button { Content = "Set password…", Padding = new Thickness(8, 1), MinHeight = 0, Margin = new Thickness(0, 0, 4, 0) };

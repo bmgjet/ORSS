@@ -1,0 +1,5 @@
+test/
+package.json
+README.md
+*.mcpb
+.mcpbignore

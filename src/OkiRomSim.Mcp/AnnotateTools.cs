@@ -187,6 +187,7 @@ public sealed class AnnotateTools
         if (string.IsNullOrWhiteSpace(p)) throw new ToolException("'path' is required (no ROM is built in an app session)");
         var file = _ws.Resolve(p);
         if (!file.EndsWith(".asm", StringComparison.OrdinalIgnoreCase)) throw new ToolException("annotate a .asm (disassemble a .bin into one first)");
+        Program66k.UsePartOf(file);
         var r = new OkiAssembler(new AssemblerOptions { AllowFile = _ws.Allows, ReadFile = f => _server.Session?.SourceText(f) }).AssembleFile(file);
         return new Build(r, file, false);
     }
@@ -205,6 +206,7 @@ public sealed class AnnotateTools
         foreach (var (p, _) in changed) _ws.Resolve(p, mustExist: true, forWrite: true);
         if (_server.Session?.SetSources(changed, what) is { } note) return note;
         foreach (var (p, t) in changed) OkiRomSim.Core.SafeFile.WriteAllText(p, t);
+        Program66k.UsePartOf(b.MainFile);
         var r = new OkiAssembler(new AssemblerOptions { AllowFile = _ws.Allows }).AssembleFile(b.MainFile);
         var errors = r.Diagnostics.Where(d => d.Severity == Severity.Error).ToList();
         return errors.Count == 0 ? "assembles cleanly" : $"the build now FAILS ({errors.Count} error(s)):\n" + string.Join("\n", errors.Take(8).Select(d => $"  {_ws.Show(d.File)}:{d.Line}: {d.Message}"));

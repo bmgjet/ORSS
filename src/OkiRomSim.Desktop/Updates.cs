@@ -19,7 +19,20 @@ namespace OkiRomSim.Desktop;
 public static class Updater
 {
     static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
-    public const string DefaultSite = "https://romsimstudio.com/";
+    public const string DefaultSite = AboutPage.Website;
+
+    /// Which program this is: Rom Sim Studio, or the tuning-only RomSimTuner. Each has its own list of files on the site (the
+    /// tuner's is asked for with &product=tuner; the plain list stays Rom Sim Studio's, as every copy already installed asks for it),
+    /// its own program file and its own record of what was installed.
+#if TUNER_ONLY
+    public const string ProgramName = "RomSimTuner";
+    const string ProductQuery = "&product=tuner";
+    const string RecordName = "updates-tuner.json";
+#else
+    public const string ProgramName = "RomSimStudio";
+    const string ProductQuery = "";
+    const string RecordName = "updates.json";
+#endif
 
     public sealed class ServerFile
     {
@@ -58,26 +71,28 @@ public static class Updater
     static HttpClient MakeClient()
     {
         var h = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-        h.DefaultRequestHeaders.UserAgent.ParseAdd($"RomSimStudio/{BuildInfo.Version}");
+        h.DefaultRequestHeaders.UserAgent.ParseAdd($"{ProgramName}/{BuildInfo.Version}");
         return h;
     }
 
     static string Site(string site) => site.Trim().TrimEnd('/') + "/";
-    static string ManifestUrl(string site) => Site(site) + "index.php?updates";
-    static string FileUrl(string site, string path) => Site(site) + "index.php?file=" + Uri.EscapeDataString(path);
+    static string ManifestUrl(string site) => Site(site) + "index.php?updates" + ProductQuery;
+    static string FileUrl(string site, string path) => Site(site) + "index.php?file=" + Uri.EscapeDataString(path) + ProductQuery;
 
     /// Where the app's own files are (the program, Templates...).
     public static string Home => _home ?? AppContext.BaseDirectory;
     static string? _home;
 
-    /// --update-check [folder]: run the check as the start-up one does, for the install in that folder, and print what it would offer.
-    public static int CheckFromCommandLine(string? folder)
+    /// --update-check [folder [site]]: run the check as the start-up one does, for the install in that folder, and print what it would
+    /// offer. A site (a local copy of dist/website, say) checks that instead of the real one, before it is uploaded.
+    public static int CheckFromCommandLine(string? folder, string? site = null)
     {
         if (folder != null) _home = Path.GetFullPath(folder) + Path.DirectorySeparatorChar;
+        site ??= DefaultSite;
         try
         {
-            var changes = Check(DefaultSite).GetAwaiter().GetResult();
-            Console.WriteLine($"{changes.Count} differ from {DefaultSite} (install: {Home}{(DeveloperBuild ? ", a developer build" : "")})");
+            var changes = Check(site).GetAwaiter().GetResult();
+            Console.WriteLine($"{changes.Count} differ from {site} (install: {Home}{(DeveloperBuild ? ", a developer build" : "")})");
             foreach (var c in changes) Console.WriteLine($"  {(c.Recommended ? "OFFER" : "skip ")}  {c.Server.Path}: {c.Why}");
             Console.WriteLine(changes.Any(c => c.Recommended) ? "the start-up check would say an update is available" : "the start-up check would say nothing");
             return 0;
@@ -89,11 +104,11 @@ public static class Updater
         !path.Contains('/') && (path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase));
 
     /// A build run from its build folder (the libraries beside it, listed in a .deps.json) rather than the distributed one: its program files are the developer's to replace, by building.
-    static bool DeveloperBuild => File.Exists(Path.Combine(Home, "RomSimStudio.deps.json"));
+    static bool DeveloperBuild => File.Exists(Path.Combine(Home, ProgramName + ".deps.json"));
 
     // ---- what was installed from the site, so a file edited here since can be told apart from an old one
 
-    static string RecordPath => Path.Combine(AppSettings.Dir, "updates.json");
+    static string RecordPath => Path.Combine(AppSettings.Dir, RecordName);
 
     static Dictionary<string, string> Installed()
     {
@@ -237,7 +252,7 @@ public static class Updater
         var exe = Environment.ProcessPath;
         if (exe == null) return;
         var start = Path.GetFileNameWithoutExtension(exe).Equals("dotnet", StringComparison.OrdinalIgnoreCase)
-            ? new ProcessStartInfo(exe) { ArgumentList = { Path.Combine(Home, "RomSimStudio.dll") } }
+            ? new ProcessStartInfo(exe) { ArgumentList = { Path.Combine(Home, ProgramName + ".dll") } }
             : new ProcessStartInfo(exe);
         start.UseShellExecute = false;
         start.WorkingDirectory = Environment.CurrentDirectory;
@@ -352,13 +367,19 @@ public static class LineDiff
     }
 }
 
+/// The main window of either program: it is asked before a restart that puts an update in use (unsaved work saved or let go first; false: stay).
+public interface IRestartAfterUpdate
+{
+    Task<bool> ReadyToRestart();
+}
+
 /// Settings > Updates > Check now: what differs from the site, what each change is, and a button to fetch the ones ticked.
 public sealed class UpdatesWindow : Window
 {
     readonly string _site;
     readonly StackPanel _list = new() { Spacing = 2 };
     readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(10, 6) };
-    readonly SelectableTextBlock _detail = new() { FontFamily = MainWindow.MonoFont, FontSize = 11.5, TextWrapping = TextWrapping.NoWrap, Margin = new Thickness(8) };
+    readonly SelectableTextBlock _detail = new() { FontFamily = UiFonts.Mono, FontSize = 11.5, TextWrapping = TextWrapping.NoWrap, Margin = new Thickness(8) };
     readonly Button _install = new() { Content = "Download and install…", IsEnabled = false, MinWidth = 150 };
     readonly Dictionary<Updater.Change, CheckBox> _ticks = [];
     readonly Dictionary<string, (List<LineDiff.Line> Hunks, int Removed, int Added)?> _diffs = [];
@@ -535,12 +556,12 @@ public sealed class UpdatesWindow : Window
         if (done.Count > 0 && restart && picked.Where(c => c.NeedsRestart).All(c => done.Contains(c.Server.Path)))
         {
             var main = (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.MainWindow;
-            if (main is MainWindow mw && await Dialogs.Confirm(this, "Restart the program?",
+            if (main is IRestartAfterUpdate mw && main is Window mainWindow && await Dialogs.Confirm(this, "Restart the program?",
                     "The program itself was updated. It runs the new version once it is restarted.", "Restart now", "Later")
                 && await mw.ReadyToRestart())
             {
                 Close();
-                Updater.Restart(mw);
+                Updater.Restart(mainWindow);
                 return;
             }
             _status.Text += " The new program runs from the next start.";

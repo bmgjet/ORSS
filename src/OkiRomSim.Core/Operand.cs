@@ -243,9 +243,12 @@ public static class OperandParser
     private static Parsed?[]? _table;
 
     /// Parsed form of every FullOpcodes.Table entry, indexed identically.
-    public static Parsed?[] Table()
+    public static Parsed?[] Table() => _table ?? BuildTable();
+
+    // apart from Table: a lambda over a local makes its closure on entry to the method that holds it, so with this in Table every
+    // instruction executed allocated one, though the table was built long before (about 24 bytes an instruction)
+    static Parsed?[] BuildTable()
     {
-        if (_table != null) return _table;
         var all = new HashSet<string>(FullOpcodes.Table.Select(p => p.Mnemonic.Split(' ')[0]));
         _table = [.. FullOpcodes.Table.Select(p => ParseOne(p.Mnemonic, all))];
         return _table;

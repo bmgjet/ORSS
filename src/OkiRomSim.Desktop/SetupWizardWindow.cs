@@ -12,7 +12,7 @@ namespace OkiRomSim.Desktop;
 /// File > Set-up wizard: a ROM set up stage by stage, the way the established tuning software sets up a new base ROM - the engine and the stock maps to start from, the injectors, the sensors and the gearbox, boost, and the options - each page offering the presets it has (the stock ECUs, injector lag curves, MAP sensors, gearboxes). Nothing is written until Apply on the last page, which lists everything that will change; then it all lands as one undo step. Works on an HTS 1.15 / HTS120 ROM and on one built from the skeleton: a setting the ROM does not have is greyed out, and the summary says what could not be done.
 public sealed class SetupWizardWindow : Window
 {
-    readonly SimHost _host;
+    readonly AppHost _host;
     readonly PresetLibrary? _lib;
     readonly string? _htsTemplate;
     readonly DefinitionSet _defs;
@@ -38,7 +38,7 @@ public sealed class SetupWizardWindow : Window
     readonly NumericUpDown _limit = Form.Num(7400, 3000, 11000, 50, "0");
     // injectors
     readonly NumericUpDown _stockCc = Form.Num(240, 50, 3000, 10, "0"), _fittedCc = Form.Num(240, 50, 3000, 10, "0");
-    readonly TextBlock _mult = new() { FontFamily = MainWindow.MonoFont, VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeight.Bold };
+    readonly TextBlock _mult = new() { FontFamily = UiFonts.Mono, VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeight.Bold };
     readonly ComboBox _lag = new() { Width = 300 };
     List<InjectorPreset> _lags = [];
     readonly NumericUpDown _overall = Form.Num(0, -50, 50, 0.5, "0.0"), _crank = Form.Num(0, -50, 50, 0.5, "0.0"),
@@ -57,11 +57,11 @@ public sealed class SetupWizardWindow : Window
     // options
     readonly List<(PageRow Row, CheckBox Box, bool Was)> _switches = [];
     // summary
-    readonly TextBlock _summary = new() { TextWrapping = TextWrapping.Wrap, FontSize = 12, FontFamily = MainWindow.MonoFont };
+    readonly TextBlock _summary = new() { TextWrapping = TextWrapping.Wrap, FontSize = 12, FontFamily = UiFonts.Mono };
 
     bool _filling;
 
-    public SetupWizardWindow(SimHost host)
+    public SetupWizardWindow(AppHost host)
     {
         _host = host;
         // boost and the base maps work on the ROM's fuel and ignition maps: a ROM opened without Detect has none defined,
@@ -73,7 +73,7 @@ public sealed class SetupWizardWindow : Window
         }
         _defs = host.Defs();
         _rom = host.RomCopy();
-        var templates = NewRomWindow.Templates();
+        var templates = AppPaths.Templates();
         try { if (templates != null) _lib = PresetLibrary.Load(Path.Combine(templates, "Presets")); }
         catch (Exception ex) { AppLog.Error("wizard", "presets could not be read", ex); }
         _htsTemplate = templates == null ? null : Path.Combine(templates, "HTS120.asm");

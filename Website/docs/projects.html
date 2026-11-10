@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Projects and saving — Rom Sim Studio guide</title>
+<link rel="icon" href="../favicon.ico">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<header class="topbar"><button class="menu-btn" aria-label="Contents">☰</button><a class="logo" href="index.html">ROM SIM <b>STUDIO</b></a><span class="sp"></span><span class="links"><a href="../">Website</a> &nbsp;·&nbsp; <a href="../#start">Download</a></span></header>
+<div class="frame"><nav class="side"></nav><main>
+
+<h1>Projects and saving</h1>
+<p class="lead">Save the source, save the ROM, or save everything exactly as it is and carry on later.</p>
+
+<h2>Saving files</h2>
+<table>
+  <tr><th>Entry</th><th>Writes</th></tr>
+  <tr><td>File &gt; Save <kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>The source on screen to its file.</td></tr>
+  <tr><td>File &gt; Save as…</td><td>The source to a new file — or, picking <span class="path">.bin</span>, the ROM image built from it.</td></tr>
+  <tr><td>Tools &gt; Save .bin…</td><td>The ROM as it is now (with every calibration change), checksum right.</td></tr>
+  <tr><td>Datalog &gt; Save log…</td><td>The log as CSV.</td></tr>
+</table>
+<p>On a ROM built from the skeleton, the settings the build file keeps (its name and version, the watermark) are written back into it when they change.</p>
+
+<h2>Projects</h2>
+<p><b>File &gt; Save project…</b> (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>) writes one <span class="path">.zip</span> holding everything as it is:</p>
+<ul>
+  <li>every source (saved or not) and where the editor was;</li>
+  <li>the whole simulated machine — every register, RAM byte, timer, peripheral and the engine — so it resumes mid-instruction;</li>
+  <li>the ROM with its changes, the definitions and the formulas;</li>
+  <li>the breakpoints (on and off), held RAM bytes, Hit trace;</li>
+  <li>Tuner mode, the table on screen and how it was viewed;</li>
+  <li>the loaded datalog and where it was in it.</li>
+</ul>
+<p>Open the <span class="path">.zip</span> with File &gt; Open to carry on where you were.</p>
+
+<h2>Auto save</h2>
+<p>Every few minutes (<b>Settings &gt; General</b>) a restore point is written. <b>File &gt; Restore last auto save</b> opens the newest.</p>
+
+<h2>Clear project</h2>
+<p><b>File &gt; Clear project</b> closes the ROM and lets everything go — sources, definitions, machine state, hits, datalog frames — leaving the program idle and small.</p>
+
+<footer>Rom Sim Studio 0.0.0.8 · by bmgjet · <a href="licence.html">Licence</a></footer>
+</main></div>
+<script src="guide.js"></script>
+</body>
+</html>

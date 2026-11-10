@@ -69,7 +69,7 @@ icm_tick:       L       A, DP                  ; nothing wants a cut and nothing
                 JNE     icm_full
                 MB      C, 0fch.0
                 JLT     icm_full
-                MOV     DP, #002f8h
+                MOV     DP, #ICM_PHASE
                 LB      A, [DP]
                 CMPB    A, #001h
                 JNE     icm_full
@@ -79,7 +79,7 @@ icm_tick:       L       A, DP                  ; nothing wants a cut and nothing
 icm_full:       POPS    A
                 MOV     DP, A
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -97,13 +97,13 @@ icm_full:       POPS    A
                 LCB     A, icm_refire
                 CMPB    A, #000h
                 JEQ     icm_cut                ; no re-fire: the plain cut
-                MOV     DP, #002f9h            ; ticks left in this phase
+                MOV     DP, #ICM_LEFT            ; ticks left in this phase
                 LB      A, [DP]
                 JEQ     icm_flip
                 SUBB    A, #001h
                 STB     A, [DP]
                 SJ      icm_phase_now
-icm_flip:       MOV     DP, #002f8h            ; the phase: 0 cut, 1 re-fire
+icm_flip:       MOV     DP, #ICM_PHASE            ; the phase: 0 cut, 1 re-fire
                 LB      A, [DP]
                 XORB    A, #001h
                 STB     A, [DP]
@@ -122,9 +122,9 @@ icm_notlaunch:  LB      A, r0
 icm_main:       LCB     A, icm_cut_main
                 SJ      icm_settime
 icm_to_fire:    LCB     A, icm_refire
-icm_settime:    MOV     DP, #002f9h
+icm_settime:    MOV     DP, #ICM_LEFT
                 STB     A, [DP]
-icm_phase_now:  MOV     DP, #002f8h
+icm_phase_now:  MOV     DP, #ICM_PHASE
                 LB      A, [DP]
                 CMPB    A, #000h
                 JNE     icm_fire
@@ -146,7 +146,7 @@ icm_enrich_on:  CLRB    A                      ; extra fuel while any spark cut 
 icm_none:       LB      A, 0fch
                 ANDB    A, #0feh
                 STB     A, 0fch
-                MOV     DP, #002f8h            ; the next cut starts with its cut time
+                MOV     DP, #ICM_PHASE            ; the next cut starts with its cut time
                 MOVB    [DP], #001h
                 INC     DP
                 MOVB    [DP], #000h
@@ -162,7 +162,7 @@ icm_exit:       J       mod_tick_exit
 
 icm_init:       L       A, DP
                 PUSHS   A
-                MOV     DP, #002f8h            ; the first cut starts with its cut time
+                MOV     DP, #ICM_PHASE            ; the first cut starts with its cut time
                 MOVB    [DP], #001h
                 INC     DP
                 MOVB    [DP], #000h
@@ -184,8 +184,8 @@ icm_ign:        L       A, DP
                 CMPB    A, #000h
                 JEQ     icm_ign_done
                 LCB     A, icm_static
-                STB     A, off(00246h)
-                STB     A, off(00247h)
+                STB     A, off(SVC_ADVF)
+                STB     A, off(SVC_ADVF + 1)
 icm_ign_done:   POPS    A
                 MOV     DP, A
                 RT

@@ -78,7 +78,7 @@ shiftlight_tune:
                 POPS    A
 shiftlight_compare_now:
 endif
-                CMP     0ach, A                ; crank period below the shift period = rpm above the shift point
+                CMP     ENG_RPMP, A                ; crank period below the shift period = rpm above the shift point
                 JGE     shiftlight_release
                 L       A, DP                  ; lamp on: take P1.4 (1 = on)
                 PUSHS   A

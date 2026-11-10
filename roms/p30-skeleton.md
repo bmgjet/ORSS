@@ -6,8 +6,9 @@ shift light, traction control and so on. Each module is a block of code in the f
 hooks in through a table at a fixed address. `roms/p30-skeleton-features.json` shows the format
 with one working module.
 
-**It has not been run on a car.** Everything below was checked in the Rom Sim Studio simulator.
-Treat it like any new ROM: use the emulator, a wideband and a bench before driving.
+**ROMs built from it have run on a car** (October 2026: the stock functions, the defaults and mixes of up to 26
+modules together, on a P28-board ECU); not every module has been tried on one. Everything below was checked in the
+Rom Sim Studio simulator. Treat it like any new ROM: use the emulator, a wideband and a bench before driving.
 
 ## What it keeps and what it drops
 

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Memory, trace and hit trace — Rom Sim Studio guide</title>
+<link rel="icon" href="../favicon.ico">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<header class="topbar"><button class="menu-btn" aria-label="Contents">☰</button><a class="logo" href="index.html">ROM SIM <b>STUDIO</b></a><span class="sp"></span><span class="links"><a href="../">Website</a> &nbsp;·&nbsp; <a href="../#start">Download</a></span></header>
+<div class="frame"><nav class="side"></nav><main>
+
+<h1>Memory, trace and hit trace</h1>
+<p class="lead">What the ROM keeps in RAM, what it just ran, and which parts of it a real ECU actually uses.</p>
+
+<h2>Memory</h2>
+<figure><img src="img/memory.png" alt="The Memory tab's Map"><figcaption>Memory &gt; Map: every RAM byte the ROM uses, named, scaled, and who wrote it last.</figcaption></figure>
+<p>The <b>Hex</b> tab shows RAM and ROM as bytes. The <b>Map</b> tab shows every RAM byte the ROM uses, named from the best source there is — a definition at that address, the ROM's own datalog frame table, a table whose description says where its result goes, the source's names, the chip's registers — with its raw value, its value in real units, and <b>the instruction that wrote it last</b>, recorded from power-up.</p>
+<ul>
+  <li>Double-click a row to write the byte once.</li>
+  <li><b>Hold</b> a byte to keep it at a value: whatever the ROM writes there is put back at once (a held byte is saved with a project).</li>
+</ul>
+
+<h2>Trace</h2>
+<p>The <b>Trace</b> tab lists the last instructions executed, oldest first, with their addresses and source. Double-click one to go to it.</p>
+
+<h2 id="hit-trace">Hit trace</h2>
+<p>Tick <b>Hit trace</b> on the Trace tab to record every ROM address fetched instead. It comes from the simulator — or from a <b>real ECU</b> through a Moates Ostrich 2.0 or Demon, which see every byte the ECU reads from the chip socket. Addresses that were hit are coloured in the source (Settings &gt; Emulator &amp; datalog &gt; Colour the source with hits), which shows at a glance which code a car actually runs and which tables it actually reads.</p>
+<div class="note"><b>Tip</b>Hit trace on a real car is the quickest way to find the maps an unknown ROM uses: drive, then look at which tables are coloured.</div>
+
+<h2>Live trace on the maps</h2>
+<p>With <b>Live trace</b> on (Settings &gt; General, or the Calibration page's Datalogging menu), the table cells the running program reads are lit on the Calibration page — the four cells it interpolates between, or the one it is nearest — with a fading trail behind.</p>
+
+<footer>Rom Sim Studio 0.0.0.8 · by bmgjet · <a href="licence.html">Licence</a></footer>
+</main></div>
+<script src="guide.js"></script>
+</body>
+</html>

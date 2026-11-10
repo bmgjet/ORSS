@@ -37,7 +37,7 @@ endif
 if XP == XP_CODE
 gearlim_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -65,7 +65,7 @@ gearlim_tick:
                 AND     A, #MB_GEARLIMIT
                 JNE     gearlim_cutting
                 L       A, er2
-                CMP     0ach, A
+                CMP     ENG_RPMP, A
                 JGT     gearlim_off
                 SJ      gearlim_on
 gearlim_cutting:
@@ -76,7 +76,7 @@ gearlim_cutting:
                 SRL     A
                 SRL     A
                 ADD     A, er2
-                CMP     0ach, A
+                CMP     ENG_RPMP, A
                 JGT     gearlim_off
 gearlim_on:     MOV     X1, #gearlim_block
                 L       A, #MB_GEARLIMIT

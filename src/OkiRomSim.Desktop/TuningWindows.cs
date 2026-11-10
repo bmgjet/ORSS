@@ -59,7 +59,7 @@ static class Form
         => new()
         {
             Value = (decimal)Math.Clamp(value, min, max), Minimum = (decimal)min, Maximum = (decimal)max,
-            Increment = (decimal)step, Width = 130, FormatString = format, FontFamily = MainWindow.MonoFont,
+            Increment = (decimal)step, Width = 130, FormatString = format, FontFamily = UiFonts.Mono,
         };
 
     public static double V(NumericUpDown n) => (double)(n.Value ?? 0);
@@ -126,7 +126,7 @@ public sealed class InjectorWindow : Window
 {
     enum Way { StockFitted, Multiplier, Maps }
 
-    readonly SimHost _host;
+    readonly AppHost _host;
     // two lines at most; the whole report is on its tooltip
     readonly TextBlock _preview = new()
     {
@@ -134,7 +134,7 @@ public sealed class InjectorWindow : Window
         TextTrimming = TextTrimming.CharacterEllipsis,
     };
     readonly NumericUpDown _stock, _fitted, _offset, _overall, _crank, _postStart, _tipIn;
-    readonly TextBlock _multiplier = new() { FontFamily = MainWindow.MonoFont, VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeight.Bold };
+    readonly TextBlock _multiplier = new() { FontFamily = UiFonts.Mono, VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeight.Bold };
     readonly CheckBox _scaleMaps = new() { Content = "scale every fuel table by the multiplier", IsChecked = true, Margin = new Thickness(0, 6, 0, 0) };
     readonly CheckBox _trimsToo = new() { Content = "set the cranking and tip-in trims to suit the new injectors", Margin = new Thickness(0, 2, 0, 0) };
     readonly ItemDef? _dEnable, _dStock, _dFitted, _dMult, _dOffset, _dOverall, _dCrank, _dPost, _dTip;
@@ -165,12 +165,12 @@ public sealed class InjectorWindow : Window
     {
         mine = InjectorLag.LoadUser(MyInjectorsPath);
         var all = new List<InjectorPreset>(mine);
-        try { if (NewRomWindow.Templates() is { } t) all.AddRange(PresetLibrary.Load(Path.Combine(t, "Presets")).Injectors); }
+        try { if (AppPaths.Templates() is { } t) all.AddRange(PresetLibrary.Load(Path.Combine(t, "Presets")).Injectors); }
         catch (Exception ex) { AppLog.Error("injectors", "presets could not be read", ex); }
         return all;
     }
 
-    public InjectorWindow(SimHost host)
+    public InjectorWindow(AppHost host)
     {
         _host = host;
         Title = "Injector calibration";
@@ -528,17 +528,17 @@ public sealed class MapSensorWindow : Window
 
     const double SeaLevelMbar = 1013;
 
-    readonly SimHost _host;
+    readonly AppHost _host;
     readonly TextBlock _preview = new() { TextWrapping = TextWrapping.Wrap, FontSize = 11.5, Opacity = 0.9, MinHeight = 48 };
     readonly ComboBox _oldPick = new() { Width = 220 }, _newPick = new() { Width = 220 };
     readonly NumericUpDown _oldMin, _oldMax, _newMin, _newMax;
-    readonly TextBlock _scalar = new() { FontFamily = MainWindow.MonoFont, VerticalAlignment = VerticalAlignment.Center };
-    readonly TextBlock _koeo = new() { FontFamily = MainWindow.MonoFont, VerticalAlignment = VerticalAlignment.Center };
-    readonly TextBlock _boost = new() { FontFamily = MainWindow.MonoFont, VerticalAlignment = VerticalAlignment.Center };
+    readonly TextBlock _scalar = new() { FontFamily = UiFonts.Mono, VerticalAlignment = VerticalAlignment.Center };
+    readonly TextBlock _koeo = new() { FontFamily = UiFonts.Mono, VerticalAlignment = VerticalAlignment.Center };
+    readonly TextBlock _boost = new() { FontFamily = UiFonts.Mono, VerticalAlignment = VerticalAlignment.Center };
     bool _filling;
     public bool Applied { get; private set; }
 
-    public MapSensorWindow(SimHost host)
+    public MapSensorWindow(AppHost host)
     {
         _host = host;
         Title = "MAP sensor";
@@ -667,7 +667,7 @@ public sealed class AfrFixWindow : Window
 
     public Fix? Result { get; private set; }
 
-    readonly TextBlock _summary = new() { TextWrapping = TextWrapping.Wrap, FontSize = 11.5, FontFamily = MainWindow.MonoFont };
+    readonly TextBlock _summary = new() { TextWrapping = TextWrapping.Wrap, FontSize = 11.5, FontFamily = UiFonts.Mono };
     readonly TextBlock _preview = new() { TextWrapping = TextWrapping.Wrap, FontSize = 11.5, Opacity = 0.9, MinHeight = 48 };
     readonly NumericUpDown _target, _gain, _minChange, _maxChange, _minSamples, _coverage;
     readonly RadioButton _whole = new() { Content = "one change for the whole selection", IsChecked = true };

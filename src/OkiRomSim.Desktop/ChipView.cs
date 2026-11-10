@@ -194,14 +194,14 @@ public sealed class ChipView : UserControl
     void AddPpiPin(int number, string name, double x, double y, bool left)
     {
         var box = new Border { Width = PinW, Height = PinH, Background = Power, Cursor = new Cursor(StandardCursorType.Hand) };
-        static TextBlock NewTip() => new() { FontFamily = MainWindow.MonoFont, FontSize = 12, MaxWidth = 460, TextWrapping = TextWrapping.Wrap };
+        static TextBlock NewTip() => new() { FontFamily = UiFonts.Mono, FontSize = 12, MaxWidth = 460, TextWrapping = TextWrapping.Wrap };
         var tip = NewTip(); var labelTip = NewTip();
         ToolTip.SetTip(box, tip); ToolTip.SetShowDelay(box, 150);
         string func = PpiFunctions.GetValueOrDefault(name, "");
         var label = new TextBlock
         {
             Text = $"{number,2} {name}" + (func.Length > 0 ? "  " + Short(func.Split(" - ")[0]) : ""),
-            FontSize = 10.5, FontFamily = MainWindow.MonoFont, Width = LabelW - 4, TextTrimming = TextTrimming.CharacterEllipsis,
+            FontSize = 10.5, FontFamily = UiFonts.Mono, Width = LabelW - 4, TextTrimming = TextTrimming.CharacterEllipsis,
             Opacity = name.Length == 3 && name[0] == 'P' ? 0.95 : 0.55, TextAlignment = left ? TextAlignment.Right : TextAlignment.Left,
         };
         ToolTip.SetTip(label, labelTip);
@@ -290,7 +290,7 @@ public sealed class ChipView : UserControl
             BorderBrush = AppTheme.Brush(Color.FromRgb(90, 94, 104)), BorderThickness = new Thickness(1.5),
             Child = new TextBlock
             {
-                Text = title + $"\n{OkiRomSim.Core.Bus.CrystalMHz:0.##} MHz", TextAlignment = TextAlignment.Center, FontSize = 13,
+                Text = title + $"\n{OkiRomSim.Core.Chip.CrystalMHz:0.##} MHz", TextAlignment = TextAlignment.Center, FontSize = 13,
                 HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Opacity = 0.7,
             },
         };
@@ -316,7 +316,7 @@ public sealed class ChipView : UserControl
             Background = Brushes.Gray, BorderThickness = new Thickness(1), BorderBrush = Brushes.Transparent,
             Cursor = new Cursor(StandardCursorType.Hand),
         };
-        static TextBlock NewTip() => new() { FontFamily = MainWindow.MonoFont, FontSize = 12, MaxWidth = 460, TextWrapping = TextWrapping.Wrap };
+        static TextBlock NewTip() => new() { FontFamily = UiFonts.Mono, FontSize = 12, MaxWidth = 460, TextWrapping = TextWrapping.Wrap };
         var tip = NewTip();
         var labelTip = NewTip();
         ToolTip.SetTip(box, tip);
@@ -329,7 +329,7 @@ public sealed class ChipView : UserControl
         var label = new TextBlock
         {
             Text = $"{pin.Number,2} {pin.Name}" + (func.Length > 0 ? "  " + Short(func) : ""),
-            FontSize = 10.5, FontFamily = MainWindow.MonoFont, Width = LabelW - 4,
+            FontSize = 10.5, FontFamily = UiFonts.Mono, Width = LabelW - 4,
             TextTrimming = TextTrimming.CharacterEllipsis, Opacity = pin.Port >= 0 ? 0.95 : 0.55,
             TextAlignment = side is Side.Left or Side.Bottom ? TextAlignment.Right : TextAlignment.Left,
         };
@@ -384,7 +384,7 @@ public sealed class ChipView : UserControl
             {
                 box.Background = Power;
                 SetTip(tips, $"pin {pin.Number}  {pin.Name}\n{Profile.OtherPins.GetValueOrDefault(pin.Name.Split('/')[0], "")}" +
-                           (pin.Name.StartsWith("OSC") ? $"\ncrystal {OkiRomSim.Core.Bus.CrystalMHz:0.##} MHz" : ""));
+                           (pin.Name.StartsWith("OSC") ? $"\ncrystal {OkiRomSim.Core.Chip.CrystalMHz:0.##} MHz" : ""));
                 continue;
             }
             if (pin.Port == 5)

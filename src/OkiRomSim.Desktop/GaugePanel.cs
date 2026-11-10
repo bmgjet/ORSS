@@ -734,6 +734,10 @@ public sealed class GaugePanel : UserControl
         try
         {
             var path = PathFor(profile);
+#if TUNER_ONLY
+            // RomSimTuner's first start: Rom Sim Studio's Tuner-mode dashboard to begin from (read here, never written)
+            if (!File.Exists(path) && File.Exists(PathFor("tuner"))) path = PathFor("tuner");
+#endif
             if (!File.Exists(path) && File.Exists(LegacyPath)) path = LegacyPath;
             if (File.Exists(path))
             {
@@ -757,7 +761,9 @@ public sealed class GaugePanel : UserControl
 
     public void SaveLast()
     {
+#if !TUNER_ONLY
         if (UiCheck.Active) return;
+#endif
         try
         {
             var path = PathFor(Profile);

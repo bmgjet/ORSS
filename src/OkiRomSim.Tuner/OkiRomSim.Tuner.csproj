@@ -1,0 +1,135 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- RomSimTuner: the tuning-only build of Rom Sim Studio. The calibration editor, live datalogging and the ROM emulator, compiled
+       from the same source files as the full program (linked below from OkiRomSim.Desktop, built with TUNER_ONLY) but with no
+       simulator: it references OkiRomSim.Core, .Assembler and .Calibration and not OkiRomSim.Sim or OkiRomSim.Mcp, so neither is in
+       its output (tests/OkiRomSim.Tests checks the built program for that). Its own files: TunerProgram.cs, TunerWindow.cs. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>RomSimTuner</AssemblyName>
+    <RootNamespace>OkiRomSim.Desktop</RootNamespace>
+    <DefineConstants>$(DefineConstants);TUNER_ONLY</DefineConstants>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
+    <ApplicationIcon>..\OkiRomSim.Desktop\Assets\icon.ico</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <AvaloniaResource Include="..\OkiRomSim.Desktop\Assets\**" Link="Assets\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\OkiRomSim.Desktop\Assets\icon.ico" Link="Assets\icon.ico" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- the same files beside the program as Rom Sim Studio has: translations, presets, the skeletons (feature pages, Change
+         functions) and the reference ROMs Detect lines a .bin up with -->
+    <None Include="..\..\Templates\*.asm" Link="Templates\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\lang\*.json;..\..\lang\README.md" Link="lang\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\Templates\Presets\*" Link="Templates\Presets\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\roms\*-skeleton.asm" Link="Templates\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\roms\*-features\**\*" Link="Templates\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\roms\p30.asm;..\..\roms\p13.asm;..\..\roms\p72-269.asm;..\..\roms\p08-911-243.asm;..\..\roms\HTS115.asm" Link="Templates\References\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.*" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.*" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.*" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.*" />
+    <PackageReference Include="Avalonia.Controls.ColorPicker" Version="11.*" />
+    <!-- serial: the datalogging cable and the Moates Ostrich/Demon -->
+    <PackageReference Include="System.IO.Ports" Version="10.*" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\OkiRomSim.Core\OkiRomSim.Core.csproj" />
+    <ProjectReference Include="..\OkiRomSim.Assembler\OkiRomSim.Assembler.csproj" />
+    <ProjectReference Include="..\OkiRomSim.Calibration\OkiRomSim.Calibration.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\OkiRomSim.Desktop\AboutPage.cs" Link="Shared\AboutPage.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\AppPaths.cs" Link="Shared\AppPaths.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\AppSettings.cs" Link="Shared\AppSettings.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\AppTheme.cs" Link="Shared\AppTheme.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\BaseMapWindows.cs" Link="Shared\BaseMapWindows.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\BinToolWindow.cs" Link="Shared\BinToolWindow.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\CalibrationView.cs" Link="Shared\CalibrationView.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\CompareWindow.cs" Link="Shared\CompareWindow.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\DarkChrome.cs" Link="Shared\DarkChrome.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\DataList.cs" Link="Shared\DataList.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\Datalog.cs" Link="Shared\Datalog.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\DatalogChannelsWindow.cs" Link="Shared\DatalogChannelsWindow.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\DatalogGraphWindow.cs" Link="Shared\DatalogGraphWindow.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\DatalogView.cs" Link="Shared\DatalogView.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\DebugView.cs" Link="Shared\DebugView.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\Dialogs.cs" Link="Shared\Dialogs.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\DynoGraph.cs" Link="Shared\DynoGraph.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\DynoWindow.cs" Link="Shared\DynoWindow.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\EmbeddedLibraries.cs" Link="Shared\EmbeddedLibraries.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\ExternalData.cs" Link="Shared\ExternalData.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\FeaturePageView.cs" Link="Shared\FeaturePageView.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\FeaturePatchWindow.cs" Link="Shared\FeaturePatchWindow.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\GaugeEditor.cs" Link="Shared\GaugeEditor.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\GaugePanel.cs" Link="Shared\GaugePanel.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\Gauges.cs" Link="Shared\Gauges.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\GearboxPanel.cs" Link="Shared\GearboxPanel.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\GridBox.cs" Link="Shared\GridBox.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\HiResTimer.cs" Link="Shared\HiResTimer.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\ImportMapsWindow.cs" Link="Shared\ImportMapsWindow.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\Lang.cs" Link="Shared\Lang.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\LinkStatus.cs" Link="Shared\LinkStatus.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\LogTableWindow.cs" Link="Shared\LogTableWindow.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\MoatesTrace.cs" Link="Shared\MoatesTrace.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\OnboardWindow.cs" Link="Shared\OnboardWindow.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\Panels.cs" Link="Shared\Panels.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\Perf.cs" Link="Shared\Perf.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\PluginTypes.cs" Link="Shared\PluginTypes.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\RamBar.cs" Link="Shared\RamBar.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\RomHost.cs" Link="Shared\RomHost.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\RomPasswordUi.cs" Link="Shared\RomPasswordUi.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\ScaleWindow.cs" Link="Shared\ScaleWindow.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\ScreenFit.cs" Link="Shared\ScreenFit.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\ServiceWindow.cs" Link="Shared\ServiceWindow.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\SettingsWindow.cs" Link="Shared\SettingsWindow.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\SetupWizardWindow.cs" Link="Shared\SetupWizardWindow.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\TableViews.cs" Link="Shared\TableViews.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\Toolbar.cs" Link="Shared\Toolbar.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\TouchMode.cs" Link="Shared\TouchMode.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\TriggerWindow.cs" Link="Shared\TriggerWindow.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\TuningWindows.cs" Link="Shared\TuningWindows.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\UiFonts.cs" Link="Shared\UiFonts.cs" />
+    <Compile Include="..\OkiRomSim.Desktop\Updates.cs" Link="Shared\Updates.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- the ROM model the compare and import windows use (sim-free; it lives with the MCP tools in Rom Sim Studio) -->
+    <Compile Include="..\OkiRomSim.Mcp\Program66k.cs" Link="Shared\Mcp\Program66k.cs" />
+    <Compile Include="..\OkiRomSim.Mcp\RomCompare.cs" Link="Shared\Mcp\RomCompare.cs" />
+    <Compile Include="..\OkiRomSim.Mcp\Explorer.cs" Link="Shared\Mcp\Explorer.cs" />
+  </ItemGroup>
+  <!-- A distribution build, as for Rom Sim Studio: dotnet publish -c Release -p:Bundle=true. The libraries go inside RomSimTuner.dll
+       and are loaded from there (EmbeddedLibraries.cs); the runtimes folder stays beside it. -->
+  <PropertyGroup Condition="'$(Bundle)' == 'true'">
+    <GenerateDependencyFile>false</GenerateDependencyFile>
+    <OutputPath>bin\$(Configuration)-bundle\</OutputPath>
+    <IntermediateOutputPath>obj\$(Configuration)-bundle\</IntermediateOutputPath>
+  </PropertyGroup>
+  <Target Name="EmbedLibraries" AfterTargets="ResolveAssemblyReferences" BeforeTargets="CoreCompile" Condition="'$(Bundle)' == 'true'">
+    <ItemGroup>
+      <_Embed Include="@(ReferenceCopyLocalPaths)" Condition="'%(ReferenceCopyLocalPaths.Extension)' == '.dll' And '%(ReferenceCopyLocalPaths.DestinationSubDirectory)' == ''" />
+      <EmbeddedResource Include="@(_Embed)" LogicalName="deps/%(_Embed.Filename)%(_Embed.Extension)" WithCulture="false" Type="Non-Resx" />
+    </ItemGroup>
+    <Message Importance="high" Text="Bundle: @(_Embed->Count()) libraries inside $(AssemblyName).dll" />
+    <ItemGroup>
+      <_Loose Include="@(ReferenceCopyLocalPaths)" Condition="('%(ReferenceCopyLocalPaths.Extension)' == '.dll' Or '%(ReferenceCopyLocalPaths.Extension)' == '.pdb' Or '%(ReferenceCopyLocalPaths.Extension)' == '.xml') And '%(ReferenceCopyLocalPaths.DestinationSubDirectory)' == ''" />
+      <ReferenceCopyLocalPaths Remove="@(_Loose)" />
+    </ItemGroup>
+  </Target>
+  <Target Name="ClearLooseLibraries" AfterTargets="Build" Condition="'$(Bundle)' == 'true'">
+    <Delete Files="@(_Loose->'$(OutDir)%(Filename)%(Extension)')" ContinueOnError="true" />
+  </Target>
+  <Target Name="LeaveEmbeddedOut" AfterTargets="ComputeResolvedFilesToPublishList" Condition="'$(Bundle)' == 'true'">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="('%(ResolvedFileToPublish.Extension)' == '.dll' Or '%(ResolvedFileToPublish.Extension)' == '.pdb' Or '%(ResolvedFileToPublish.Extension)' == '.xml') And '%(ResolvedFileToPublish.RelativePath)' == '%(ResolvedFileToPublish.Filename)%(ResolvedFileToPublish.Extension)' And '%(ResolvedFileToPublish.Filename)' != '$(AssemblyName)'" />
+    </ItemGroup>
+  </Target>
+</Project>

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guide — Rom Sim Studio</title>
+<meta name="description" content="How to use Rom Sim Studio: write and simulate ROMs for the OKI MSM66207 Honda OBD1 ECUs, build a custom ROM from the skeleton, and tune and datalog a car.">
+<link rel="icon" href="../favicon.ico">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<header class="topbar"><button class="menu-btn" aria-label="Contents">☰</button><a class="logo" href="index.html">ROM SIM <b>STUDIO</b></a><span class="sp"></span><span class="links"><a href="../">Website</a> &nbsp;·&nbsp; <a href="../#start">Download</a></span></header>
+<div class="frame"><nav class="side"></nav><main>
+
+<h1>Rom Sim Studio guide</h1>
+<p class="lead">How to use every part of the program: writing and simulating ROMs for the OKI MSM66207 in 1990s Honda OBD1 ECUs, building a ROM of your own from the skeleton, and tuning and datalogging a car.</p>
+
+<figure><img src="img/simulator.png" alt="The workbench: the chip's pins and engine inputs on the left, the source in the middle with its tabs below, the CPU and disassembly on the right"><figcaption>The workbench (Simulator mode) with a ROM running against the simulated engine.</figcaption></figure>
+
+<h2>Start here</h2>
+<div class="cards">
+  <a class="card" href="getting-started.html"><b>Getting started</b><span>Install, the first-start question, opening a ROM, updates.</span></a>
+  <a class="card" href="modes.html"><b>Simulator and Tuner modes</b><span>The two ways the window is laid out, and when to use each.</span></a>
+  <a class="card" href="new-rom.html"><b>Creating a custom ROM</b><span>The skeleton, the functions, the ROM and RAM bars, the safety checks.</span></a>
+  <a class="card" href="setup.html"><b>Setting up a ROM</b><span>The set-up wizard and its presets, and adding functions to a ROM you have.</span></a>
+  <a class="card" href="tuning.html"><b>Tuning a car</b><span>Maps, settings, feature pages and the live cell from the datalog.</span></a>
+  <a class="card" href="datalogging.html"><b>Datalogging</b><span>Cables, protocols, channels, codes, smoothing, playback.</span></a>
+  <a class="card" href="remote.html"><b>Remote control</b><span>Every serial command, and how to build a remote panel.</span></a>
+  <a class="card" href="dyno.html"><b>Virtual dyno</b><span>Power and torque from the datalog: on a roller, or the car on a strip.</span></a>
+  <a class="card" href="troubleshooting.html"><b>Troubleshooting</b><span>A link that will not connect, an ECU that will not boot, and more.</span></a>
+</div>
+
+<h2>What it is</h2>
+<p>Rom Sim Studio is two tools in one window:</p>
+<ul>
+  <li><b>A workbench for the ROM itself</b> — an assembler that builds byte-for-byte what the original tools build, a simulator of the MSM66207 and the engine around it, a debugger with breakpoints, a trace, a memory map and a view of every pin. Change the code, run it, watch what it does.</li>
+  <li><b>A tuner for the car</b> — a calibration editor for the maps and settings, a datalogger for the common OBD1 protocols and widebands, emulator support (Moates Ostrich 2.0 and Demon) so changes reach the car as you make them, and the cell the engine is in marked on the map as it runs.</li>
+</ul>
+<p>Between them sits <b>File &gt; New ROM</b>: a stock P30 ROM cut down to what runs the engine (the <i>skeleton</i>), and around fifty functions — launch control, boost control, datalogging, protection and more — to build into it. You pick the functions; the program checks they fit, work together and leave the engine safe, and writes the ROM.</p>
+
+<div class="note warn"><b>Your engine, your risk</b>Changing an engine computer can damage it, the car and the engine. Simulate first, start from safe values, and read the <a href="licence.html">licence</a>.</div>
+
+<h2>Help and community</h2>
+<p>Questions, tunes, modules and bug reports are welcome on the <a href="https://discord.gg/xynkH3ymkH">Discord</a>.</p>
+
+<footer>Rom Sim Studio 0.0.0.8 · by bmgjet · <a href="licence.html">Licence</a></footer>
+</main></div>
+<script src="guide.js"></script>
+</body>
+</html>

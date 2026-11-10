@@ -53,8 +53,8 @@ public static class ModulePages
                 S($"gpo{n}.flash", "Flash while on", "On and off, each for the on delay, while the conditions hold: a warning light.")),
         ]);
 
-    static readonly string[] Cuts = ["Fuel cut", "Ignition cut", "Fuel and ignition cut"];
-    const string CutTip = "Fuel cut: the injectors stop - quiet and easy on the exhaust. Ignition cut: the sparks stop and the fuel burns in the " +
+    internal static readonly string[] Cuts = ["Fuel cut", "Ignition cut", "Fuel and ignition cut"];
+    internal const string CutTip = "Fuel cut: the injectors stop - quiet and easy on the exhaust. Ignition cut: the sparks stop and the fuel burns in the " +
                           "exhaust - the crackle, hard on the converter. Both: the hardest cut. Whichever is picked, the engine is never let past the limit.";
 
     /// The rev limits as the skeleton's limiter modules lay them out: the rev limiter, the speed limiter by switch, the rpm ceilings, the limit by gear and the ignition cut shaping.
@@ -126,6 +126,20 @@ public static class ModulePages
                 C("vtec.alt.output", "Output", ModOutputs),
                 S("vtec.alt.invert", "Invert output")),
             HtsPages.StockVtec,
+        ]);
+
+    /// The skeleton's own (stock) rev limiter, where its points can be set: the P13's, a cut and a resume point for each cam.
+    public static CalPage StockRevLimit() => new("stockrev", "Stock rev limiter", "Limits",
+        "The rev limiter the stock code keeps, always in whatever functions are built: fuel is cut above the cut point and comes back once " +
+        "the rpm falls under the resume point. Low cam: VTEC off (or code 22 stored); high cam: VTEC engaged. In a ROM built from the " +
+        "skeleton its over-rev cut in the crank interrupt uses the same cut point, and a rev limiter module (Rev limits page) can set lower limits on top.",
+        [
+            G("Low cam",
+                V("stockrev.lowcut", "Cut at", "rpm", "Fuel cut above this rpm while the low cam is in use."),
+                V("stockrev.lowresume", "Back in below", "rpm", "Fuel comes back once the rpm falls under this: a little under the cut point.")),
+            G("High cam",
+                V("stockrev.highcut", "Cut at", "rpm", "Fuel cut above this rpm while VTEC is engaged."),
+                V("stockrev.highresume", "Back in below", "rpm", "Fuel comes back once the rpm falls under this: a little under the cut point.")),
         ]);
 
     /// The MAP sensor a ROM built from the skeleton is set up for: the scale its pressures are shown in.
@@ -228,11 +242,25 @@ public static class ModulePages
         ("knockwindow", "Knock window open at any rpm", "217h bit 3", "The knock window is open whatever the rpm (otherwise only below a set rpm)."),
         ("knockretardiat", "Knock retard limited by intake air", "227h bit 7", "The knock retard is limited by the intake air temperature."),
         ("unused2161", "Unused flag", "216h bit 1", "Set from its option byte at power-up; nothing in the code reads it."),
+        // the P13's variant flags (set from its ID at power-up)
+        ("p13automatic", "Automatic transmission", "220h bit 0", "The automatic: the park/neutral switch, lock-up and its port C output, its tables and checks. (Built without FEAT_STOCK_AT the skeleton clears it; forcing it on brings that stock code back into use.)"),
+        ("p13eld", "Electrical load detector (code 20)", "220h bit 2", "Reads the electrical load detector (code 20) for the idle, purge and timing corrections; without it the ECU uses a fixed load reading (25h)."),
+        ("p13baro", "Barometric pressure sensor (code 13)", "220h bit 3", "Reads the barometric pressure sensor (code 13); without it baro is the fixed value F9h."),
+        ("p13atchecks", "A/T output checks (codes 25, 26)", "220h bit 4", "Checks the automatic's outputs (codes 25, 26)."),
+        ("p13idleknock", "Idle and knock variant (220h bit 6)", "220h bit 6", "The idle valve's step size and step count, and a knock retard limit check that only runs with it."),
+        ("p13vtecchecks", "VTEC solenoid and pressure checks (codes 21, 22)", "221h bit 0", "Checks the VTEC solenoid (code 21) and the VTEC pressure switch result (code 22)."),
+        ("p13knock", "Knock control unit (codes 23, 24)", "221h bit 1", "Uses the knock control unit: its retard (2B4h) and its checks (codes 23, 24). (Built without FEAT_STOCK_KNOCK the retard is held at none whatever this says.)"),
+        ("p13eld2", "Load input check without the ELD (221h bit 2)", "221h bit 2", "Without the electrical load detector, checks the load input (3D8h) against 9Ah instead (flag 218h bit 3)."),
+        ("p13flag21f0", "Speed limit and fuel check variant (21Fh bit 0)", "21Fh bit 0", "The stock speed limiter's path, the stored fuel values checked against flag 0A0h bit 0, and that flag set by trouble code 30."),
+        ("p13injcheck", "Injector check (code 16) (21Fh bit 2)", "21Fh bit 2", "Checks the injector drive (code 16)."),
+        ("p13flag21f3", "Injector check and knock tables variant (21Fh bit 3)", "21Fh bit 3", "Checks the injector drive (code 16), picks the other knock level tables, and moves a coolant point of the closed-loop gate (35h to 70h)."),
+        ("p13openloop2", "Second open-loop load table (21Fh bit 5)", "21Fh bit 5", "Uses the second open-loop load table (all FFh in this image: never) as the load the fuel goes rich above, and flag 11Ch bit 5."),
     ];
 
     /// One page per board flag: whether the ECU decides it (option bytes / resistors) or it is forced on or off in software.
     public static IEnumerable<CalPage> BoardOptions() => BoardFlags.Select(f => new CalPage($"boardopt.{f.Key}", f.Title, "Board options",
-        $"{f.What} The ECU sets this flag ({f.Flag}) at power-up from its option bytes or the resistors on its board; force it here for a swapped engine or a board with the wrong resistors.",
+        f.Key.StartsWith("p13") ? $"{f.What} The ECU sets this flag ({f.Flag}) from its ID; force it here for a swapped engine or another board."
+            : $"{f.What} The ECU sets this flag ({f.Flag}) at power-up from its option bytes or the resistors on its board; force it here for a swapped engine or a board with the wrong resistors.",
         [G(f.Title, new PageRow($"boardopt.{f.Key}", "Setting", RowKind.Force, Tip: "Left to the ECU, or forced on or off whatever the option bytes and the resistors say."))]));
 
     public static CalPage Watermark() => new("watermark", "Watermark", "Options",
@@ -360,9 +388,29 @@ public static class ModulePages
                 V("remote.pop.retard", "Timing taken out", "°", "The sparks are also cut every other tick, so the fuel burns in the exhaust.")),
         ]);
 
+    /// The analog inputs a skeleton module can watch (lib.asm mod_analog), in raw-value order: the ECU's own, then the serial inputs.
+    public static readonly string[] AnalogInputs =
+        ["O2 sensor", "ELD", "EGR (P13: EGR lift)", "B6 (P13: the TCS pin)", "Serial input 1", "Serial input 2", "Serial input 3", "Serial input 4",
+         "Serial input 5", "Serial input 6", "Serial input 7", "Serial input 8"];
+
+    /// Sensor protection as the skeleton's module lays it out: a cut on any analog input's reading.
+    public static CalPage SensorProtection() => new("sensorpro", "Sensor protection", "Protection",
+        "A guard on any analog input: an oil pressure sender, a fuel pressure sender, a second wideband. When the reading is on the wrong side of a level " +
+        "above an rpm for longer than a delay, fuel or spark is cut; it comes back once the rpm is under the point again, so the engine idles home.",
+        [
+            G("Sensor protection",
+                S("sensorpro.enable", "Enable sensor protection"),
+                C("sensorpro.cut", "Cut", Cuts, tip: CutTip),
+                C("sensorpro.input", "Input", AnalogInputs, tip: "The input the sender is wired to. The serial inputs come over the datalog cable (the serial inputs module)."),
+                C("sensorpro.side", "Cut when the reading is", ["Below the level", "Above the level"], tip: "Below: a pressure sender that falls when the pressure is lost. Above: a sender that rises with trouble (a temperature, a wideband's lean voltage)."),
+                V("sensorpro.level", "Level", "V", "0-5 V at the input."),
+                V("sensorpro.rpm", "Above RPM", "rpm", "It only watches above this rpm, and lets go once the rpm is back under it."),
+                V("sensorpro.delay", "For longer than", "ms", "The reading must be past the level for this long before it cuts: a dip over a bump is not a lost pump.")),
+        ]);
+
     public static IReadOnlyList<CalPage> All() =>
-        [RollingIdle(), AntiStall(), Nitrous(), SmartAlternator(), WaterMeth(), RpmSwitch(), GearFuel(), WarningLamp(), Tach(),
-         .. BoardOptions(), Watermark(), CheckEngineCodes(), SerialInputs(), Datalog(), MapSensor(), DatalogExtra()];
+        [RollingIdle(), AntiStall(), Nitrous(), SensorProtection(), SmartAlternator(), WaterMeth(), RpmSwitch(), GearFuel(), WarningLamp(), Tach(),
+         .. BoardOptions(), Watermark(), StockRevLimit(), CheckEngineCodes(), SerialInputs(), Datalog(), MapSensor(), DatalogExtra()];
 
     // ---------------------------------------------------------------- the pages for one ROM
 

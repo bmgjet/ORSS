@@ -66,6 +66,29 @@ public static class Gearboxes
     /// past the last one measured as far again as the gap below it.
     public static int[] FromLearned(IReadOnlyList<double> perGear)
     {
+        // perGear[i] is gear i+1's reading, 0 where that gear was not recorded. With two or more recorded, a gear left out is filled
+        // in from its place among the others (straight through between them, on along the nearest two past them): taking the recorded
+        // ones in turn as gears 1, 2, 3... moved every boundary one gear down when 1st was skipped, and the gear modules then ran the
+        // wrong gear's fuel, timing and limits. Gears recorded from 1st with none skipped come out exactly as before.
+        var known = perGear.Select((v, i) => (I: i, V: v)).Where(x => x.V > 0).ToList();
+        if (known.Count >= 2 && known.Any(k => k.I != known.IndexOf(k)))
+        {
+            double At(int i)
+            {
+                foreach (var k in known) if (k.I == i) return k.V;
+                int below = known.FindLastIndex(k => k.I < i), above = known.FindIndex(k => k.I > i);
+                if (below >= 0 && above >= 0)
+                {
+                    var (a, b) = (known[below], known[above]);
+                    return a.V + ((b.V - a.V) * (i - a.I) / (b.I - a.I));
+                }
+                var (p, q) = above < 0 ? (known[^2], known[^1]) : (known[0], known[1]);
+                return q.V + ((q.V - p.V) / (q.I - p.I) * (i - q.I));
+            }
+            var spaced = new int[4];
+            for (int i = 0; i < 4; i++) spaced[i] = (int)Math.Round((At(i) + At(i + 1)) / 2);
+            return spaced;
+        }
         var g = perGear.Where(v => v > 0).ToList();
         var bounds = new int[4];
         for (int i = 0; i < 4; i++)
@@ -164,7 +187,7 @@ public static class SetupPlanner
                 if (before.AsSpan().SequenceEqual(work)) notHere.Add($"base maps: this ROM already has the stock {bm} calibration - nothing to change");
                 else done.Add(what);
             }
-            else if (htsTemplate != null && File.Exists(htsTemplate)) done.Add(StockByImport(defs, work, block, bm, htsTemplate));
+            else if (htsTemplate != null && File.Exists(htsTemplate)) done.Add(StockByImport(defs, work, block, bm, htsTemplate, notHere));
             else notHere.Add("base maps: the HTS120 template is needed to bring a stock ECU's maps into this ROM");
         }
 
@@ -236,6 +259,8 @@ public static class SetupPlanner
                 if (mult > most)
                     foreach (var t in FuelMaps(defs)) { foreach (var p in Rescale.ScaleTable(defs, work, t, mult / most).Patches) work[p.Address] = p.Value; n++; }
                 done.Add($"injectors {sc:0} cc -> {fc:0} cc: multiplier {Math.Min(mult, most):0.000}" + (n > 0 ? $", and {n} fuel map(s) x {mult / most:0.000} for the rest" : ""));
+                // the multiplier stops at x2: what is past it needs the fuel maps, and with none here the fuel is short by that much
+                if (mult > most && n == 0) notHere.Add($"injectors: x {mult / most:0.000} more fuel is needed past the multiplier's x2, and no fuel map here could take it - the engine would run lean");
             }
             else if (Math.Abs(mult - 1) > 1e-6)
             {
@@ -245,7 +270,9 @@ public static class SetupPlanner
                     foreach (var p in Rescale.ScaleTable(defs, work, t, mult).Patches) work[p.Address] = p.Value;
                     n++;
                 }
-                done.Add($"injectors {sc:0} cc -> {fc:0} cc: {n} fuel map(s) scaled x {mult:0.000}");
+                // nothing scaled is not "done": with smaller injectors that is a lean engine, with bigger ones a rich one
+                if (n > 0) done.Add($"injectors {sc:0} cc -> {fc:0} cc: {n} fuel map(s) scaled x {mult:0.000}");
+                else notHere.Add($"injectors {sc:0} cc -> {fc:0} cc: this ROM has no injector size setting and no fuel map here to scale x {mult:0.000} - nothing was changed for them");
             }
         }
         foreach (var (slot, value, what) in new[] { ("injector.crank", c.CrankTrim, "cranking trim"), ("injector.postfuel", c.PostStartTrim, "post start trim"), ("injector.tipin", c.TipInTrim, "tip-in trim") })
@@ -336,7 +363,7 @@ public static class SetupPlanner
     }
 
     /// Any other ROM: the stock ECU's maps put in the HTS120 template where they came from, then brought across the way Import maps does it - each map to the one here that does the same job, through real units, onto this ROM's breakpoints.
-    static string StockByImport(DefinitionSet defs, byte[] work, byte[] block, BaseMapPreset bm, string htsTemplate)
+    static string StockByImport(DefinitionSet defs, byte[] work, byte[] block, BaseMapPreset bm, string htsTemplate, List<string> notHere)
     {
         var asm = TemplateBuild(htsTemplate);
         var from = DefinitionBuilder.FromAssembly(asm, "base");
@@ -346,8 +373,14 @@ public static class SetupPlanner
         StockIntoHts(from, src, block, bm);
         var pairs = MapImport.Pair(from, defs).Where(p => p.To != null && p.From.IsTable && p.From.Rows > 1 && p.From.Cols > 1
                                                           && MapImport.RoleOf(p.From).Kind is "fuel" or "ignition").ToList();
-        foreach (var p in pairs) MapImport.Apply(from, src, p.From, defs, work, p.To!, false, MapImport.Scaling.Breakpoints);
-        return $"base maps from the stock {bm}: {string.Join(", ", pairs.Select(p => p.To!.Name))}";
+        var brought = new List<string>();
+        foreach (var p in pairs)
+        {
+            var r = MapImport.Apply(from, src, p.From, defs, work, p.To!, false, MapImport.Scaling.Breakpoints);
+            if (r.Ok) brought.Add(p.To!.Name);
+            else notHere.Add($"base maps: {p.To!.Name} left as it is - {r.Note}");
+        }
+        return $"base maps from the stock {bm}: {(brought.Count > 0 ? string.Join(", ", brought) : "none")}";
     }
 
     static readonly Dictionary<string, (DateTime When, AssemblyResult Asm)> Templates = new(StringComparer.OrdinalIgnoreCase);
@@ -364,6 +397,10 @@ public static class SetupPlanner
     }
 
     /// Boost: on every fuel and ignition map read against a load (mBar) axis, the load columns spread to the boost wanted - the columns up to the air outside kept where they were as far as there is room - and the cells past the air outside filled from the last column below it: fuel added for each bar of boost, timing taken out for each psi.
+    /// The extra a fuel map that is an enrichment over a MAP-following base (the P13's) gets a bar of boost: the base already
+    /// gives the fuel for the air; this is only for a richer mixture under boost.
+    const double EnrichPerBar = 10;
+
     static List<string> Boost(DefinitionSet defs, byte[] work, double psi, double fuelPerBar, double retardPerPsi, List<string> notHere)
     {
         var done = new List<string>();
@@ -372,6 +409,25 @@ public static class SetupPlanner
                                          && (defs.Formula(i.ColAxis.Formula).Unit.Contains("bar", StringComparison.OrdinalIgnoreCase) || (i.ColAxis.Formula ?? "").Contains("mbar", StringComparison.OrdinalIgnoreCase)))
                        .ToList();
         if (maps.Count == 0) { notHere.Add("boost: no fuel or ignition map with a load axis in mBar"); return done; }
+        // a fuel map that is an enrichment (the P13's: 80h = 100 %) sits over a base fuel the ECU works out from the MAP
+        // reading itself, which follows the boost as far as the sensor reads: its boost columns keep the full-load
+        // enrichment, with a little more for a richer mixture under boost - not the fuel per bar a base fuel map needs
+        var enrich = maps.Where(m => MapImport.RoleOf(m).Kind == "fuel" && m.Formula != "honda_fuel").Select(m => m.Name).ToList();
+        if (enrich.Count > 0)
+            notHere.Add($"boost: {string.Join(", ", enrich)} {(enrich.Count == 1 ? "is an enrichment" : "are enrichments")} over a base fuel that already follows the MAP reading: the boost columns keep the full-load value, +{EnrichPerBar:0} % a bar - check the AFR before any boost");
+        // and an ECU that takes a MAP reading past its limit for a faulty sensor (the P13: code 3, and a fixed load) has the
+        // limit moved above the boost
+        if (CalPage.Bound(defs, "mapsensor.faulthigh") is { } fh)
+        {
+            double limit = RomData.Read(defs, work, fh)[0].Value, wantLimit = top + 150;
+            if (limit < wantLimit)
+            {
+                RomData.Write(defs, work, fh, 0, wantLimit);
+                double got = RomData.Read(defs, work, fh)[0].Value;
+                done.Add($"the MAP sensor's fault limit raised to {got:0} mBar (was {limit:0})");
+                if (got < top) notHere.Add($"boost: the MAP sensor reads only to {got:0} mBar, short of {top:0}: past it the ECU takes the sensor for faulty (fit a bigger sensor on the Sensors page)");
+            }
+        }
         foreach (var group in maps.GroupBy(m => m.ColAxis!.Address!.Value))
         {
             var first = group.First();
@@ -418,7 +474,7 @@ public static class SetupPlanner
                     {
                         double p = newPts[k], v;
                         if (p <= SeaLevel + 40) v = At(p);
-                        else if (fuel) v = baseAt * (1 + (p - SeaLevel) / 1000 * fuelPerBar / 100);
+                        else if (fuel) v = baseAt * (1 + (p - SeaLevel) / 1000 * (map.Formula == "honda_fuel" ? fuelPerBar : EnrichPerBar) / 100);
                         else v = Math.Max(0, baseAt - (p - SeaLevel) * 0.0145038 * retardPerPsi);
                         want2[r * cols + k] = v;
                     }

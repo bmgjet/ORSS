@@ -156,10 +156,13 @@ public sealed class OkiTools
 
         yield return new McpTool("file_upload",
             "Write base64 into a file, in chunks - how a client on another machine puts a .bin, .asm or definitions into the workspace. " +
-            "offset=0 (or leaving it out) starts a new file; later chunks append at their offset. Returns the size so far and its SHA-256.",
+            "offset=0 starts the file (over one that is already there only with overwrite=true); later chunks go at their offset, or at the end " +
+            "of the file when offset is left out (so leaving it out on the first chunk adds to a file of that name that is already there). " +
+            "Returns the size so far and its SHA-256.",
             Schema(("path", "string", "file", true), ("data", "string", "base64 of this chunk", true),
                    ("offset", "integer", "where this chunk goes (default: the end of the file, 0 for a new one)", false),
-                   ("sha256", "string", "expected SHA-256 of the whole file, checked once the last chunk lands", false)), FileUpload, ReadOnly: false);
+                   ("sha256", "string", "expected SHA-256 of the whole file, checked once the last chunk lands", false),
+                   ("overwrite", "boolean", "replace a file that is already there (the first chunk; the old one is kept as .bak)", false)), FileUpload, ReadOnly: false);
 
         yield return new McpTool("rom_download",
             "The ROM image the desktop app has open (with every calibration edit), as base64 - for a client running on another machine.",
@@ -341,9 +344,14 @@ Paths are confined to the workspace. Large outputs go to .okirom/ files - read t
         var dir = _ws.Resolve(S(a, "path") ?? ".");
         if (!Directory.Exists(dir)) throw new ToolException($"{S(a, "path")} is not a directory");
         var opt = B(a, "recursive", false) ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+        // a name pattern only: .NET takes any folder part of a search pattern ("../outside/*") as part of the path, which listed files
+        // outside the workspace
+        var pattern = S(a, "pattern") ?? "*";
+        if (pattern.Contains('/') || pattern.Contains('\\') || pattern.Contains("..") || Path.IsPathRooted(pattern))
+            throw new ToolException("pattern is a file name pattern (*.asm, p30*): no folders - give the folder as path");
         var sb = new StringBuilder();
         foreach (var d in Directory.GetDirectories(dir).OrderBy(x => x).Take(200)) sb.AppendLine($"  {_ws.Show(d)}/");
-        foreach (var f in Directory.GetFiles(dir, S(a, "pattern") ?? "*", opt).OrderBy(x => x).Take(1000))
+        foreach (var f in Directory.GetFiles(dir, pattern, opt).OrderBy(x => x).Take(1000))
             sb.AppendLine($"  {_ws.Show(f),-60} {new FileInfo(f).Length,10:N0} bytes");
         return sb.Length == 0 ? "(empty)" : sb.ToString();
     }
@@ -455,6 +463,7 @@ Paths are confined to the workspace. Large outputs go to .okirom/ files - read t
     {
         var src = _ws.Resolve(Req(a, "path"));
         var opt = new AssemblerOptions { LenientMode = B(a, "compat", false), AllowFile = _ws.Allows };
+        Program66k.UsePartOf(src);
         var r = new OkiAssembler(opt).AssembleFile(src);
         var sb = new StringBuilder();
         int errors = r.Diagnostics.Count(d => d.Severity == Severity.Error), warnings = r.Diagnostics.Count(d => d.Severity == Severity.Warning);
@@ -494,7 +503,7 @@ Paths are confined to the workspace. Large outputs go to .okirom/ files - read t
             fs.Position = offset;
             fs.ReadExactly(buf, 0, buf.Length);
         }
-        string sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path)));
+        string sha = Sha256Of(path);
         return $"{_ws.Show(path)}: {info.Length} bytes total, sha256 {sha}; this chunk {offset}..{offset + buf.Length - 1}" +
                (offset + buf.Length < info.Length ? $" (ask again with offset={offset + buf.Length})" : " (complete)") +
                "\n" + Convert.ToBase64String(buf);
@@ -509,6 +518,13 @@ Paths are confined to the workspace. Large outputs go to .okirom/ files - read t
         if (chunk.Length > MaxChunk) throw new ToolException($"chunks are at most {MaxChunk} bytes");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         long offset = a["offset"] is { } ? Math.Max(0, I(a, "offset", 0)) : (File.Exists(path) ? new FileInfo(path).Length : 0);
+        // the first chunk of an upload over a file that is there: only when asked (as file_write), and the old one kept as .bak - the
+        // first chunk used to empty the file at once, so an upload that stopped part way had already destroyed the original
+        if (offset == 0 && File.Exists(path))
+        {
+            if (!B(a, "overwrite", false)) throw new ToolException($"{_ws.Show(path)} is already there: pass overwrite=true to replace it (the old one is kept as .bak)");
+            File.Copy(path, path + ".bak", overwrite: true);
+        }
         using (var fs = new FileStream(path, offset == 0 ? FileMode.Create : FileMode.OpenOrCreate, FileAccess.Write))
         {
             if (offset > fs.Length) throw new ToolException($"offset {offset} is past the end of the file ({fs.Length} bytes so far)");
@@ -516,18 +532,28 @@ Paths are confined to the workspace. Large outputs go to .okirom/ files - read t
             fs.Write(chunk);
             fs.SetLength(offset + chunk.Length);
         }
-        var all = File.ReadAllBytes(path);
-        string sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(all));
-        return S(a, "sha256") is { Length: > 0 } want && !sha.Equals(want.Replace("-", ""), StringComparison.OrdinalIgnoreCase)
-            ? $"{_ws.Show(path)}: {all.Length} bytes written, but sha256 {sha} does not match the {want} you gave - send the file again"
-            : $"{_ws.Show(path)}: {all.Length} bytes, sha256 {sha}";
+        long size = new FileInfo(path).Length;
+        string sha = Sha256Of(path);
+        // a mismatch says plainly that the file is not the one meant yet (the old answer read like success): before the last chunk it only
+        // means "more to come", so it is an answer, not an error
+        if (S(a, "sha256") is { Length: > 0 } want && !sha.Equals(want.Replace("-", ""), StringComparison.OrdinalIgnoreCase))
+            return $"{_ws.Show(path)}: {size} bytes so far, sha256 {sha} - not yet the {want} given: send the rest, or the file again if this was the last chunk";
+        return $"{_ws.Show(path)}: {size} bytes, sha256 {sha}";
+    }
+
+    /// A file's SHA-256, read as a stream (not the whole file in memory at once).
+    static string Sha256Of(string path)
+    {
+        using var fs = File.OpenRead(path);
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(fs));
     }
 
     string Disassemble(JsonObject a)
     {
         var path = _ws.Resolve(Req(a, "path"));
+        Program66k.UsePartOf(path);
         var bytes = File.ReadAllBytes(path);
-        if (bytes.Length > Bus.RomSize + 1) throw new ToolException($"{bytes.Length} bytes is larger than a 66207 ROM ({Bus.RomSize})");
+        if (bytes.Length > Bus.RomSize + 1) throw new ToolException($"{bytes.Length} bytes is larger than a ROM ({Bus.RomSize})");
         var outPath = _ws.Resolve(S(a, "output") ?? Path.ChangeExtension(path, ".disasm.asm"), mustExist: false, forWrite: true);
         var image = new byte[Bus.RomSize];
         Array.Fill(image, (byte)0xFF);

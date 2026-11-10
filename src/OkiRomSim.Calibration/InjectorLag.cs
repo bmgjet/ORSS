@@ -55,12 +55,19 @@ public static partial class InjectorLag
     public static List<InjectorPreset> LoadUser(string path)
     {
         try { return File.Exists(path) ? JsonSerializer.Deserialize<List<InjectorPreset>>(File.ReadAllText(path), Json) ?? [] : []; }
-        catch { return []; }
+        catch (Exception ex)
+        {
+            // kept aside before anything is saved over it: the next save (of the list read as empty) would otherwise wipe every curve in it
+            try { if (!File.Exists(path + ".damaged")) File.Copy(path, path + ".damaged"); } catch { }
+            OkiRomSim.Core.AppLog.Error("injectors", $"{path} could not be read (a copy is kept as .damaged)", ex);
+            return [];
+        }
     }
 
     public static void SaveUser(string path, IEnumerable<InjectorPreset> presets)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, JsonSerializer.Serialize(presets.ToList(), Json));
+        // whole or not at all: an interrupted write must not leave half a file (which then reads as no curves at all)
+        OkiRomSim.Core.SafeFile.WriteAllText(path, JsonSerializer.Serialize(presets.ToList(), Json));
     }
 }

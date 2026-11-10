@@ -73,7 +73,7 @@ if XP == XP_CODE
 ; injectors, 0FDh.4 the sparks).
 rollidle_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -93,21 +93,21 @@ endif
                 JEQ     rollidle_off
                 CLRB    A
                 LCB     A, rollidle_tps        ; throttle below the point
-                CMPB    0b9h, A
+                CMPB    ENG_TPS, A
                 JGE     rollidle_off
                 LCB     A, rollidle_speed      ; standing (or slower than the point)
-                CMPB    0b4h, A
+                CMPB    ENG_VSS, A
                 JGT     rollidle_off
                 LCB     A, rollidle_ect        ; warm: a larger byte is colder
-                CMPB    0c1h, A
+                CMPB    ENG_ECT, A
                 JGT     rollidle_off
                 CLR     A
                 LC      A, rollidle_rpm_max    ; below the rpm: the period is longer than the point's
-                CMP     0ach, A
+                CMP     ENG_RPMP, A
                 JLE     rollidle_off
                 CLR     A
                 LC      A, rollidle_rpm_min    ; above the floor: the period is shorter
-                CMP     0ach, A
+                CMP     ENG_RPMP, A
                 JGE     rollidle_off
                 CLRB    A
                 LCB     A, rollidle_mode
@@ -218,14 +218,14 @@ rollidle_spark: MB      C, 0fdh.4
                 L       A, DP
                 PUSHS   A
                 MOV     DP, #rollidle_last
-                LB      A, 0feh
+                LB      A, SVC_TICK
                 SUBB    A, [DP]                ; ticks since the last spark interrupt
                 PUSHS   A
-                LB      A, 0feh
+                LB      A, SVC_TICK
                 STB     A, [DP]
                 POPS    A
                 LB      A, ACC                 ; (byte mode again after POPS)
-                CMPB    A, 0adh
+                CMPB    A, ENG_RPMP + 1
                 JGE     rollidle_spark_done    ; a long gap: this is the dwell starting
                 LB      A, 0fbh                ; a spark: count it
                 SUBB    A, #001h
@@ -242,7 +242,7 @@ rollidle_spark_out:
                 ADDB    A, #001h
                 STB     A, [DP]
                 MOV     DP, #rollidle_hold
-                LB      A, 0adh                ; hold: half an interval
+                LB      A, ENG_RPMP + 1                ; hold: half an interval
                 STB     A, [DP]
                 ORB     0fch, #002h
 rollidle_spark_done:

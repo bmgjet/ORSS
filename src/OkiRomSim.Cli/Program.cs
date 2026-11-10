@@ -153,7 +153,12 @@ try
                 Console.WriteLine($"PC={c.Pc:X4} {Sym(c.Pc)}  A={c.A:X4}  PSW={c.PswU16():X4}  LRB={c.Lrb:X4}  SSP={c.Ssp:X4}  DD={(c.Dd ? 1 : 0)}");
                 Console.WriteLine($"injectors " + string.Join(" ", Enumerable.Range(0, 4).Select(n => $"{sim.Bus.InjectorPulseUs[n] / 1000.0:F2}ms x{sim.Bus.InjectorEvents[n]}")) + $"  sparks {sim.Bus.IgnitionEvents}");
                 Console.WriteLine($"P0={sim.Bus.ReadPort(0):X2} P1={sim.Bus.ReadPort(1):X2} P2={sim.Bus.ReadPort(2):X2} P3={sim.Bus.ReadPort(3):X2} P4={sim.Bus.ReadPort(4):X2}  fuel pump={(sim.Bus.FuelPumpActive ? "on" : "off")}  inj PW={sim.Bus.InjectorPulseWidthUs}us");
-                foreach (var w in watches) Console.WriteLine($"[{w:X4}] = {sim.Bus.Ram[w]:X2} {sim.Bus.Ram[w + 1]:X2}  (word {sim.Bus.Ram[w] | (sim.Bus.Ram[w + 1] << 8)})");
+                foreach (var w in watches)
+                {
+                    // a watch is a RAM address: one past the end (FFF on a 2 KB part) is reported, not an IndexOutOfRange crash
+                    if (w < 0 || w + 1 >= sim.Bus.Ram.Length) { Console.WriteLine($"[{w:X4}] is outside RAM (0000-{sim.Bus.Ram.Length - 1:X4})"); continue; }
+                    Console.WriteLine($"[{w:X4}] = {sim.Bus.Ram[w]:X2} {sim.Bus.Ram[w + 1]:X2}  (word {sim.Bus.Ram[w] | (sim.Bus.Ram[w + 1] << 8)})");
+                }
                 var hot = sim.GetHottestRecentPc();
                 Console.WriteLine($"hottest recent PC {hot.Address:X4} {Sym(hot.Address)} ({hot.Count}/{hot.WindowFilled}); coverage {sim.Coverage.AddressesExecuted} addresses");
                 foreach (var t in sim.TrapLog) Console.WriteLine($"BRK at {t.Key.Pc:X4} {Sym(t.Key.Pc)} reason {t.Key.Reason:X2} x{t.Value}");
@@ -214,4 +219,10 @@ catch (Exception ex) when (ex is IOException or InvalidDataException or FormatEx
 {
     Console.Error.WriteLine("error: " + ex.Message);
     return 1;
+}
+catch (Exception ex)
+{
+    // anything else is a fault in the program, said as one (and an exit code a script can tell from a usage error) rather than a crash dump
+    Console.Error.WriteLine($"internal error: {ex.GetType().Name}: {ex.Message}");
+    return 70;
 }

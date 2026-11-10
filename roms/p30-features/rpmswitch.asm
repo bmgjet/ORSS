@@ -45,7 +45,7 @@ endif
 if XP == XP_CODE
 rpmsw_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -61,20 +61,20 @@ rpmsw_tick:
                 ANDB    A, #002h
                 JNE     rpmsw_is_on
                 LC      A, rpmsw_engage     ; off: on once the period is down to the engage point
-                CMP     0ach, A
+                CMP     ENG_RPMP, A
                 JGT     rpmsw_drive
                 CLRB    A                      ; and the throttle far enough open
                 LCB     A, rpmsw_tps
-                CMPB    0b9h, A
+                CMPB    ENG_TPS, A
                 JLT     rpmsw_turn_off
                 SB      off(MOD_OUTSTATE).1
                 SJ      rpmsw_drive
 rpmsw_is_on: LC      A, rpmsw_disengage  ; on: off once the period is past the disengage point
-                CMP     0ach, A
+                CMP     ENG_RPMP, A
                 JGT     rpmsw_turn_off
                 CLRB    A                      ; and the throttle far enough open
                 LCB     A, rpmsw_tps
-                CMPB    0b9h, A
+                CMPB    ENG_TPS, A
                 JLT     rpmsw_turn_off
                 SJ      rpmsw_drive
 rpmsw_turn_off:

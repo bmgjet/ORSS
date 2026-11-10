@@ -115,7 +115,7 @@ mv_faults_ok:   LB      A, 0e9h                ; as stock: not in the first seco
                 JNE     mv_temp_ok
                 LCB     A, vtecctl_minect      ; coolant: a larger byte is colder
                 STB     A, r0
-                LB      A, 0c1h
+                LB      A, ENG_ECT
                 CMPB    A, r0
                 JGT     mv_off
 mv_temp_ok:     LCB     A, vtecctl_nospeed
@@ -123,12 +123,12 @@ mv_temp_ok:     LCB     A, vtecctl_nospeed
                 JNE     mv_speed_ok
                 LCB     A, vtecctl_minspeed
                 STB     A, r0
-                LB      A, 0b4h
+                LB      A, ENG_VSS
                 CMPB    A, r0
                 JLT     mv_off
 mv_speed_ok:    LCB     A, vtecctl_minmap
                 STB     A, r0
-                LB      A, 0a3h
+                LB      A, ENG_MAP
                 CMPB    A, r0
                 JLT     mv_off
 ; the engage point for this throttle: the low point's rpm at or under its throttle, the high point's at or
@@ -136,14 +136,14 @@ mv_speed_ok:    LCB     A, vtecctl_minmap
                 MOV     X1, #vtecctl_points
                 LCB     A, 00002h[X1]
                 STB     A, r0
-                LB      A, 0b9h
+                LB      A, ENG_TPS
                 CMPB    A, r0
                 JGT     mv_above_low
                 LCB     A, 00003h[X1]
                 SJ      mv_point
 mv_above_low:   LCB     A, [X1]
                 STB     A, r0
-                LB      A, 0b9h
+                LB      A, ENG_TPS
                 CMPB    A, r0
                 JLT     mv_between
                 LCB     A, 00001h[X1]
@@ -191,7 +191,7 @@ vtecctl_tick:   CLRB    A
                 JNE     vtecctl_used
                 RT                             ; not used: the output is left to whatever else drives it
 vtecctl_used:   PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1

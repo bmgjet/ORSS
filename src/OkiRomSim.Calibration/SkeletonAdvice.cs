@@ -15,7 +15,7 @@ public static class SkeletonAdvice
     public const string RevLimiter = "Rev limiter", FailSafes = "Fail-safes", Datalogging = "Datalogging", Protection = "Engine protection", RomSpace = "ROM space", ModuleRam = "Module RAM";
 
     static readonly string[] LogModules = ["FEAT_DATALOG", "FEAT_DLSTREAM", "FEAT_DLQD3"];
-    static readonly string[] Protections = ["FEAT_ECTPRO", "FEAT_LEANPRO", "FEAT_BOOSTCUT", "FEAT_STOCK_KNOCK", "FEAT_WARNLAMP"];
+    static readonly string[] Protections = ["FEAT_ECTPRO", "FEAT_LEANPRO", "FEAT_SENSORPRO", "FEAT_BOOSTCUT", "FEAT_STOCK_KNOCK", "FEAT_WARNLAMP"];
     static readonly string[] BoostControl = ["FEAT_EBC", "FEAT_BOOSTMANUAL"];
     static readonly string[] RevLimiters = ["FEAT_REVLIMIT", "FEAT_GEARLIMIT", "FEAT_CEILING"];
 
@@ -90,7 +90,10 @@ public static class SkeletonAdvice
             list.Add(new(AdviceLevel.Info, "Flex fuel: needs an ethanol sensor", "An ethanol content sensor wired to the ECU."));
         if (Has("FEAT_STOCK_DTC") && (Has("FEAT_SHIFTLIGHT") || Has("FEAT_WARNLAMP")))
             list.Add(new(AdviceLevel.Info, "The check-engine lamp is shared", $"{Name(Has("FEAT_SHIFTLIGHT") ? "FEAT_SHIFTLIGHT" : "FEAT_WARNLAMP")} lights the same lamp the trouble codes do: a lit lamp may be either."));
-        if (Has("FEAT_STOCK_DTC") && build?.Ram is { } r2 && r2.Used > 10)
+        bool p13 = sk.Platform.Equals("P13", StringComparison.OrdinalIgnoreCase);
+        if (p13)
+            list.Add(new(AdviceLevel.Warning, "Not tested on a car", "The P13 skeleton and its modules have only been run in the simulator. Simulate this ROM thoroughly, check it on the bench, and treat the first start with extra care."));
+        if (!p13 && Has("FEAT_STOCK_DTC") && build?.Ram is { } r2 && r2.Used > 10)
             list.Add(new(AdviceLevel.Info, "Module RAM beside the stack", $"With the stock trouble codes in, module RAM is {r2.Base:X3}h-{r2.End - 1:X3}h, next to the stack. This has been tested with every module; leaving the trouble codes out moves module RAM well away from it."));
         if (Offers("FEAT_STOCK_SELFTEST") && !Has("FEAT_STOCK_SELFTEST"))
             list.Add(new(AdviceLevel.Info, "No self-tests", "The stock CPU / RAM / clock checks are out: a fault in the ECU itself is only caught by the watchdog."));
@@ -101,9 +104,10 @@ public static class SkeletonAdvice
         return list;
     }
 
-    /// The pins behind the module output numbers (lib.asm mod_output), and what a stock function built back in drives on them.
-    static readonly string?[] OutputPin = [null, "P0.0", "P0.1", "P0.4", "P1.2", "P1.4", "P1.5", "P0.2", "P0.2", "P0.0", "P0.3", "P4.3"];
-    static readonly Dictionary<string, (string Define, string What)> StockOnPin = new()
+    /// The pins behind the module output numbers (lib.asm mod_output), the fixed pins of the modules that do not take an output number, and what a stock function built back in drives on them - one set per skeleton platform.
+    sealed record Pins(string?[] Output, string Lamp, string Alternator, string AcClutch, string BoostSolenoid, Dictionary<string, (string Define, string What)> Stock);
+
+    static readonly Pins P30Pins = new([null, "P0.0", "P0.1", "P0.4", "P1.2", "P1.4", "P1.5", "P0.2", "P0.2", "P0.0", "P0.3", "P4.3"], "P1.4", "P0.2", "P0.0", "P4.3", new()
     {
         ["P0.0"] = ("FEAT_STOCK_AC", "the stock A/C clutch"),
         ["P0.1"] = ("FEAT_STOCK_PURGE", "the stock EVAP purge"),
@@ -111,7 +115,17 @@ public static class SkeletonAdvice
         ["P4.3"] = ("FEAT_STOCK_AT", "the stock A/T lock-up (PWM)"),
         ["P1.2"] = ("FEAT_STOCK_O2HEATER", "the stock O2 heater"),
         ["P1.4"] = ("FEAT_STOCK_DTC", "the stock check-engine lamp"),
-    };
+    });
+
+    /// The P13 (p13-features/lib.asm): the 82C55's ports B and C, and the CPU's P2A.2 for the O2 heater; output 6 (the P30's ECU LED) is not on it.
+    static readonly Pins P13Pins = new([null, "PB.0", "PB.7", "PC.2", "P2A.2", "PC.3", null, "PB.3", "PB.3", "PB.0", "PB.2", "PB.6"], "PC.3", "PB.3", "PB.0", "PB.6", new()
+    {
+        ["PB.0"] = ("FEAT_STOCK_AC", "the stock A/C clutch"),
+        ["PB.7"] = ("FEAT_STOCK_PURGE", "the stock EVAP purge"),
+        ["PC.2"] = ("FEAT_STOCK_AT", "the stock A/T output"),
+        ["P2A.2"] = ("FEAT_STOCK_O2HEATER", "the stock O2 heater"),
+        ["PC.3"] = ("FEAT_STOCK_DTC", "the stock check-engine lamp"),
+    });
 
     /// On a ROM built from a skeleton: two functions, switched on, set to drive the same ECU pin, or a pin a stock function that is built in drives as well. Neither stops the ROM building - the output is a setting - but only one of them gets the pin. Empty for any other ROM.
     public static List<string> OutputClashes(AssemblyResult asm, DefinitionSet defs, Func<ItemDef, double> raw)
@@ -120,13 +134,16 @@ public static class SkeletonAdvice
         if (!asm.Files.Any(f => f.EndsWith("-skeleton.asm", StringComparison.OrdinalIgnoreCase))) return list;
         var built = asm.Symbols.Values.Where(s => s.Kind == SymbolKind.Define && s.Value != 0 && s.Name.StartsWith("FEAT_", StringComparison.OrdinalIgnoreCase))
                        .Select(s => s.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var pins = asm.Symbols.TryGetValue("PLATFORM_P13", out var p13) && p13.Kind == SymbolKind.Define ? P13Pins : P30Pins;
+        var OutputPin = pins.Output;
+        var StockOnPin = pins.Stock;
         double? Read(string slot) { var it = CalPage.Bound(defs, slot); if (it == null) return null; try { return raw(it); } catch { return null; } }
         bool On(string slot) => Read(slot) is double v && v != 0;
         var users = new List<(string Pin, string Who, int Level)>();
         void Use(string enable, string output, string who)
         {
-            if (!On(enable) || Read(output) is not double v || v < 1 || v >= OutputPin.Length) return;
-            users.Add((OutputPin[(int)v]!, who, (int)v));
+            if (!On(enable) || Read(output) is not double v || v < 1 || v >= OutputPin.Length || OutputPin[(int)v] is not { } pin) return;
+            users.Add((pin, who, (int)v));
         }
         for (int n = 1; n <= 4; n++) Use($"gpo{n}.enable", $"gpo{n}.output", $"GIO {n}");
         Use("iab.enable", "iab.output", "IAB");
@@ -135,18 +152,18 @@ public static class SkeletonAdvice
         Use("warnlamp.enable", "warnlamp.output", "Warning lamp");
         Use("wmi.enable", "wmi.output", "Water / methanol pump");
         Use("vtec.alt.enable", "vtec.alt.output", "VTEC alternative output");
-        if (built.Contains("FEAT_SHIFTLIGHT") && On("shiftlight.enable")) users.Add(("P1.4", "Shift light", 5));
-        if (built.Contains("FEAT_SMARTALT") && On("smartalt.enable")) users.Add(("P0.2", "Smart alternator", Read("smartalt.level") is double sl ? (int)sl : 7));
-        // the boost solenoid is P4.3 (pin A17)
-        if (built.Contains("FEAT_EBC") && On("ebc.enable")) users.Add(("P4.3", "Electronic boost control", 11));
-        if (built.Contains("FEAT_BOOSTMANUAL") && On("boostmanual.enable")) users.Add(("P4.3", "Manual boost controller", 11));
-        if (built.Contains("FEAT_ACCUT") && On("ac.cutoff.enable")) users.Add(("P0.0", "A/C load disable", 9));
-        if (built.Contains("FEAT_ANTISTALL") && On("antistall.enable") && Read("antistall.alt") is 7 or 8) users.Add(("P0.2", "Anti-stall (alternator)", (int)Read("antistall.alt")!.Value));
+        if (built.Contains("FEAT_SHIFTLIGHT") && On("shiftlight.enable")) users.Add((pins.Lamp, "Shift light", 5));
+        if (built.Contains("FEAT_SMARTALT") && On("smartalt.enable")) users.Add((pins.Alternator, "Smart alternator", Read("smartalt.level") is double sl ? (int)sl : 7));
+        // the boost solenoid: P4.3 (pin A17) on the P30, the 82C55's spare PB.6 on the P13
+        if (built.Contains("FEAT_EBC") && On("ebc.enable")) users.Add((pins.BoostSolenoid, "Electronic boost control", 11));
+        if (built.Contains("FEAT_BOOSTMANUAL") && On("boostmanual.enable")) users.Add((pins.BoostSolenoid, "Manual boost controller", 11));
+        if (built.Contains("FEAT_ACCUT") && On("ac.cutoff.enable")) users.Add((pins.AcClutch, "A/C load disable", 9));
+        if (built.Contains("FEAT_ANTISTALL") && On("antistall.enable") && Read("antistall.alt") is 7 or 8) users.Add((pins.Alternator, "Anti-stall (alternator)", (int)Read("antistall.alt")!.Value));
         foreach (var g in users.GroupBy(u => u.Pin).Where(g => g.Count() > 1))
         {
             var who = g.Select(u => u.Who).Distinct().ToList();
             // the alternator line: two that both want it at the same level (charging down) agree, they do not fight
-            if (g.Key == "P0.2" && g.Select(u => u.Level).Distinct().Count() == 1) continue;
+            if (g.Key == pins.Alternator && g.Select(u => u.Level).Distinct().Count() == 1) continue;
             // the A/C cut and anti-stall hold the clutch off on purpose; a pair of alternator users both turn charging down
             if (who.Count > 1) list.Add($"{string.Join(" and ", who)} are all set to drive {g.Key}: only one of them gets it.");
         }
@@ -154,7 +171,7 @@ public static class SkeletonAdvice
         {
             var (define, what) = StockOnPin[pin];
             // the A/C cut exists to hold the stock clutch off, and the lamp modules share the check-engine lamp by design
-            if (!built.Contains(define) || (pin == "P0.0" && who == "A/C load disable") || (pin == "P1.4" && who is "Shift light" or "Warning lamp")) continue;
+            if (!built.Contains(define) || (pin == pins.AcClutch && who == "A/C load disable") || (pin == pins.Lamp && who is "Shift light" or "Warning lamp")) continue;
             list.Add($"{who} takes {pin} over from {what} ({define}, built in) while it is on: {what} does not work then.");
         }
         return list;

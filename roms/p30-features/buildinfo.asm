@@ -206,5 +206,19 @@ endif
 if defined(FEAT_DLEXTRA)
                 DB      042h
 endif
+; (043h-045h: these three functions had no number, so Change functions could not see them in a .bin and rebuilt it without them.
+;  A .bin built before they were numbered still does not record them.)
+if defined(FEAT_NITROUS)
+                DB      043h
+endif
+if defined(FEAT_REMOTE)
+                DB      044h
+endif
+if defined(FEAT_TRIGLOG)
+                DB      045h
+endif
+if defined(FEAT_SENSORPRO)
+                DB      046h
+endif
                 DB      000h
 endif

@@ -181,7 +181,7 @@ public static class PluginGuide
             box.Children.Add(new SelectableTextBlock { Text = t.Text, TextWrapping = TextWrapping.Wrap, FontSize = 12, LineHeight = 18, Opacity = 0.9 });
             if (t.Code != null)
             {
-                var code = new SelectableTextBlock { Text = t.Code, FontFamily = MainWindow.MonoFont, FontSize = 11.5, Foreground = DataList.Text };
+                var code = new SelectableTextBlock { Text = t.Code, FontFamily = UiFonts.Mono, FontSize = 11.5, Foreground = DataList.Text };
                 box.Children.Add(new Border
                 {
                     Background = Dark.Back, CornerRadius = new CornerRadius(4), Padding = new Thickness(10, 8), BorderBrush = Panels.CardLine,

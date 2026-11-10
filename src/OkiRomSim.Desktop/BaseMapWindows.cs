@@ -9,12 +9,12 @@ namespace OkiRomSim.Desktop;
 /// Scale for boost: a natural-aspiration ROM given boost columns, with fuel and timing written into them (BaseMapScaler.Boost).
 public sealed class BoostScaleWindow : Window
 {
-    readonly SimHost _host;
+    readonly AppHost _host;
     readonly NumericUpDown _psi = Form.Num(10, 1, 40, 0.5, "0.#"), _cols = Form.Num(4, 1, 17, 1, "0"), _fuel = Form.Num(110, 50, 200, 5, "0"), _retard = Form.Num(0.75, 0, 4, 0.05, "0.##");
     readonly TextBlock _preview = new() { TextWrapping = Avalonia.Media.TextWrapping.Wrap, FontSize = 11.5, Opacity = 0.9, MinHeight = 48 };
     public bool Applied { get; private set; }
 
-    public BoostScaleWindow(SimHost host)
+    public BoostScaleWindow(AppHost host)
     {
         _host = host;
         Title = "Scale for boost";
@@ -76,12 +76,12 @@ public sealed class BoostScaleWindow : Window
 /// Scale for alpha-N: the throttle as the load at wider throttle, MAP below the crossover (BaseMapScaler.AlphaN).
 public sealed class AlphaNScaleWindow : Window
 {
-    readonly SimHost _host;
+    readonly AppHost _host;
     readonly NumericUpDown _map = Form.Num(600, 200, 1000, 10, "0"), _tps = Form.Num(20, 0, 95, 1, "0"), _cols = Form.Num(6, 2, 18, 1, "0");
     readonly TextBlock _preview = new() { TextWrapping = Avalonia.Media.TextWrapping.Wrap, FontSize = 11.5, Opacity = 0.9, MinHeight = 48 };
     public bool Applied { get; private set; }
 
-    public AlphaNScaleWindow(SimHost host)
+    public AlphaNScaleWindow(AppHost host)
     {
         _host = host;
         Title = "Scale for alpha-N";
@@ -96,7 +96,7 @@ public sealed class AlphaNScaleWindow : Window
             "still used below the crossover (idle and light cruise, where it reads well). The load axis is split: its lower columns keep the MAP " +
             "range up to the crossover, the top ones are spread evenly above it, and the throttle table maps the throttle onto them - so each of " +
             "those columns is a throttle position, from the crossover throttle to wide open. The maps are resampled so they start where they were; " +
-            "then tune the throttle columns. Needs the ROM built with Maps indexing (alpha-N): File > Change functions."));
+            $"then tune the throttle columns. Needs the ROM built with Maps indexing (alpha-N): {AboutPage.ChangeFunctions}."));
         page.Children.Add(Form.Group("Crossover",
             Form.Row("MAP below", _map, "mBar", "MAP as now under this", "Under this manifold pressure (and under the throttle crossover) the maps are read on MAP. 500-700 mBar is usual."),
             Form.Row("Throttle above", _tps, "%", "the throttle from here", "At or over this throttle the throttle is the load. 0 % = always alpha-N.")));

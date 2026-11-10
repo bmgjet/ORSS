@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The simulator: the CPU, the bus and its peripherals, the board, the engine model, and what runs a ROM in them (datalog
+       layout detection, interrupt timing). The full program uses it; the tuning-only build (RomSimTuner) does not reference it. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>OkiRomSim.Core</RootNamespace>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OkiRomSim.Assembler\OkiRomSim.Assembler.csproj" />
+    <ProjectReference Include="..\OkiRomSim.Core\OkiRomSim.Core.csproj" />
+    <ProjectReference Include="..\OkiRomSim.Calibration\OkiRomSim.Calibration.csproj" />
+  </ItemGroup>
+
+</Project>

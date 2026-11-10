@@ -51,7 +51,7 @@ endif
 if XP == XP_CODE
 leanpro_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -68,15 +68,15 @@ leanpro_tick:
                 JEQ     leanpro_watch
                 CLRB    A
                 LCB     A, leanpro_map
-                CMPB    0a3h, A
+                CMPB    ENG_MAP, A
                 JLT     leanpro_release
                 SJ      leanpro_do_cut
 leanpro_watch:  CLRB    A
                 LCB     A, leanpro_map         ; under load?
-                CMPB    0a3h, A
+                CMPB    ENG_MAP, A
                 JLT     leanpro_reset
                 LC      A, leanpro_rpm
-                CMP     0ach, A
+                CMP     ENG_RPMP, A
                 JGT     leanpro_reset
                 MOV     X1, #leanpro_input
                 CAL     mod_afr                ; lean?

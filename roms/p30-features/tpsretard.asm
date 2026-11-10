@@ -54,7 +54,7 @@ endif
 if XP == XP_CODE
 tpsr_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -73,10 +73,10 @@ tpsr_aged:      STB     A, r6
                 LB      A, [DP]
                 CMPB    A, #000h
                 JNE     tpsr_seeded
-                LB      A, 0b9h                ; the first reading after power-up: nothing to compare with yet
+                LB      A, ENG_TPS                ; the first reading after power-up: nothing to compare with yet
                 STB     A, [DP]
 tpsr_seeded:    STB     A, r4                  ; the throttle when it last moved
-                LB      A, 0b9h
+                LB      A, ENG_TPS
                 CMPB    A, r4
                 JNE     tpsr_moved
                 MOVB    r4, #000h              ; not moved: no opening to judge
@@ -96,7 +96,7 @@ tpsr_judge:     CLRB    A
                 CMPB    A, #000h
                 JEQ     tpsr_decay_it
                 LC      A, tpsr_rpm
-                CMP     0ach, A                ; period past the point's: below the rpm
+                CMP     ENG_RPMP, A                ; period past the point's: below the rpm
                 JLT     tpsr_decay_it
                 CLRB    A                      ; opening at least rate x the time it took?
                 LCB     A, tpsr_rate

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Getting started — Rom Sim Studio guide</title>
+<link rel="icon" href="../favicon.ico">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<header class="topbar"><button class="menu-btn" aria-label="Contents">☰</button><a class="logo" href="index.html">ROM SIM <b>STUDIO</b></a><span class="sp"></span><span class="links"><a href="../">Website</a> &nbsp;·&nbsp; <a href="../#start">Download</a></span></header>
+<div class="frame"><nav class="side"></nav><main>
+
+<h1>Getting started</h1>
+<p class="lead">Install the program, tell it what you will use it for, and open your first ROM.</p>
+
+<h2>What you need</h2>
+<table>
+  <tr><th>For</th><th>You need</th></tr>
+  <tr><td>The program</td><td>Windows 10 or 11, Linux or macOS. Two CPU cores and 2 GB of RAM is enough: turn on <b>Low performance mode</b> (Settings &gt; General) on an old laptop. If it asks for the .NET 10 runtime, install it from Microsoft.</td></tr>
+  <tr><td>Simulating ROMs</td><td>Nothing else: the ECU and the engine are simulated.</td></tr>
+  <tr><td>Datalogging a car</td><td>A datalog cable on the ECU's CN2 header (a USB serial adapter), and a ROM that streams a datalog (HTS, a skeleton ROM with a datalogging module, and most tuned ROMs do; a stock ROM does not).</td></tr>
+  <tr><td>Changing the tune live</td><td>A ROM emulator: a Moates Ostrich 2.0 or Demon, in the ECU's chip socket.</td></tr>
+  <tr><td>Putting a ROM in the car</td><td>A 27C256 / 29C256 (or a 27C512 / SST27SF512 with the <a href="tools.html#bintool">Bin tool</a>) and a chip programmer — or the emulator.</td></tr>
+</table>
+
+<h2>Install</h2>
+<ol class="steps">
+  <li>Download <span class="path">romsimstudio.zip</span> from the <a href="../#start">website</a> and unzip it anywhere you can write to (not <span class="path">Program Files</span>: the program keeps its templates and updates beside itself).</li>
+  <li>Run <span class="path">RomSimStudio</span>.</li>
+  <li>Later versions arrive through <b>Settings &gt; Updates</b>: it lists what differs from the website, checks each file's SHA-256, and downloads nothing until you ask.</li>
+</ol>
+<p>Only tuning a car? <span class="path">romsimtuner.zip</span> is <b>RomSimTuner</b>: the calibration editor, datalogging and the ROM emulator on their own, without the simulator, the MCP server or plugins. It needs only the .NET 10 runtime, keeps its own settings (the first time, it takes Rom Sim Studio's) and has its own <b>Settings &gt; Updates</b>. Everything in <a href="tuning.html">Tuning</a>, <a href="calibration.html">Calibration</a>, <a href="datalogging.html">Datalogging</a> and <a href="emulator.html">the emulator</a> works the same in it. See <a href="modes.html#romsimtuner">RomSimTuner</a>.</p>
+
+<h2>The first start</h2>
+<figure><img src="img/welcome.png" alt="The welcome window: two cards, ROM development and simulation, and Tuning and datalogging"><figcaption>The first start asks what the program is for. It only picks the view it opens in.</figcaption></figure>
+<ul>
+  <li><b>ROM development and simulation</b> opens the workbench: the source, the simulated chip and engine, the debugger.</li>
+  <li><b>Tuning and datalogging</b> opens Tuner mode: the maps and settings fill the window, with the datalog beside them.</li>
+</ul>
+<p>Both are always there: <b>File &gt; Tuner mode / Simulator mode</b> (<kbd>Ctrl</kbd>+<kbd>T</kbd>) switches at any time, and <b>Settings &gt; General</b> changes where it starts and can bring the question back. See <a href="modes.html">Simulator and Tuner modes</a>.</p>
+
+<h2>Open a ROM</h2>
+<p><b>File &gt; Open</b> (<kbd>Ctrl</kbd>+<kbd>O</kbd>) takes three kinds of file:</p>
+<table>
+  <tr><th>File</th><th>What happens</th></tr>
+  <tr><td><span class="path">.asm</span></td><td>Assembly source. It is built (<kbd>Ctrl</kbd>+<kbd>B</kbd>), loaded into the simulator, and its <code>;@</code> annotations name its maps and settings.</td></tr>
+  <tr><td><span class="path">.bin</span> / <span class="path">.rom</span></td><td>A ROM image. It is disassembled into source you can read and step through, and <b>Detect</b> finds its maps by reading the code (see <a href="calibration.html">Definitions and Detect</a>).</td></tr>
+  <tr><td><span class="path">.zip</span></td><td>A project saved earlier: every source, the machine state, the definitions, the datalog and the views, as they were. See <a href="projects.html">Projects</a>.</td></tr>
+</table>
+<p>Or start a new one with <b>File &gt; New ROM</b>: copy a finished template (HTS120, HTS115 and others), or <a href="new-rom.html">create a ROM from the skeleton</a> with only the functions you want.</p>
+
+<h2>The Templates folder</h2>
+<p>Beside the program, <span class="path">Templates</span> holds what File &gt; New ROM offers: finished ROMs (<span class="path">*.asm</span>), the skeletons (<span class="path">p30-skeleton.asm</span>, <span class="path">p13-skeleton.asm</span>) with their modules, labelled reference ROMs (<span class="path">References</span>) used to recognise an unknown ROM's tables, and the set-up wizard's presets (<span class="path">Presets</span>: stock ECU maps, injectors, gearboxes). A <span class="path">.asm</span> you drop in there is offered too. <b>New ROM &gt; Open templates folder</b> opens it.</p>
+
+<h2>Next</h2>
+<ul>
+  <li>Writing or changing ROMs: <a href="simulator.html">the workbench</a>, then <a href="debugging.html">running and stepping</a>.</li>
+  <li>Building a ROM with the functions you want: <a href="new-rom.html">creating a custom ROM</a>.</li>
+  <li>Tuning a car: <a href="tuning.html">tables and settings</a>, then <a href="datalogging.html">datalogging</a>.</li>
+</ul>
+
+<footer>Rom Sim Studio 0.0.0.8 · by bmgjet · <a href="licence.html">Licence</a></footer>
+</main></div>
+<script src="guide.js"></script>
+</body>
+</html>

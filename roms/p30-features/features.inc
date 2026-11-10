@@ -13,14 +13,46 @@
 
 if XP == XP_DEFS
 ; ---------------------------------------------------------------------------------------------------
+; The ECU's RAM the modules read and write, by name. p13-features holds the same modules for the P13 skeleton, with
+; its own addresses here: a module ported to it keeps the names, so the two copies stay alike.
+; ---- P30 (MSM66207)
+ENG_RPMP        EQU     000ach          ; word: crank period, rpm = 1875000 / period (FFFFh: no reading)
+ENG_RPMPREV     EQU     0036ch          ; word: the reading before it
+ENG_MAP         EQU     000a3h          ; MAP sensor byte
+ENG_LOAD        EQU     000a7h          ; the load byte the fuel and ignition maps are looked up on
+ENG_TPS         EQU     000b9h          ; throttle byte (19h closed, E5h wide open)
+ENG_ECT         EQU     000c1h          ; coolant, thermistor byte
+ENG_IAT         EQU     000c0h          ; intake air, thermistor byte
+ENG_BATT        EQU     000c3h          ; battery byte
+ENG_VSS         EQU     000b4h          ; road speed, km/h
+SVC_TICK        EQU     000feh          ; word: the module tick, +1 every 2.048 ms (timer 1; page 0)
+SVC_FUELCUT     EQU     001f0h          ; byte: fuel-cut request, any bit set = no fuel (page 1)
+SVC_MODLIB      EQU     001f1h          ; lib.asm's 6 bytes, then the datalog service commands' flags (1F7h)
+SVC_BANKT       EQU     0003fh          ; register bank 1F8h-1FFh: scratch for tick modules
+SVC_FUELPW      EQU     00146h          ; word: the final pulse width, before the dead time (XP_FUEL may change it)
+SVC_IGNADV      EQU     002fch          ; byte: ignition advance request, advance-byte units (page 2)
+SVC_IGNRET      EQU     002fdh          ; byte: ignition retard request, advance-byte units (page 2)
+SVC_ADVF        EQU     00246h          ; the final advance, two bytes the spark timer is built from (page 2)
+SVC_BANKF       EQU     0007eh          ; register bank 3F0h-3F7h: scratch for the fuel hook
+MOD_ALOAD       EQU     002f7h          ; the load the maps were looked up on (FEAT_ALPHAN; page 2)
+ICM_PHASE       EQU     002f8h          ; ignition cut modifier: the phase (page 2)
+ICM_LEFT        EQU     002f9h          ; ignition cut modifier: ticks left (page 2)
+MOD_GEAR        EQU     002feh          ; the gear, 0 when not known (FEAT_GEAR; page 2)
+DL_SVC          EQU     002ffh          ; datalog service commands: their state (page 2)
+SVC_OVR         EQU     003dch          ; output overrides: AND / OR masks, P0 then P1 (NEED_OUTPORT)
+OUT_LAMP_MASK   EQU     003deh          ; the check-engine lamp's override masks (P1's)...
+OUT_LAMP        EQU     010h            ; ...its bit (P1.4)...
+OUT_LAMP_COPY   EQU     00022h          ; ...and its latch
+; ---------------------------------------------------------------------------------------------------
 ; RAM. The skeleton and stock P30 never touch these, whichever stock functions are built back in,
 ; so each module owns its bytes outright and any mix of modules is safe.
 ;
 ;   0FBh        rolling idle: events to the next one left out (page zero: direct from any context)
 ;   0FCh        service: spark-cut request, any bit set = no spark (NEED_SPARKCUT); bit 0 is lib.asm's, bit 1 rolling idle's
 ;   0FDh        module flags (page zero, bit-addressable from anywhere): 0 secondary maps on, 2 anti-stall on,
-;               3 rolling idle skips injectors, 4 rolling idle skips sparks, 7 a datalog byte waiting for the
-;               next spark calculation (datalog.asm's byte budget)
+;               3 rolling idle skips injectors, 4 rolling idle skips sparks, 5 nitrous spraying, 6 the crank and
+;               TDC hooks wanted (the trigger pattern log, capturing), 7 a datalog byte waiting for the next
+;               spark calculation (datalog.asm's byte budget)
 ;   0FEh-0FFh   service: tick, +1 every 2.048 ms (read only)
 ;   1F0h        service: fuel-cut request, any bit set = no fuel; bit 0 is lib.asm's
 ;   1F1h-1F6h   lib.asm (NEED_MODLIB): output states, the fuel and spark want words, flags
@@ -178,6 +210,12 @@ SLOT_LEANPRO    EQU     ((TS_LEANPRO & 15) + ((TS_LEANPRO >> 4) & 1) * (15 - 2 *
 undef TICKSLOT_N
 define TICKSLOT_N (TS_LEANPRO + 1)
 endif
+if defined(FEAT_SENSORPRO)
+TS_SENSORPRO    EQU     TICKSLOT_N
+SLOT_SENSORPRO  EQU     ((TS_SENSORPRO & 15) + ((TS_SENSORPRO >> 4) & 1) * (15 - 2 * (TS_SENSORPRO & 15)))
+undef TICKSLOT_N
+define TICKSLOT_N (TS_SENSORPRO + 1)
+endif
 if defined(FEAT_SPEEDLIMIT)
 TS_SPEEDLIMIT   EQU     TICKSLOT_N
 SLOT_SPEEDLIMIT EQU     ((TS_SPEEDLIMIT & 15) + ((TS_SPEEDLIMIT >> 4) & 1) * (15 - 2 * (TS_SPEEDLIMIT & 15)))
@@ -309,7 +347,7 @@ endif
 TICK_MODULES    EQU     TICKSLOT_N
 ; ---------------------------------------------------------------------------------------------------
 ; The datalog's parts share the serial link (datalog.asm, NEED_DATALOG): any of them brings it in
-if defined(FEAT_DATALOG) || defined(FEAT_DLSTREAM) || defined(FEAT_DLQD3) || defined(FEAT_DLSERVICE) || defined(FEAT_DLSERIALIN) || defined(FEAT_DLMEMREAD)
+if defined(FEAT_DATALOG) || defined(FEAT_DLSTREAM) || defined(FEAT_DLQD3) || defined(FEAT_DLSERVICE) || defined(FEAT_DLSERIALIN) || defined(FEAT_DLMEMREAD) || defined(FEAT_TRIGLOG)
 ifndef NEED_DATALOG
 define NEED_DATALOG
 endif
@@ -332,6 +370,7 @@ include "dlstream.asm"
 include "dlqd3.asm"
 include "dlserialin.asm"
 include "dlmemread.asm"
+include "triglog.asm"
 include "dlextra.asm"
 include "revlimit.asm"
 include "launch.asm"
@@ -353,6 +392,7 @@ include "gio2.asm"
 include "gio3.asm"
 include "gio4.asm"
 include "leanpro.asm"
+include "sensorpro.asm"
 include "wbcl.asm"
 include "flexfuel.asm"
 include "fueltrim.asm"

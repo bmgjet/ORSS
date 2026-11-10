@@ -101,6 +101,11 @@ public static partial class MapImport
                                Scaling scaling = Scaling.Breakpoints)
     {
         if (!Compatible(from, to)) return new(false, "not the same shape of thing (a map, a table, a single value)", false, 0, 0);
+        // the values have to mean the same thing: a Honda base fuel map (honda_fuel) is not the P13's fuel map, an
+        // enrichment over a base fuel it works out elsewhere (80h = 100 %) - carried across, every cell would be wrong
+        string fk = ValueKind(fromDefs, from), tk = ValueKind(toDefs, to);
+        if ((fk == "honda_fuel") != (tk == "honda_fuel"))
+            return new(false, $"the values mean different things ({Says(fk)} there, {Says(tk)} here): not carried across", false, 0, 0);
         var before = (byte[])work.Clone();
         var src = RomData.Read(fromDefs, fromRom, from).Select(c => c.Value).ToArray();
         int fr = Math.Max(1, from.Rows), fc = from.IsTable ? from.Cols : 1, tr = Math.Max(1, to.Rows), tc = to.IsTable ? to.Cols : 1;
@@ -263,6 +268,11 @@ public static partial class MapImport
         }
         return clamped;
     }
+
+    /// What a table's values are: a Honda base fuel map, or the unit its formula gives (empty when it has none).
+    static string ValueKind(DefinitionSet d, ItemDef i) =>
+        i.Formula == "honda_fuel" ? "honda_fuel" : SafeUnit(d, i.Formula).Trim().ToLowerInvariant();
+    static string Says(string kind) => kind switch { "honda_fuel" => "a base fuel map", "%" => "a percentage (an enrichment)", "" => "plain counts", _ => kind };
 
     static string SafeUnit(DefinitionSet d, string? formula)
     {

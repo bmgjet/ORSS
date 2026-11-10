@@ -46,7 +46,7 @@ endif
 if XP == XP_CODE
 burnout_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -59,7 +59,7 @@ burnout_tick:
                 JEQ     burnout_decide
                 CLRB    A
                 LCB     A, burnout_speed
-                CMPB    0b4h, A                ; speed - limit borrows (C set) while below it
+                CMPB    ENG_VSS, A                ; speed - limit borrows (C set) while below it
 burnout_decide: MOV     X1, #burnout_block
                 L       A, #MB_BURNOUT
                 CAL     mod_limit

@@ -19,7 +19,8 @@
 ; Added: module hooks at 7F00h, module requests (fuel cut, ignition retard), a 2.048 ms tick, an info
 ;   block at 7FE0h and a checksum byte at 7FFFh. Free for modules: skel_free_start-7EFFh.
 ;
-; Not bench-tested on a car. Treat it like any new ROM: emulator and wideband first.
+; ROMs built from it have run on a car (October 2026, up to 26 modules together); not every module has been
+; tried on one. Treat it like any new ROM: emulator and wideband first.
 ;
 ; Putting stock functions back
 ;   Everything the skeleton removed is still in this file, as the stock P30 code in "if" blocks that
@@ -60,6 +61,8 @@ XP_CAL          EQU     8       ; calibration tables (after the stock ones)
 XP_CODE         EQU     9       ; module code, at the start of the free space
 XP_SPARK        EQU     10      ; every timer-3 (spark) interrupt: crank-synchronous (interrupt, bank page 0)
 XP_TICKSLOT     EQU     11      ; the modules on this tick's slot (tickslots.inc builds a list per slot of 16)
+XP_CKP          EQU     12      ; a crank (CKP) tooth, while 0FDh bit 6 asks for it: timer 2 interrupt, interrupts off;
+                                ; A (byte): bit 7 a TDC pulse came with this tooth, bit 6 the cylinder (CYP) one; DP free
 ; the fuel, ignition and VE maps: load columns (FEAT_EXTMAPS widens them to 20, the stock ROM has 10)
 if defined(FEAT_EXTMAPS)
 MAP_COLS        EQU     20
@@ -9868,6 +9871,9 @@ injenable_p2_update:     LB      A, off(001b7h)
 if defined(NEED_INJSKIP)
                 CAL     mod_injskip            ; (skeleton) module hook: A, the injectors to open (0 = open), may be set to FFh (none)
 endif
+if defined(NEED_INJCUT)
+                CAL     mod_injcut             ; (skeleton) module hook: the same, after it (the cylinder test: one injector kept shut)
+endif
                 JBS     off(0011ch).5, skel_inj_cut    ; (skeleton) a fuel cut (the rev limiter's flag, which every cut sets) or a
                 CMPB    off(001f0h), #000h     ; module's cut request: no injector opens at all. The stock code only stops
                 JEQ     skel_inj_open          ; adding to the open mask, so an injector already in it went on firing now
@@ -12529,10 +12535,32 @@ crank_pswl4_store_cmp_acc:     CMPB    A, r0
                 J       crank_pswl4_store_if_ram117_bit0_clr
 crank_pswl4_store_goto_4d5c:     J       crank_mul_alt_mulb_acc
 timer2_irq_clear_orb_off_irq:     ORB     off(IRQ), #008h
+if defined(NEED_CRANKHOOK)
+                MB      C, 0fdh.6              ; (skeleton) a module wants the crank tooth (XP_CKP): one bit test a
+                JLT     timer2_ckp_hook        ; tooth otherwise
+endif
                 RB      TRNSIT.0
                 JEQ     timer2_irq_clear_return
                 SB      09fh.2
 timer2_irq_clear_return:     RTI
+if defined(NEED_CRANKHOOK)
+timer2_ckp_hook:     L       A, DP
+                PUSHS   A
+                RB      TRNSIT.0               ; the CYP latch, read and cleared as above
+                JEQ     timer2_ckp_nocyp
+                SB      09fh.2
+                LB      A, #040h
+                SJ      timer2_ckp_go
+timer2_ckp_nocyp:     CLRB    A
+timer2_ckp_go:  MB      C, IRQH.7              ; TDC: INT1's flag (its interrupt is never enabled: the crank task
+                MB      ACC.7, C               ; reads and clears the flag, just after this tooth)
+undef XP
+define XP XP_CKP
+include "p30-features/features.inc"
+                POPS    A
+                MOV     DP, A
+                RTI
+endif
 ; writes into the diagnostic-snapshot RAM area (0x3AC/0x3D4, adjacent to
 ; cfgvariant_snapshot_capture's own 0x340 block), gated by off(120h).2 and off(122h).1, and
 ; hands off to fuelmap_do_lookup_b35. A second stage of the diagnostic/serial report

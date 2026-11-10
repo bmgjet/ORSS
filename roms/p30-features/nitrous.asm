@@ -62,7 +62,7 @@ endif
 if XP == XP_CODE
 ; ------------------------------------------------------------------ the slot: armed, open throttle, inside the window
 nos_tick:       PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -78,14 +78,14 @@ nos_tick:       PUSHS   LRB
                 JEQ     nos_off
                 CLRB    A
                 LCB     A, nos_tps
-                CMPB    0b9h, A                ; throttle - the point: borrows while under it
+                CMPB    ENG_TPS, A                ; throttle - the point: borrows while under it
                 JLT     nos_off
                 CLR     A
                 LC      A, nos_rpm_min
-                CMP     0ach, A                ; the period past the minimum's: under the rpm
+                CMP     ENG_RPMP, A                ; the period past the minimum's: under the rpm
                 JGT     nos_off
                 LC      A, nos_rpm_max
-                CMP     0ach, A                ; the period short of the maximum's: over the rpm
+                CMP     ENG_RPMP, A                ; the period short of the maximum's: over the rpm
                 JLT     nos_off
                 CLRB    A                      ; the shot factor
                 LCB     A, nos_shot_in

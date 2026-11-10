@@ -11,12 +11,12 @@ namespace OkiRomSim.Desktop;
 /// Scaling a whole section at once: this table by a percentage, every fuel table for a different injector size, the load axis for a different MAP sensor, and the rescale that gives a fuel map that has run to the top of its scale room to grow again (each column's multiplier is raised and its cells divided to match, so the ECU delivers exactly what it did before). Nothing is written until Apply: the preview line says what would change first, and the whole scaling lands as a single undo step.
 public sealed class ScaleWindow : Window
 {
-    readonly SimHost _host;
+    readonly AppHost _host;
     readonly ItemDef? _item;
     readonly TextBlock _preview = new() { TextWrapping = TextWrapping.Wrap, FontSize = 11.5, Opacity = 0.9, MinHeight = 46, Margin = new Thickness(0, 6) };
     public bool Applied { get; private set; }
 
-    public ScaleWindow(SimHost host, ItemDef? item)
+    public ScaleWindow(AppHost host, ItemDef? item)
     {
         _host = host;
         _item = item;
@@ -69,7 +69,7 @@ public sealed class ScaleWindow : Window
         var n = new NumericUpDown
         {
             Value = (decimal)value, Minimum = (decimal)min, Maximum = (decimal)max, Increment = (decimal)step,
-            Width = 130, FormatString = "0.###", FontFamily = MainWindow.MonoFont,
+            Width = 130, FormatString = "0.###", FontFamily = UiFonts.Mono,
         };
         n.ValueChanged += (_, _) => Preview();
         ToolTip.SetTip(n, tip);

@@ -164,6 +164,7 @@ public sealed class OkiAssembler
     readonly Dictionary<string, Src> _files = new(StringComparer.Ordinal);
     AssemblyResult _res = null!;
     bool _final;
+    bool _equForward;
     long _pc;
     int _romSize;
     bool _overflowReported;
@@ -195,6 +196,10 @@ public sealed class OkiAssembler
         _res = new AssemblyResult { Image = new byte[_romSize], Used = new bool[_romSize] };
         Array.Fill(_res.Image, _opt.FillByte);
         if (rootText != null) _files[root] = new Src { Path = root, Lines = SplitLines(rootText) };
+        // An EQU whose value names a label further on gets 0 in pass 1, and a use of the EQU above it would keep that 0
+        // in pass 2: such a file gets one more pass first, so every EQU has its value before the final pass.
+        _equForward = false;
+        bool extraPassDone = false;
         for (int pass = 1; pass <= 2; pass++)
         {
             _overflowReported = false;
@@ -224,6 +229,7 @@ public sealed class OkiAssembler
             if (_moduleStack.Count > 0) Report(Severity.Error, root, 0, 0, $"module '{_module}' not closed with endmodule");
             if (_final) ReportOverlaps();
             if (_res.Diagnostics.Any(d => d.Severity == Severity.Error) && !_final) break;
+            if (pass == 1 && _equForward && !extraPassDone) { extraPassDone = true; pass = 0; }
         }
         // "checksum": the byte that makes the 8-bit sum of the whole image 0, filled in once everything else is final
         if (_checksumAt >= 0 && !_res.Diagnostics.Any(d => d.Severity == Severity.Error))
@@ -351,7 +357,8 @@ public sealed class OkiAssembler
             int q = p + 2;
             var e = ExprParser.Parse(toks, ref q, extended: true);
             ExpectEnd(toks, q);
-            long v = Eval(e, src.Path, line, out _);
+            long v = Eval(e, src.Path, line, out bool equUndefined);
+            if (equUndefined && !_final) _equForward = true;
             if (_symInfo.TryGetValue(t.Text, out var old) && old.Kind is SymbolKind.Label && _definedThisPass.Contains(t.Text))
                 Report(Severity.Error, src.Path, line, t.Col, $"'{t.Text}' already defined as a label ({old.File}:{old.Line})");
             SetSym(t.Text, v, SymbolKind.Equate, src.Path, line);
@@ -558,6 +565,8 @@ public sealed class OkiAssembler
                 {
                     long n = Eval(ExprParser.Parse(toks, ref q, true), src.Path, line, out _);
                     if (n <= 0) throw new AsmException("align must be positive");
+                    // past the 64 KB address space there is nothing to line up with: a huge value tried to make that many bytes of padding
+                    if (n > 0x10000) throw new AsmException($"align {n} is larger than the address space (10000h)");
                     long pad = (n - (_pc % n)) % n;
                     var b = new byte[pad]; Array.Fill(b, _opt.FillByte);
                     Emit(b, src.Path, line);

@@ -31,8 +31,17 @@ public static class DefinitionBuilder
         }
         foreach (var a in merged)
         {
-            var item = Parse(a.Text, defs, a.Address);
-            if (item == null) continue;
+            ItemDef? item;
+            // one bad annotation is that one definition lost (and said so, with where it is), not every definition of the ROM: a number
+            // that would not parse used to throw out of here, and the Calibration page could show nothing at all
+            try { item = Parse(a.Text, defs, a.Address); }
+            catch (Exception ex) { OkiRomSim.Core.AppLog.Warn("definitions", $"{Path.GetFileName(a.File)}:{a.Line}: annotation skipped - {ex.Message}"); continue; }
+            if (item == null)
+            {
+                if (UnresolvedAt(a.Text, defs) is { } missing)
+                    OkiRomSim.Core.AppLog.Warn("definitions", $"{Path.GetFileName(a.File)}:{a.Line}: at={missing} is not a label or address here - the definition is left out");
+                continue;
+            }
             item.Origin = $"{Path.GetFileName(a.File)}:{a.Line}";
             // the factory setting is what the source says it is
             if (item.Default == null && item.Count <= 512)
@@ -43,7 +52,9 @@ public static class DefinitionBuilder
         }
         defs.Items.Sort((x, y) => x.Address.CompareTo(y.Address));
         IndexAxes(defs);
-        // the pressures in the scale of the MAP sensor the ROM says is fitted
+        // a P13 build: its own MAP sensor and load byte...
+        MapSensorScale.ApplyP13(defs);
+        // ...and the pressures in the scale of the MAP sensor the ROM says is fitted
         MapSensorScale.ApplyFormulas(defs, asm.Image);
         return defs;
     }
@@ -89,7 +100,13 @@ public static class DefinitionBuilder
             Get(keys) is { } s && double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var v) ? v : null;
 
         if (Get("name") is { } n) item.Name = n;
-        if (Get("at", "address", "addr") is { } at && defs.TryResolve(at, out var resolved)) item.Address = resolved;
+        if (Get("at", "address", "addr") is { } at)
+        {
+            // an at= that names nothing here (a typo, a label renamed) is no definition at all: left at the comment's own address it named
+            // whatever bytes happened to sit there, and writing the setting wrote over them
+            if (!defs.TryResolve(at, out var resolved)) return null;
+            item.Address = resolved;
+        }
         item.Description = Get("desc", "description") ?? "";
         item.Category = Get("category", "cat") ?? "General";
         item.Formula = Get("formula", "scale", "conv");
@@ -100,8 +117,9 @@ public static class DefinitionBuilder
         item.Max = GetDouble("max");
         item.Rows = GetInt("rows") ?? 0;
         item.Cols = GetInt("cols") ?? 0;
-        if (Get("size") is { } size && Regex.Match(size, @"^(\d+)x(\d+)$") is { Success: true } sm)
-        { item.Rows = int.Parse(sm.Groups[1].Value); item.Cols = int.Parse(sm.Groups[2].Value); }
+        if (Get("size") is { } size && Regex.Match(size, @"^(\d+)x(\d+)$") is { Success: true } sm
+            && int.TryParse(sm.Groups[1].Value, out var sr) && int.TryParse(sm.Groups[2].Value, out var sc))
+        { item.Rows = sr; item.Cols = sc; }
         if (Get("count", "length", "len") is { } cnt && int.TryParse(cnt, out var c1))
         { item.Rows = 1; item.Cols = c1; }
         if (item.Rows > 0 && item.Cols == 0) item.Cols = 1;
@@ -305,8 +323,22 @@ public static class DefinitionBuilder
         if (axisRef != null && defs.TryResolve(axisRef, out var a)) axis.Address = a;
         if (Get("type") is { } t && ParseType(t, out _) is { } ct) axis.Type = ct;
         if (values != null)
-            axis.Values = [.. values.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries).Select(x => double.Parse(x, CultureInfo.InvariantCulture))];
+            axis.Values = [.. values.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(x => double.TryParse(x.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v
+                             : throw new FormatException($"axis value '{x.Trim()}' is not a number"))];
         return axis;
+    }
+
+    /// The at= of an annotation when it resolves to nothing here (for the warning), else null.
+    static string? UnresolvedAt(string text, DefinitionSet defs)
+    {
+        foreach (Match m in KeyValue.Matches(text))
+            if (m.Groups[1].Value is var k && (k.Equals("at", StringComparison.OrdinalIgnoreCase) || k.Equals("address", StringComparison.OrdinalIgnoreCase) || k.Equals("addr", StringComparison.OrdinalIgnoreCase)))
+            {
+                var at = m.Groups[2].Value.Trim('"');
+                return defs.TryResolve(at, out _) ? null : at;
+            }
+        return null;
     }
 }
 

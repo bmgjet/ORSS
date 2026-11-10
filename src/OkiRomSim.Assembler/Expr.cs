@@ -56,8 +56,8 @@ sealed class BinExpr(string op, Expr a, Expr b) : Expr
             case "+": return xi + yi;
             case "-": return xi - yi;
             case "*": return xi * yi;
-            case "/": if (yi == 0) throw new AsmException("division by zero"); return xi / yi;
-            case "%": if (yi == 0) throw new AsmException("division by zero"); return xi % yi;
+            case "/": if (yi == 0) throw new AsmException("division by zero"); return yi == -1 ? unchecked(-xi) : xi / yi;   // (-2^31 / -1 wraps, as everything here does, rather than throwing out of the assembler)
+            case "%": if (yi == 0) throw new AsmException("division by zero"); return yi == -1 ? 0 : xi % yi;
             case "&": return xi & yi;
             case "|": return xi | yi;
             case "^": return xi ^ yi;

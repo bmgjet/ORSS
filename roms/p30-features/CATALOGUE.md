@@ -4,8 +4,6 @@ Every function found in the ROMs in `roms/`, and where each one stands for the s
 Create lists every module and stock function marked below. Pick only what the car needs: there are more
 functions than 32 KB holds.
 
-Sources: HTS120 (the main source) and HTS115, CromeGold, custom1, custom2, P13, and stock P30 / P08.
-
 Status:
 - **Module**: a feature module in this folder, tested in the simulator by `tools/skeleton/SkeletonTest`.
 - **Stock**: stock P30 code that the skeleton can put back (`FEAT_STOCK_...`).
@@ -35,6 +33,8 @@ Status:
 | Anti-start (unlocked by any switch input, or inverted, with the throttle) | HTS120, custom2 | Module | `FEAT_ANTISTART` |
 | Coolant temperature protection | HTS120 | Module | `FEAT_ECTPRO` |
 | Lean protection (wideband on an analog input) | HTS115/120, custom2 | Module | `FEAT_LEANPRO` |
+| Sensor protection: oil or fuel pressure, any sender on an analog input | new | Module | `FEAT_SENSORPRO` |
+| Warm-up rev limit (a lower limit while the coolant is cold) | new | Module | `FEAT_ECTPRO` (its page) |
 | Boost cut, hot and cold | HTS120 | Module | `FEAT_BOOSTCUT` |
 | Warning lamp (coolant, battery) | new | Module | `FEAT_WARNLAMP` |
 | Knock retard | P30, CromeGold | Stock | `FEAT_STOCK_KNOCK` |
@@ -50,6 +50,7 @@ Status:
 | --- | --- | --- | --- |
 | Electronic boost control (P4.3, base duty and target against rpm) | HTS120, custom2 | Module | `FEAT_EBC` |
 | Manual boost controller (one duty) | HTS120 | Module | `FEAT_BOOSTMANUAL` |
+| Boost by gear: the most solenoid duty in each gear | new | Module | `FEAT_EBC` with `FEAT_GEAR` |
 
 ## Fuel
 
@@ -128,9 +129,10 @@ Status:
 | Datalogging core: the serial link at 38400 (or 62,500, DatalogFast) and the HTS 10h/20h frame, C0h+n, 40h packet (stored codes in bytes 12-15) | HTS120, p30-features | Module | `FEAT_DATALOG` |
 | Datalogging: channel stream (version 4: any of 53 channels, fast ones in every frame and slow ones in turn, one a frame; words read in one go; picked in Datalog > Channels…; the 70h/73h lists of versions 1-3 still answered) | p30-features | Module | `FEAT_DLSTREAM` |
 | Datalogging: QD3 frame (ABh -> BCh, 46h -> 40 bytes and a checksum) | p30-features | Module | `FEAT_DLQD3` |
-| Datalogging: service commands: clear the codes (50h), injectors off, timing locked for a timing light, maps chosen, GIO 1-4 forced on; the check-engine lamp flashes quickly while injectors are off or timing is locked. Datalogging > Codes and service… | p30-features | Module | `FEAT_DLSERVICE` |
+| Datalogging: service commands: clear the codes (50h), injectors off, timing locked for a timing light, maps chosen, GIO 1-4 forced on, the cylinder test (63h-67h: one injector cut at a time); the check-engine lamp flashes quickly while any is on. Datalogging > Codes and service… | p30-features | Module | `FEAT_DLSERVICE` |
 | Datalogging: serial inputs: FFh, input (00h-FDh), value (00h-FEh) over the datalog cable, no answer, a running stream goes on; eight kept, read by closed loop, lean protection and flex fuel as inputs 4-11; defaults when none come | p30-features | Module | `FEAT_DLSERIALIN` |
 | Datalogging: memory read: 60h, address, checksum -> 32 bytes of RAM (80h-47Fh, never the ROM). Datalogging > Codes and service… > ECU memory | p30-features | Module | `FEAT_DLMEMREAD` |
+| Trigger pattern log: 61h captures one cam revolution of the crank (CKP), TDC and cylinder (CYP) signals, 62h sends it: 24 teeth, their times, the pulses with each. Datalogging > Trigger pattern… | p30-features | Module | `FEAT_TRIGLOG` |
 | Datalogging: every channel (corrections, limiters, flags, your own RAM addresses) | new | Module | `FEAT_DLEXTRA` |
 | Stock Honda tester link (diagnostic connector) | P30 | Stock | `FEAT_STOCK_SERIAL` |
 | ROM checksum | P30 | Skeleton | Set by the assembler; kept right by the app on every edit and save. |

@@ -77,6 +77,8 @@ public static class ProjectFile
         {
             if (File.Exists(temp)) File.Delete(temp);
             WriteZip(temp, p);
+            // through to the disk before it replaces the project that was there (see SafeFile)
+            OkiRomSim.Core.SafeFile.FlushToDisk(temp);
             File.Move(temp, path, overwrite: true);
         }
         catch

@@ -150,7 +150,9 @@ public sealed class BinToolWindow : Window
             if (data.Length != Half * 2) { _status.Text = $"{System.IO.Path.GetFileName(path)} is {data.Length:N0} bytes, not 65,536."; return; }
             var dir = System.IO.Path.GetDirectoryName(path)!;
             var name = System.IO.Path.GetFileNameWithoutExtension(path);
-            string lowPath = System.IO.Path.Combine(dir, name + "_low.bin"), highPath = System.IO.Path.Combine(dir, name + "_high.bin");
+            // halves written out before (and perhaps tuned since) are never replaced: a half that differs gets a name of its own
+            string lowPath = AppPaths.Unclobbered(System.IO.Path.Combine(dir, name + "_low.bin"), data[..Half]);
+            string highPath = AppPaths.Unclobbered(System.IO.Path.Combine(dir, name + "_high.bin"), data[Half..]);
             OkiRomSim.Core.SafeFile.WriteAllBytes(lowPath, data[..Half]);
             OkiRomSim.Core.SafeFile.WriteAllBytes(highPath, data[Half..]);
             bool lowBlank = data[..Half].All(b => b == 0xFF) || data[..Half].All(b => b == 0);

@@ -43,7 +43,8 @@ public sealed class DemonOnboard(IByteLink link)
         while (got < answer && sw.ElapsedMilliseconds < limit)
         {
             int n = link.Read(buf, got, answer - got, Math.Max(1, limit - (int)sw.ElapsedMilliseconds));
-            if (n <= 0) continue;
+            // nothing: the wait ran out, or the port failed (a cable pulled answers 0 at once) - a short sleep, not a spin, until the limit
+            if (n <= 0) { if (sw.ElapsedMilliseconds < limit) Thread.Sleep(5); continue; }
             got += n;
         }
         var data = buf[..got];

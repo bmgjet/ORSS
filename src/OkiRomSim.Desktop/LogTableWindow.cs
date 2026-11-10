@@ -11,7 +11,7 @@ namespace OkiRomSim.Desktop;
 /// The O2 / lambda and knock tables: what the log measured in every cell of a map, how far that is from the target, and the change that closes the gap. The channel can be a wideband's AFR or lambda, the ECU's own O2 voltage, or any analog input scaled between two voltages, so whatever is wired in reads in the right units here. "Compare to target" fills the difference column; "Apply offset changes" writes the corrections to the map as one undo step (fuel by proportion, ignition by degrees pulled where it knocked).
 public sealed class LogTableWindow : Window
 {
-    readonly SimHost _host;
+    readonly AppHost _host;
     readonly Func<IReadOnlyList<LogFrame>> _frames;
     // searchable: type any part of a name ("fuel", "ign", "afr") and pick from what matches
     readonly AutoCompleteBox _table = Search(240, "type part of a table name");
@@ -51,7 +51,7 @@ public sealed class LogTableWindow : Window
     static NumericUpDown Num(double v, double min, double max, double step) => new()
     {
         Value = (decimal)v, Minimum = (decimal)min, Maximum = (decimal)max, Increment = (decimal)step,
-        Width = 110, FormatString = "0.###", FontFamily = MainWindow.MonoFont,
+        Width = 110, FormatString = "0.###", FontFamily = UiFonts.Mono,
     };
 
     /// The AFR you want, per cam, and what the wideband really means (Settings > Targets).
@@ -59,7 +59,7 @@ public sealed class LogTableWindow : Window
     public TargetMap? TargetHigh { get; init; }
     public LookupCurve? Correction { get; init; }
 
-    public LogTableWindow(SimHost host, Func<IReadOnlyList<LogFrame>> frames, ItemDef? preferred)
+    public LogTableWindow(AppHost host, Func<IReadOnlyList<LogFrame>> frames, ItemDef? preferred)
     {
         _host = host; _frames = frames;
         Title = "O2 / knock tables";

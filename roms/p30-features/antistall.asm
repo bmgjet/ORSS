@@ -63,7 +63,7 @@ endif
 if XP == XP_CODE
 antistall_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -76,19 +76,19 @@ antistall_tick:
                 JEQ     antistall_off
                 CLR     A
                 LC      A, antistall_running
-                CMP     0ach, A                ; not running (period past the point's): off
+                CMP     ENG_RPMP, A                ; not running (period past the point's): off
                 JGT     antistall_off
                 MB      C, 0fdh.2
                 JLT     antistall_active
                 CLR     A
                 LC      A, antistall_rpm       ; engage below the rpm
-                CMP     0ach, A
+                CMP     ENG_RPMP, A
                 JLE     antistall_quiet
                 SJ      antistall_on
 antistall_active:
                 CLR     A
                 LC      A, antistall_recover   ; still low (period past the recover point's): stay on
-                CMP     0ach, A
+                CMP     ENG_RPMP, A
                 JGT     antistall_on
                 MOV     DP, #antistall_timer   ; recovered: off once the hold runs out
                 CLRB    A

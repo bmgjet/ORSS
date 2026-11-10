@@ -17,7 +17,7 @@ namespace OkiRomSim.Desktop;
 public sealed class ServiceWindow : Window
 {
     readonly DatalogEngine _engine;
-    readonly SimHost _host;
+    readonly AppHost _host;
     readonly Ellipse _lamp = new() { Width = 46, Height = 46, StrokeThickness = 2, Stroke = Brushes.DimGray };
     readonly TextBlock _lampText = new() { FontSize = 15, FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
     readonly StackPanel _codes = new() { Spacing = 2 };
@@ -26,6 +26,10 @@ public sealed class ServiceWindow : Window
     readonly ToggleButton _inj = Big("Injectors off"), _lock = Big("Lock timing");
     readonly ToggleButton[] _maps = [Big("Maps: by switch"), Big("First maps"), Big("Second maps")];
     readonly ToggleButton[] _gio = [Big("GIO 1"), Big("GIO 2"), Big("GIO 3"), Big("GIO 4")];
+    readonly ToggleButton[] _cyl = [Big("Cut cylinder 1"), Big("Cut cylinder 2"), Big("Cut cylinder 3"), Big("Cut cylinder 4")];
+    readonly ToggleButton _cylAll = Big("All cylinders firing");
+    /// The cylinder cut now (0 none): the ECU does not report it, so it is what was last taken here (a key cycle puts it back to 0).
+    int _cut;
     readonly Button _clear = Plain("Clear codes"), _allOff = Plain("All back to normal");
     readonly Control _serviceBox;
     readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(130) };
@@ -65,7 +69,7 @@ public sealed class ServiceWindow : Window
         return g;
     }
 
-    public ServiceWindow(DatalogEngine engine, SimHost host)
+    public ServiceWindow(DatalogEngine engine, AppHost host)
     {
         _engine = engine; _host = host;
         Title = "Codes and service";
@@ -103,7 +107,16 @@ public sealed class ServiceWindow : Window
             _gio[i].Click += async (_, _) => await Send(cmd, $"GIO {n}");
             ToolTip.SetTip(_gio[i], $"Force GIO {n}'s output on, whatever its conditions ({cmd:X2}h); again for its own conditions. The GIO must be on, with an output chosen.");
         }
-        ToolTip.SetTip(_allOff, "Injectors on, timing normal, maps by their switch, every GIO back to its own conditions (5Eh).");
+        for (int i = 0; i < _cyl.Length; i++)
+        {
+            int n = i + 1;
+            _cyl[i].Click += async (_, _) => await Cylinder(_cut == n ? 0 : n);
+            ToolTip.SetTip(_cyl[i], $"Cut cylinder {n}'s injector ({TroubleCodes.CylinderCut1 + i:X2}h); the others keep firing. One at a time: the one cut before comes back. " +
+                "On an engine that runs on three, cut each in turn - the one whose cut changes nothing (no rpm drop, no worse) is the cylinder not firing. Again to put it back.");
+        }
+        _cylAll.Click += async (_, _) => await Cylinder(0);
+        ToolTip.SetTip(_cylAll, "Every injector firing again (63h).");
+        ToolTip.SetTip(_allOff, "Injectors on, timing normal, maps by their switch, every GIO back to its own conditions, every cylinder firing (5Eh).");
         _allOff.Click += async (_, _) => await Send(TroubleCodes.AllNormal, "all back to normal");
 
         var lampRow = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };   // the text wraps in what is left
@@ -117,8 +130,17 @@ public sealed class ServiceWindow : Window
         service.Children.Add(Row(_inj, _lock));
         service.Children.Add(Row(_maps));
         service.Children.Add(Row(_gio));
+        service.Children.Add(new TextBlock { Text = "CYLINDER TEST", FontWeight = FontWeight.Bold, FontSize = 12, Opacity = 0.8, Margin = new Thickness(0, 8, 0, 0) });
+        service.Children.Add(new TextBlock
+        {
+            Text = "Running on three? Cut one cylinder's injector at a time and listen: the cylinder whose cut makes no difference is the one not firing " +
+                   "(then its injector, plug, lead or compression). One at a time; the lamp flashes while one is cut.",
+            TextWrapping = TextWrapping.Wrap, FontSize = 11.5, Opacity = 0.75, Margin = new Thickness(0, 0, 0, 2),
+        });
+        service.Children.Add(Row(_cyl));
         Grid.SetColumnSpan(_allOff, 2);
-        service.Children.Add(Row(_allOff));
+        Grid.SetColumnSpan(_cylAll, 2);
+        service.Children.Add(Row(_allOff, _cylAll));
         service.Children.Add(_serviceNote);
         _serviceBox = service;
 
@@ -469,9 +491,9 @@ public sealed class ServiceWindow : Window
     }
 
     // ---------------------------------------------------------------- ECU memory (the memory read module)
-    readonly TextBox _memAddr = new() { Text = "3F8", Width = 70, FontFamily = MainWindow.MonoFont, FontSize = 13, VerticalContentAlignment = VerticalAlignment.Center };
+    readonly TextBox _memAddr = new() { Text = "3F8", Width = 70, FontFamily = UiFonts.Mono, FontSize = 13, VerticalContentAlignment = VerticalAlignment.Center };
     readonly ToggleButton _memWatch = new() { Content = "Watch", MinHeight = 34, MinWidth = 80, FontSize = 13, HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center };
-    readonly TextBlock _memDump = new() { FontFamily = MainWindow.MonoFont, FontSize = 12.5, TextWrapping = TextWrapping.NoWrap };
+    readonly TextBlock _memDump = new() { FontFamily = UiFonts.Mono, FontSize = 12.5, TextWrapping = TextWrapping.NoWrap };
     readonly DispatcherTimer _memTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
     byte[]? _memLast;
     int _memLastAt = -1;
@@ -574,7 +596,7 @@ public sealed class ServiceWindow : Window
             foreach (var c in codes)
             {
                 var g = new Grid { ColumnDefinitions = new ColumnDefinitions("56,*") };
-                g.Children.Add(new TextBlock { Text = c.ToString(), FontFamily = MainWindow.MonoFont, FontSize = 18, FontWeight = FontWeight.Bold });
+                g.Children.Add(new TextBlock { Text = c.ToString(), FontFamily = UiFonts.Mono, FontSize = 18, FontWeight = FontWeight.Bold });
                 var d = new TextBlock { Text = TroubleCodes.Describe(c), FontSize = 14, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
                 Grid.SetColumn(d, 1); g.Children.Add(d);
                 _codes.Children.Add(g);
@@ -583,7 +605,7 @@ public sealed class ServiceWindow : Window
         bool connected = _engine.Running && _engine.Protocol != null;
         _clear.IsEnabled = connected && !_busy;
         bool allowed = ServiceAllowed(out var why);
-        foreach (var b in new Control[] { _inj, _lock, _allOff }.Concat(_maps).Concat(_gio)) b.IsEnabled = connected && allowed && !_busy;
+        foreach (var b in new Control[] { _inj, _lock, _allOff, _cylAll }.Concat(_maps).Concat(_gio).Concat(_cyl)) b.IsEnabled = connected && allowed && !_busy;
         bool remote = connected && RemoteAllowed();
         foreach (var b in _remoteControls) b.IsEnabled = remote && !_busy;
         foreach (var v in _values.Where(v => !v.Here)) v.Editor.IsEnabled = false;
@@ -611,7 +633,34 @@ public sealed class ServiceWindow : Window
         Mark(_lock, s?.TimingLocked == true, Active);
         for (int i = 0; i < _maps.Length; i++) Mark(_maps[i], _maps[i].IsChecked == true);
         for (int i = 0; i < 4; i++) Mark(_gio[i], s?.GioForced[i] == true);
+        for (int i = 0; i < 4; i++) { _cyl[i].IsChecked = _cut == i + 1; Mark(_cyl[i], _cut == i + 1, Active); }
+        _cylAll.IsChecked = _cut == 0;
         _syncing = false;
+    }
+
+    /// For the UI check: the cylinder test's button pressed.
+    public Task CylinderForCheck(int n) => Cylinder(n);
+
+    /// The cylinder test: cylinder n's injector cut (0: every one firing).
+    async Task Cylinder(int n)
+    {
+        if (_busy || _syncing) return;
+        byte cmd = (byte)(n == 0 ? TroubleCodes.CylinderAll : TroubleCodes.CylinderCut1 + n - 1);
+        _busy = true;
+        try
+        {
+            var (answer, note) = await _engine.Command(cmd);
+            if (answer == cmd)
+            {
+                _cut = n;
+                _status.Text = n == 0 ? "every cylinder firing" : $"cylinder {n} cut: the engine runs on the other three";
+                AppLog.Action("service", $"cylinder test: {(n == 0 ? "all firing" : $"cylinder {n} cut")} ({cmd:X2}h)");
+            }
+            else _status.Text = answer == null
+                ? $"cylinder test: {note} - a ROM made before the cylinder test does not answer it: rebuild it ({AboutPage.ChangeFunctions})"
+                : $"cylinder test: the ROM answered {answer:X2}h";
+        }
+        finally { _busy = false; ShowState(); }
     }
 
     async Task Send(byte cmd, string what, bool quiet = false)
@@ -631,11 +680,14 @@ public sealed class ServiceWindow : Window
             else
             {
                 if (!quiet) _status.Text = cmd == TroubleCodes.ClearCodes ? "codes cleared - the lamp goes off as the ECU restarts" : $"{what}: done ({answer:X2})";
+                if (cmd == TroubleCodes.AllNormal) _cut = 0;      // (5Eh puts the cylinder test back too)
                 if (cmd == TroubleCodes.ClearCodes)
                 {
                     _beforeClear = _engine.Latest;
+#if !TUNER_ONLY
                     // the simulator's lamp watcher starts again too: no flash rounds left over from the codes that are gone
                     try { _host.Sim.Mil.Reset(); } catch { }
+#endif
                 }
                 AppLog.Action("service", $"{what}: {cmd:X2} -> {answer:X2}");
             }

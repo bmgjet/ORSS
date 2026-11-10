@@ -142,25 +142,43 @@ public sealed class RomReference
         catch { return null; }
     }
 
-    /// The references the app ships (next to it, in Templates): every skeleton with all its stock functions built back in, and every other annotated or labelled source there and in Templates/References. Loaded once.
+    /// The references the app ships (next to it, in Templates): every skeleton with all its stock functions built back in, and every other annotated or labelled source there and in Templates/References - the ones for the processor in use (a source's "; processor:" line, else the MSM66207): a ROM is matched against its own family, and a source assembles only with its own part's register names. Loaded once per part.
     public static IReadOnlyList<RomReference> Shipped(string? folder = null)
     {
         folder ??= Path.Combine(AppContext.BaseDirectory, "Templates");
+        var part = ProcessorProfile.Current.Name;
+        bool ForThisPart(string file)
+        {
+            try
+            {
+                using var r = new StreamReader(file);
+                var head = new System.Text.StringBuilder();
+                for (int n = 0; n < 200 && r.ReadLine() is { } line; n++) head.AppendLine(line);
+                var declared = ProcessorProfile.Declared(head.ToString()) ?? ProcessorProfile.Msm66207();
+                return declared.Name.Equals(part, StringComparison.OrdinalIgnoreCase)
+                       || !declared.Name.Equals(ProcessorProfile.Msm66911().Name, StringComparison.OrdinalIgnoreCase)
+                          && !part.Equals(ProcessorProfile.Msm66911().Name, StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
+        }
         lock (Cache)
         {
-            if (Cache.TryGetValue(folder, out var have)) return have;
+            var key = folder + "|" + part;
+            if (Cache.TryGetValue(key, out var have)) return have;
             var list = new List<RomReference>();
             if (Directory.Exists(folder))
             {
-                foreach (var sk in Skeleton.Find(folder))
+                foreach (var sk in Skeleton.Find(folder).Where(s => ForThisPart(s.Path)))
                     if (FromFile(sk.Path, sk.Features.Where(f => f.Stock).ToDictionary(f => f.Define, _ => 1L)) is { } r) list.Add(r);
                 var more = Directory.GetFiles(folder, "*.asm").Where(f => !f.EndsWith("-skeleton.asm", StringComparison.OrdinalIgnoreCase)).ToList();
                 var refs = Path.Combine(folder, "References");
                 if (Directory.Exists(refs)) more.AddRange(Directory.GetFiles(refs, "*.asm"));
-                foreach (var f in more.OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+                foreach (var f in more.Where(ForThisPart).OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
                     if (FromFile(f) is { } r) list.Add(r);
             }
-            Cache[folder] = list;
+            // the part changed while these were assembled (another ROM opened meanwhile): some may have been read as the other part's,
+            // so this list is not kept for the rest of the session
+            if (ProcessorProfile.Current.Name.Equals(part, StringComparison.OrdinalIgnoreCase)) Cache[key] = list;
             return list;
         }
     }
@@ -269,7 +287,7 @@ public static class ReferenceMatcher
             if (va.Length != vb.Length) continue;
             for (int k = 0; k < va.Length; k++)
             {
-                if (va[k] is not long x || vb[k] is not long y || x < 0x38 || y < 0x38 || y >= Bus.RomSize) continue;
+                if (va[k] is not long x || vb[k] is not long y || x < 0x38 || y < 0x38 || y >= Chip.RomSize) continue;
                 foreach (var (item, end) in spans)
                 {
                     if (x < item.Address || x >= end) continue;
@@ -294,9 +312,9 @@ public static class ReferenceMatcher
         var result = new List<ItemDef>();
         foreach (var (item, at) in byAddr.OrderBy(kv => kv.Value))
         {
-            int next = starts.FirstOrDefault(s => s > at, Bus.RomSize);
+            int next = starts.FirstOrDefault(s => s > at, Chip.RomSize);
             int room = 0;
-            while (at + room < next && at + room < Bus.RomSize && !isCode(at + room)) room++;
+            while (at + room < next && at + room < Chip.RomSize && !isCode(at + room)) room++;
             var copy = Clone(item);
             copy.Address = at;
             int span = Math.Max(1, item.Span);

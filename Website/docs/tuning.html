@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tables and settings — Rom Sim Studio guide</title>
+<link rel="icon" href="../favicon.ico">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<header class="topbar"><button class="menu-btn" aria-label="Contents">☰</button><a class="logo" href="index.html">ROM SIM <b>STUDIO</b></a><span class="sp"></span><span class="links"><a href="../">Website</a> &nbsp;·&nbsp; <a href="../#start">Download</a></span></header>
+<div class="frame"><nav class="side"></nav><main>
+
+<h1>Tables and settings</h1>
+<p class="lead">The calibration editor: the ROM's maps and settings by name, in real units, edited as a table, a line or in 3D — with the cell the engine is in marked as it runs.</p>
+
+<figure><img src="img/tuner-replay.png" alt="Tuner mode with a log playing: the live cells lit on the fuel map and a trail behind them"><figcaption>A log playing back in Tuner mode: the cells the engine reads are lit, with a trail behind.</figcaption></figure>
+
+<h2>Finding a table</h2>
+<p>The list on the left holds every map and setting the ROM's definitions name, grouped by category (Fuel, Ignition, Idle, Limits…). Type in the search box to narrow it; star one to keep it at the top (favourites belong to the ROM). <b>Show only valid</b> hides runs of bytes whose meaning is not known. <b>Back</b> and <b>Forward</b> step through what you looked at.</p>
+<p>Where the definitions come from — the source's annotations, Detect, a definitions file — is on <a href="calibration.html">Definitions, Detect and tools</a>.</p>
+
+<h2>Three views of a map</h2>
+<ul>
+  <li><b>Table</b> — rpm down the side, load across the top, coloured cool to hot as the established tuning software does. Select cells with the mouse or the arrow keys (<kbd>Shift</kbd> to grow the selection).</li>
+  <li><b>Line</b> — each row (or column) as a line: drag a point to change it.</li>
+  <li><b>3D</b> — the map as a surface; drag to turn it, <kbd>Home</kbd> to put it back.</li>
+</ul>
+
+<h2>Changing values</h2>
+<table>
+  <tr><th>Key</th><th>Does (to the selected cells)</th></tr>
+  <tr><td><kbd>PgUp</kbd> / <kbd>PgDn</kbd> (or <kbd>]</kbd> <kbd>[</kbd>, <kbd>+</kbd> <kbd>−</kbd>)</td><td>Up / down the smallest step the ROM stores.</td></tr>
+  <tr><td><kbd>Shift</kbd>+<kbd>PgUp</kbd> / <kbd>PgDn</kbd></td><td>Up / down ten steps.</td></tr>
+  <tr><td><kbd>Ctrl</kbd>+<kbd>PgUp</kbd> / <kbd>PgDn</kbd></td><td>Up / down 1 % (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>: 5 %).</td></tr>
+  <tr><td><kbd>F2</kbd> or <kbd>Enter</kbd></td><td>Type a value.</td></tr>
+  <tr><td><kbd>H</kbd> / <kbd>V</kbd></td><td>Interpolate across the rows / down the columns between the first and last selected.</td></tr>
+  <tr><td><kbd>S</kbd></td><td>Smooth: each cell averaged with its selected neighbours.</td></tr>
+  <tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>V</kbd></td><td>Copy / paste cells. With <kbd>Shift</kbd>: the whole table with its axes, pasted onto this table's axes even when they differ.</td></tr>
+  <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>Undo / redo.</td></tr>
+</table>
+<p>The box above the table takes an amount to <b>set</b>, <b>add</b> or change by <b>%</b>. Every key can be changed in <b>Settings &gt; Hot keys</b>.</p>
+<p>A change goes into the running ROM at once — the simulator uses it on its next read, and with the emulator uploading, so does the car. The ROM's checksum byte is kept right after every change.</p>
+
+<div class="note good"><b>Values are held to safe limits</b>A value typed outside what the ECU and engine can use is capped: rpm settings at 12,500, ignition advance to −6…50°, throttle and duty 0–100 %, AFR 5–30, a choice to the choices it has, a sensor voltage to 0–5 V, and a setting's own limits where its definition gives them. The editors show the range; the MCP server and the command line are held to it too.</div>
+
+<h2>The live cell</h2>
+<p>With the datalog connected (or a log playing, or the simulator running), the cells the engine is reading are lit on the map: the <b>four it is between, blended</b>, or <b>the one it is nearest</b> (the Datalogging menu picks which), with a fading <b>trail</b> behind so you can see where it has been. The trail's length is in Settings &gt; General.</p>
+<ul>
+  <li><b>Lock to live cell</b> moves the selection with the engine, so a key press changes the cell the engine is in.</li>
+  <li>The live cell is worked out from the same frame the gauges show, with the ROM's own axes and interpolation, so the cell you change is the one the ECU is using.</li>
+</ul>
+
+<h2>Feature pages</h2>
+<p>Settings that are not maps — rev limits, launch control, VTEC points, the injectors, the GIO outputs, every skeleton module — are laid out on <b>pages</b> the way the established tuning software lays them out: switches, choices from a list, values with their units, small tables. Each row is bound to the ROM's setting by what it does, not its address, so the same page works on HTS ROMs, stock ROMs Detect has read, and skeleton ROMs. <b>Reset to default</b> puts a row back to what the source says.</p>
+
+<h2>The definition form</h2>
+<p>Under a table, the <b>Definition</b> expander shows and edits what the table is: its address, cell type, size, formula, axes and description. Change it and the table is read again; the change is saved with the ROM's definitions.</p>
+
+<footer>Rom Sim Studio 0.0.0.8 · by bmgjet · <a href="licence.html">Licence</a></footer>
+</main></div>
+<script src="guide.js"></script>
+</body>
+</html>

@@ -80,11 +80,12 @@ public sealed class EmulatorLink(MoatesTrace emulator) : IByteLink
     public IDisposable? Hold() => emulator.Hold();
 }
 
+#if !TUNER_ONLY
 /// The simulated ROM's own serial port: the datalog talks to the ROM's datalogging code exactly as it would to a car (a "virtual ECU"). Bytes travel at the cable's baud rate in simulated time, so the simulator must be running for answers to come back.
 public sealed class SimLink : IByteLink
 {
-    readonly SimHost _host;
-    public SimLink(SimHost host) { _host = host; }
+    readonly AppHost _host;
+    public SimLink(AppHost host) { _host = host; }
     public string Name => "simulator";
     public void Write(byte[] data) => _host.SerialToRom(data);
     public void Discard() => _host.SerialDiscard();
@@ -102,7 +103,7 @@ public sealed class SimLink : IByteLink
     public int Read(byte[] buffer, int offset, int count, int timeoutMs)
     {
         var sw = Stopwatch.StartNew();
-        ulong start = _host.SimCycles, span = (ulong)(Math.Max(1, timeoutMs) / 1000.0 * Bus.CpuHz);
+        ulong start = _host.SimCycles, span = (ulong)(Math.Max(1, timeoutMs) / 1000.0 * Chip.CpuHz);
         long cap = Math.Max(timeoutMs * 25L, 3000);
         int got = 0;
         while (got < count)
@@ -122,11 +123,12 @@ public sealed class SimLink : IByteLink
     public void Wait(int ms)
     {
         var sw = Stopwatch.StartNew();
-        ulong start = _host.SimCycles, span = (ulong)(ms / 1000.0 * Bus.CpuHz);
+        ulong start = _host.SimCycles, span = (ulong)(ms / 1000.0 * Chip.CpuHz);
         while (_host.IsRunning && _host.SimCycles - start < span && sw.ElapsedMilliseconds < Math.Max(ms * 25L, 500)) Thread.Sleep(1);
         if (!_host.IsRunning) Thread.Sleep(ms);
     }
 }
+#endif
 
 /// A wideband O2 controller on its own serial port. The formats these controllers send: AEM (ASCII AFR lines, 9600), Zeitronix (00 01 02 header, AFR x10), TechEdge (5A A5, lambda word / 8192 + 0.5, 19200), PLX (FF-terminated 9-byte frames), Innovate LC-1 / LM-2 (MTS lambda words, 19200), 14Point7 Spartan (asks "G", answers "0:a:14.70").
 public sealed class WidebandReader : IDisposable
@@ -260,10 +262,12 @@ public sealed class WidebandReader : IDisposable
 /// Datalogging from a car (serial) or the simulated ROM (virtual ECU): finds the protocol, polls frames as fast as the ECU answers, adds the wideband and aux channels, keeps every frame and every packet (for the packet monitor), and hands frames to whoever listens. Shared by the Datalog page, Tuner mode and MCP clients.
 public sealed class DatalogEngine : IDisposable
 {
-    readonly SimHost _host;
+    readonly AppHost _host;
     IByteLink? _link;
     Thread? _thread;
     volatile bool _stop;
+    /// Goes up with every link started: a logging thread only logs while its number is the current one.
+    int _gen;
     readonly Stopwatch _clock = new();
     readonly object _lock = new();
     readonly List<LogFrame> _frames = [];
@@ -315,7 +319,7 @@ public sealed class DatalogEngine : IDisposable
         {
             if (Protocol is not ChannelStream cs) return;
             bool ok = cs.Handshake(link, out var note);
-            Status = ok ? $"logging {cs.Name} from {Source}" : $"{cs.Name}: the new channels were not taken (see the Debug page)";
+            Status = ok ? $"logging {cs.Name} from {Source}" : $"{cs.Name}: the new channels were not taken (see {DebugView.Where})";
             Detail = note;
             AppLog.Write(LogKind.Serial, "datalog", "channels changed: " + note);
         });
@@ -330,6 +334,7 @@ public sealed class DatalogEngine : IDisposable
         var done = new TaskCompletionSource<(byte[]?, string)>(TaskCreationOptions.RunContinuationsAsynchronously);
         _work.Enqueue(link =>
         {
+            if (done.Task.IsCompleted) return;          // given up on (timed out): not done late
             if (Protocol is not ChannelStream cs) { done.TrySetResult((null, "not the channel stream")); return; }
             var d = cs.ReadMemory(link, address, out var note);
             done.TrySetResult((d, note));
@@ -338,6 +343,34 @@ public sealed class DatalogEngine : IDisposable
         catch (TimeoutException) { done.TrySetResult((null, "no gap between frames to read it in (4 s)")); }
         return await done.Task;
     }
+
+    /// One cam revolution of the distributor's signals (the skeleton ROM's trigger pattern log), caught between frames: the stream
+    /// stops for a second or two and carries on after.
+    public async Task<(TriggerPattern? Pattern, string Note)> CaptureTrigger()
+    {
+        if (!(_thread?.IsAlive == true) || Protocol is not ChannelStream)
+            return (null, "the trigger pattern needs the channel stream connected (the skeleton ROM's datalog): Datalogging > Connect");
+        var done = new TaskCompletionSource<(TriggerPattern?, string)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _work.Enqueue(link =>
+        {
+            if (done.Task.IsCompleted) return;          // given up on (timed out): not done late
+            if (Protocol is not ChannelStream cs) { done.TrySetResult((null, "not the channel stream")); return; }
+            var p = cs.CaptureTrigger(link, out var note);
+            done.TrySetResult((p, note));
+        });
+        try { await done.Task.WaitAsync(TimeSpan.FromSeconds(12)); }
+        catch (TimeoutException) { done.TrySetResult((null, "no gap between frames to capture it in (12 s)")); }
+        var r = await done.Task;
+        AppLog.Write(LogKind.Serial, "datalog", "trigger pattern: " + (r.Item1?.Summary() ?? r.Item2));
+        return r;
+    }
+
+    /// The link is the simulated ROM's own port (a simulated sensor fault can be put on it).
+#if !TUNER_ONLY
+    public bool OnSimulator => _link is SimLink;
+#else
+    public bool OnSimulator => false;   // no simulator in this build
+#endif
 
     /// Send one service command (TroubleCodes: clear the codes, injectors off...) between frames, and its answer: null when nothing came back (the note says why). The datalog must be logging.
     public Task<(byte? Answer, string Note)> Command(byte cmd) => Command([cmd]);
@@ -361,7 +394,7 @@ public sealed class DatalogEngine : IDisposable
     (string Port, string Protocol, int Baud)? _last;
     long _startedAt, _lastFrameAt;
 
-    public DatalogEngine(SimHost host)
+    public DatalogEngine(AppHost host)
     {
         _host = host;
         Watch = new LinkSupervisor("datalog", IsUp, () => { if (Watch!.Wanted && _last is { } l) StartLink(l.Port, l.Protocol, l.Baud); });
@@ -423,9 +456,13 @@ public sealed class DatalogEngine : IDisposable
     /// The ROM loaded here set for one line speed and the link for another (DatalogFast against Settings > Datalog): what to change, or null.
     public string? BaudAdvice(int baud)
     {
+#if !TUNER_ONLY
         if (_link is SimLink && _host.RomSerialBaud is > 0 and var rom && _host.BaudMismatch)
             return $"the ROM's serial port runs at {rom} baud and the datalog at {baud}: nothing will read right - set Settings > Datalog > Baud rate to {(rom > 60000 ? 62500 : 38400)}";
         if (_link is SimLink || _host.Defs().Find("DatalogFast") is not { } fast || fast.Address < 0) return null;
+#else
+        if (_host.Defs().Find("DatalogFast") is not { } fast || fast.Address < 0) return null;
+#endif
         var image = _host.RomCopy();
         bool on = fast.Address < image.Length && image[fast.Address] != 0;
         if (on && _link is EmulatorLink) return "this ROM has 62,500 baud on (Serial port page), but the Demon asks the ECU at 38,400: turn it off in the ROM to log through the emulator";
@@ -437,6 +474,11 @@ public sealed class DatalogEngine : IDisposable
     void StartLink(string port, string protocol, int baud)
     {
         StopLink();
+        // no protocol until this link has shaken hands: a command asked for meanwhile is refused at once instead of waiting in the queue
+        Protocol = null;
+        // this link's number: a thread from an earlier link that is still detecting (StopLink waits 800 ms for it) sees it is not the
+        // current one and ends, instead of carrying on beside this one - polling the same Demon twice, or writing its status over this one's
+        int gen = Interlocked.Increment(ref _gen);
         _last = (port, protocol, baud);
         _startedAt = Stopwatch.GetTimestamp(); _lastFrameAt = 0;
         // a protocol with a line speed of its own (the stock tester link) uses it unless one was set in Settings
@@ -449,11 +491,29 @@ public sealed class DatalogEngine : IDisposable
             Status = "the datalog goes through the emulator: connect the emulator (Emulator menu)";
             throw new IOException(Status);
         }
+        // only a Demon asks the ECU itself (its 'D' 'R' set-up and 'd' fetch): an Ostrich-family device has no datalog of its own,
+        // and those bytes would land in its command stream, between the uploads
+        if (viaEmulator && _host.Emulator.Device is "Ostrich" or "ECU-Tamer" or "Moates1")
+        {
+            Status = $"the {_host.Emulator.Device} cannot datalog the ECU through its own port (a Demon can): pick the car's datalog cable in Settings > Emulator & datalog";
+            throw new IOException(Status);
+        }
+#if !TUNER_ONLY
         _link = port.Equals("simulator", StringComparison.OrdinalIgnoreCase) ? new SimLink(_host)
               : viaEmulator ? new EmulatorLink(_host.Emulator)
               : new SerialLink(port, baud);
+#else
+        if (port.Equals("simulator", StringComparison.OrdinalIgnoreCase))
+        {
+            Status = "this is the tuning-only build: there is no simulator to log - pick the car's serial port";
+            throw new IOException(Status);
+        }
+        _link = viaEmulator ? new EmulatorLink(_host.Emulator) : new SerialLink(port, baud);
+#endif
         Source = _link.Name;
+#if !TUNER_ONLY
         if (_link is SimLink) { _host.SerialBaud = baud; if (!_host.IsRunning && _host.LoadedPath != null) _host.Control("run"); }
+#endif
         _stop = false;
         _packetsLogged = 0;
         Good = Bad = 0;
@@ -482,72 +542,84 @@ public sealed class DatalogEngine : IDisposable
         else _relayAuto = false;
         // the datalog comes first in Tuner mode: its thread is not the one kept waiting when the machine is busy
         // (and 1 ms sleeps while it runs: its 1-2 ms waits for the next byte would otherwise be 10-15 ms on Windows, which slows every frame - see HiResTimer)
-        _thread = new Thread(() => { HiResTimer.Begin(); try { Run(chosen); } finally { HiResTimer.End(); } })
+        _thread = new Thread(() => { HiResTimer.Begin(); try { Run(chosen, gen); } finally { HiResTimer.End(); } })
             { IsBackground = true, Name = "datalog", Priority = ThreadPriority.AboveNormal };
         _thread.Start();
     }
 
-    void Run(DatalogProtocol? chosen)
+    void Run(DatalogProtocol? chosen, int gen)
     {
         var link = _link!;
+        // still the current link (not stopped, and no newer one started): only then does this thread log, or say anything
+        bool Current() => !_stop && gen == Volatile.Read(ref _gen);
+        void Say(string s) { if (gen == Volatile.Read(ref _gen)) Status = s; }
         try
         {
             if (chosen == null && _relayAuto)
             {
                 // through the Demon: each protocol it can ask the ECU for, in turn
-                Status = "detecting the protocol through the emulator...";
+                Say("detecting the protocol through the emulator...");
                 var report = new System.Text.StringBuilder();
                 foreach (var inner in EmulatorRelay.Candidates())
                 {
+                    if (!Current()) return;
                     var relay = new EmulatorRelay(inner) { OnPacket = OnPacket };
                     if (relay.Handshake(link, out var why) && relay.Poll(link, 0, out why) != null) { chosen = relay; break; }
                     report.AppendLine($"{relay.Name}: {why}");
                 }
                 AppLog.Write(LogKind.Serial, "datalog", "protocol detection through the emulator:\n" + report.ToString().TrimEnd());
-                if (chosen == null) { Status = "no datalog protocol answered through the emulator (see the Debug page)."; return; }
+                if (chosen == null) { Say($"no datalog protocol answered through the emulator (see {DebugView.Where})."); return; }
             }
+            DatalogProtocol proto;
             if (chosen == null)
             {
-                Status = "detecting the protocol...";
+                Say("detecting the protocol...");
                 var (p, report) = DatalogProtocol.Detect(link, OnPacket);
+                if (!Current()) return;
                 if (p == null && Detected is { } det2)
                 {
                     det2.OnPacket = OnPacket;
                     if (det2.Handshake(link, out _) && det2.Poll(link, 0, out _) != null) p = det2;
                 }
-                DetectReport = report;
+                if (gen == Volatile.Read(ref _gen)) DetectReport = report;
                 AppLog.Write(LogKind.Serial, "datalog", "protocol detection:\n" + report.TrimEnd());
                 if (p == null)
                 {
-                    Status = "no datalog protocol answered (see the packet monitor and the Debug page).";
+                    Say($"no datalog protocol answered (see the packet monitor and {DebugView.Where}).");
                     return;
                 }
-                Protocol = p;
+                proto = p;
             }
             else
             {
                 chosen.OnPacket = OnPacket;
                 bool shook = chosen.Handshake(link, out var note);
+                if (!Current()) return;
                 Detail = note;
                 if (!shook)
                 {
-                    Status = $"{chosen.Name}: {note}";
-                    AppLog.Warn("datalog", Status);
+                    Say($"{chosen.Name}: {note}");
+                    AppLog.Warn("datalog", $"{chosen.Name}: {note}");
                     return;
                 }
-                Protocol = chosen;
+                proto = chosen;
             }
-            Status = $"logging {Protocol.Name} from {Source}";
+            if (!Current()) return;
+            Protocol = proto;
+            Say($"logging {proto.Name} from {Source}");
             AppLog.Write(LogKind.Serial, "datalog", Status);
             int timeouts = 0;
-            int retries = Math.Max(1, Protocol.Retries);
+            int retries = Math.Max(1, proto.Retries);
             var rate = Stopwatch.StartNew(); int inWindow = 0;
-            while (!_stop)
+            while (Current())
             {
                 while (_commands.TryDequeue(out var c))
                 {
+                    // the caller gave up on it (4 s with no gap between frames, or the link stopping): it was told it failed, so it is
+                    // not sent late - a late "injectors off" or "lock" would reach the car with nobody expecting it
+                    if (c.Done.Task.IsCompleted) continue;
                     byte? a = null; string cn;
-                    try { a = Protocol.Command(link, c.Msg, out cn); }
+                    try { a = proto.Command(link, c.Msg, out cn); }
                     catch (Exception ex) { cn = ex.Message; }
                     c.Done.TrySetResult((a, cn));
                 }
@@ -557,7 +629,7 @@ public sealed class DatalogEngine : IDisposable
                     catch (Exception ex) { AppLog.Error("datalog", "work between frames failed", ex); }
                 }
                 double t = _clock.Elapsed.TotalSeconds;
-                var f = Protocol.Poll(link, t, out var note);
+                var f = proto.Poll(link, t, out var note);
                 if (f == null)
                 {
                     Bad++;
@@ -566,23 +638,24 @@ public sealed class DatalogEngine : IDisposable
                     if (timeouts % retries == 0)
                     {
                         link.Discard();
-                        if (Protocol.Handshake(link, out var again))
+                        if (proto.Handshake(link, out var again))
                         {
-                            Status = $"logging {Protocol.Name} from {Source} (re-shook hands after {timeouts} missed frame(s))";
-                            AppLog.Write(LogKind.Serial, "datalog", Status);
+                            Say($"logging {proto.Name} from {Source} (re-shook hands after {timeouts} missed frame(s))");
+                            AppLog.Write(LogKind.Serial, "datalog", $"logging {proto.Name} from {Source} (re-shook hands after {timeouts} missed frame(s))");
                             timeouts = 0;
                             continue;
                         }
                         if (timeouts >= retries * 3)
                         {
-                            Status = $"{Protocol.Name}: {note}; the handshake says {again} - no answers from the ECU";
-                            AppLog.Warn("datalog", Status);
+                            Say($"{proto.Name}: {note}; the handshake says {again} - no answers from the ECU");
+                            AppLog.Warn("datalog", $"{proto.Name}: {note}; the handshake says {again} - no answers from the ECU");
                             Thread.Sleep(200);
                         }
                     }
                     continue;
                 }
-                if (timeouts > 0) Status = $"logging {Protocol.Name} from {Source}";
+                if (!Current()) break;
+                if (timeouts > 0) Say($"logging {proto.Name} from {Source}");
                 timeouts = 0;
                 Good++;
                 Enrich(f);
@@ -603,7 +676,7 @@ public sealed class DatalogEngine : IDisposable
         }
         catch (Exception ex)
         {
-            Status = "datalog stopped: " + ex.Message;
+            Say("datalog stopped: " + ex.Message);
             AppLog.Error("datalog", "stopped", ex);
         }
     }

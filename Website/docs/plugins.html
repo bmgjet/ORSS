@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plugins — Rom Sim Studio guide</title>
+<link rel="icon" href="../favicon.ico">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<header class="topbar"><button class="menu-btn" aria-label="Contents">☰</button><a class="logo" href="index.html">ROM SIM <b>STUDIO</b></a><span class="sp"></span><span class="links"><a href="../">Website</a> &nbsp;·&nbsp; <a href="../#start">Download</a></span></header>
+<div class="frame"><nav class="side"></nav><main>
+
+<h1>Plugins</h1>
+<p class="lead">Add to the program with a .NET class library: menu entries, buttons, tabs, windows, calibration pages, settings — or a new source for the datalog.</p>
+
+<h2>Using a plugin</h2>
+<ol class="steps">
+  <li>Put the plugin's <span class="path">.dll</span> in the <span class="path">Plugins</span> folder beside the program (or anywhere).</li>
+  <li><b>Settings &gt; Plugins</b>: add it, and tick it on.</li>
+  <li>What it adds appears — usually under a <b>Plugins</b> menu on the toolbar, which shows only while a plugin is loaded.</li>
+</ol>
+<p><b>ScanTool</b> comes with the program: an ELM327 on a serial port, the standard OBD-II readings mapped onto datalog channels, so the gauges, graph, recording and map trace all work from it.</p>
+<div class="note warn"><b>Only load plugins you trust</b>A plugin runs inside the program with everything it can do.</div>
+
+<h2>Writing one</h2>
+<p>A plugin is a class library referencing <span class="path">RomSimStudio.dll</span>, with one public class implementing <code>IOkiPlugin</code>:</p>
+<pre><code>using OkiRomSim.Desktop;
+
+public sealed class HelloPlugin : IOkiPlugin
+{
+    public string Name => "Hello";
+    public string Description => "Says hello, and adds 5 % to the first fuel cell.";
+    public string Version => "1.0";
+
+    PluginContext _app = null!;
+
+    public void Start(PluginContext app)          // on the UI thread, once
+    {
+        _app = app;
+        app.AddMenuItem("Say hello", () => app.Log("hello"), "An example.", "👋");
+        app.AddSettingsPage("Hello", () => new Avalonia.Controls.TextBlock { Text = "Settings for Hello" });
+        app.Sim.ItemWritten += item => app.Log($"{item.Name} written");
+    }
+
+    public void Stop() { }                        // stop threads, close ports
+}</code></pre>
+<p>The <code>PluginContext</code> gives the whole program — the window, the simulator and ROM (<code>Sim</code>: read and write any table, the definitions, the machine), the calibration editor, the datalog page and the settings — and tidy ways in: menu entries, toolbar buttons, tabs, windows, calibration pages, a section at the bottom of a feature page, a settings page, a data folder and settings of its own, and frames fed straight into the datalog page. Writes to the ROM go through the same limits and undo as the editor's.</p>
+<p><b>Driving the emulator.</b> A plugin for an emulator of its own calls <code>app.TakeOverEmulator(...)</code> with a class implementing <code>IEmulatorTakeover</code> (connect, download, upload, validate, real-time update and its link state). While the plugin is enabled the app's <b>Emulator</b> menu, the <b>Datalogging</b> menu's and the datalog page's <b>Connect</b>, and both status dots go to it, and the app's own emulator link lets go; switching the plugin off hands them back. The ALPHAemu plugin works this way.</p>
+<p><b>Settings &gt; Plugins</b> in the program carries the full guide, with an example for every way in, ready to copy.</p>
+
+<footer>Rom Sim Studio 0.0.0.8 · by bmgjet · <a href="licence.html">Licence</a></footer>
+</main></div>
+<script src="guide.js"></script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+# build output
+bin/
+obj/
+dist/
+*.user
+.vs/
+.vscode/
+.idea/
+
+# Windows / macOS clutter
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# the web site's update lists are made by build-release and kept by the host
+Website/files/
+Website/files-tuner/
+Website/romsimstudio.zip
+Website/romsimtuner.zip
+.versions.json
+
+# local only: reference copies, backups and tooling that is not part of the program
+HTS-master/
+FableTest/
+_backup-*.zip
+hts_conv.json
+.claude/

@@ -14,7 +14,7 @@ namespace OkiRomSim.Desktop;
 public sealed class CompareWindow : Window
 {
     readonly Func<Program66k?> _current;
-    readonly TextBox _report = new() { IsReadOnly = true, AcceptsReturn = true, FontFamily = MainWindow.MonoFont, FontSize = 11.5, TextWrapping = TextWrapping.Wrap };
+    readonly TextBox _report = new() { IsReadOnly = true, AcceptsReturn = true, FontFamily = UiFonts.Mono, FontSize = 11.5, TextWrapping = TextWrapping.Wrap };
     readonly TextBlock _status = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0), TextWrapping = TextWrapping.Wrap, MaxWidth = 420 };
     readonly CheckBox _functions = new() { Content = "Functions", IsChecked = true };
     readonly CheckBox _tables = new() { Content = "Tables", IsChecked = true };

@@ -42,7 +42,7 @@ endif
 if XP == XP_CODE
 warnlamp_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -55,17 +55,17 @@ warnlamp_tick:
                 RC
                 JEQ     warnlamp_set
                 LCB     A, warnlamp_ect
-                CMPB    0c1h, A                ; coolant byte - threshold borrows (C) once hotter
+                CMPB    ENG_ECT, A                ; coolant byte - threshold borrows (C) once hotter
                 JLT     warnlamp_set
                 L       A, #00ea6h             ; engine running (above 500 rpm)?
-                CMP     0ach, A
+                CMP     ENG_RPMP, A
                 JLT     warnlamp_running
                 RC
                 SJ      warnlamp_set
 warnlamp_running:
                 CLRB    A
                 LCB     A, warnlamp_batt
-                CMPB    0c3h, A                ; battery byte - threshold borrows (C) while below it
+                CMPB    ENG_BATT, A                ; battery byte - threshold borrows (C) while below it
 warnlamp_set:   CLRB    A
                 LCB     A, warnlamp_output
                 CAL     mod_output

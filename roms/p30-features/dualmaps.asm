@@ -45,7 +45,7 @@ endif
 if XP == XP_CODE
 dualmaps_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -61,11 +61,11 @@ dualmaps_tick:
                 JEQ     dualmaps_off
                 CLRB    A
                 LCB     A, dualmaps_tps
-                CMPB    0b9h, A
+                CMPB    ENG_TPS, A
                 JLT     dualmaps_off
                 CLR     A
                 LC      A, dualmaps_rpm
-                CMP     0ach, A                ; period past the point's: below the rpm
+                CMP     ENG_RPMP, A                ; period past the point's: below the rpm
                 JGT     dualmaps_off
                 SB      0fdh.0
                 J       mod_tick_exit

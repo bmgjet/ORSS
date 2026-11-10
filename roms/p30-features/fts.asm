@@ -49,7 +49,7 @@ endif
 if XP == XP_CODE
 fts_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -65,10 +65,10 @@ fts_tick:
                 JEQ     fts_no
                 CLRB    A
                 LCB     A, fts_tps
-                CMPB    0b9h, A                ; throttle - minimum borrows (C) while below it
+                CMPB    ENG_TPS, A                ; throttle - minimum borrows (C) while below it
                 JLT     fts_no
                 LCB     A, fts_speed
-                CMPB    0b4h, A                ; road speed - minimum borrows while below it
+                CMPB    ENG_VSS, A                ; road speed - minimum borrows while below it
                 JLT     fts_no
                 SC
                 SJ      fts_decide

@@ -76,13 +76,20 @@ public sealed class ZoomHost : Decorator
 /// Debug page: a console for everything - user actions, errors (with their stack traces), MCP tool calls and the address they came from, serial traffic, simulator events.
 public sealed class DebugView : UserControl
 {
+    /// Where the log is read, for messages that point to it: the Debug page in Rom Sim Studio, File > Log in RomSimTuner.
+#if TUNER_ONLY
+    public const string Where = "the log (File > Log)";
+#else
+    public const string Where = "the Debug page";
+#endif
+
     readonly DataList _list = new(new("Time", 96), new("Kind", 64), new("Source", 150), new("Message", 300))
     {
         Empty = "Nothing logged yet (or nothing matches the filter and the kinds ticked).",
     };
     readonly TextBox _detail = new()
     {
-        IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, FontFamily = MainWindow.MonoFont, FontSize = 11,
+        IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, FontFamily = UiFonts.Mono, FontSize = 11,
         BorderThickness = new Thickness(0), Background = Brushes.Transparent, Watermark = "pick an entry to see all of it here",
     };
     readonly TextBox _filter = new() { Watermark = "filter", Width = 220 };

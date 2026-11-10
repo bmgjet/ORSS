@@ -35,6 +35,8 @@ public sealed class CalTools
         public string? DefsFile;
         public bool Backed;
         public bool Dirty;
+        /// The files this target was made from (source, includes, definitions file) and their time stamps then.
+        public (string File, DateTime Stamp)[] Inputs = [];
         /// The byte that keeps the image's sum at 0 (RomChecksum), found when it was loaded; re-balanced on every write.
         public int? ChecksumAt;
     }
@@ -56,7 +58,15 @@ public sealed class CalTools
         }
         var full = _ws.Resolve(p);
         var stamp = System.IO.File.GetLastWriteTimeUtc(full);
-        if (_files.TryGetValue(full, out var c) && c.Stamp == stamp) return c.T;
+        if (_files.TryGetValue(full, out var c) && c.Stamp == stamp)
+        {
+            if (Program66k.Unchanged(c.T.Inputs)) return c.T;
+            // a file it was built from changed on disk (an include, its definitions file): made again - unless edits made here are not
+            // saved yet, which would be lost (or saved over the new source with the old code bytes)
+            _files.Remove(full);
+            if (c.T.Dirty) throw new ToolException($"{Path.GetFileName(full)}: a file it is built from changed on disk while calibration edits made here were not saved. " +
+                                                   "They were made against the old build and are dropped (saving them would write the old code bytes): make them again on the new one.");
+        }
         var prog = Program66k.Load(full, _ws.Allows);
         var defsFile = Path.ChangeExtension(full, null) + ".okidef.json";
         DefinitionSet defs;
@@ -70,6 +80,7 @@ public sealed class CalTools
             Sources = prog.Sources.Select(kv => (kv.Key, string.Join("\n", kv.Value))).ToList(),
         };
         t.ChecksumAt = RomChecksum.Site(t.Rom, prog.FromBinary ? null : prog.Asm);
+        t.Inputs = Program66k.Stamps([.. prog.Inputs.Select(i => i.File), defsFile]);
         _files[full] = (stamp, t);
         return t;
     }
@@ -77,8 +88,17 @@ public sealed class CalTools
     void SaveDefs(Target t)
     {
         if (t.Session != null || t.DefsFile == null) return;
-        _ws.Resolve(t.DefsFile, mustExist: false, forWrite: true);
-        t.Defs.Save(t.DefsFile);
+        try
+        {
+            _ws.Resolve(t.DefsFile, mustExist: false, forWrite: true);
+            t.Defs.Save(t.DefsFile);
+        }
+        catch
+        {
+            // not saved: the change made in memory is dropped with the cached target, so a later call does not carry it into a file
+            if (t.File != null) _files.Remove(t.File);
+            throw;
+        }
     }
 
     /// Persist a file-mode image change: .bin written back (with a one-time .bak).
@@ -88,13 +108,29 @@ public sealed class CalTools
         t.Dirty = true;
         if (!t.File.EndsWith(".bin", StringComparison.OrdinalIgnoreCase) && !t.File.EndsWith(".rom", StringComparison.OrdinalIgnoreCase))
             return "kept in memory: call cal_save to write a .bin (the .asm source text is not changed)";
-        _ws.Resolve(t.File, mustExist: true, forWrite: true);
-        if (!t.Backed) { System.IO.File.Copy(t.File, t.File + ".bak", overwrite: true); t.Backed = true; }
+        try { return CommitBin(t); }
+        catch
+        {
+            // the write was refused or failed: the edit (already made to the cached image) goes with it, or the next successful write
+            // would quietly commit it too
+            _files.Remove(t.File);
+            throw;
+        }
+    }
+
+    string CommitBin(Target t)
+    {
+        var file = t.File!;
+        _ws.Resolve(file, mustExist: true, forWrite: true);
+        // the original kept as .bak - once: an existing .bak is the file as it was before the first change, and a second server run
+        // (or the next save) used to copy the already-changed file over it, losing the original
+        if (!t.Backed) { if (!System.IO.File.Exists(file + ".bak")) System.IO.File.Copy(file, file + ".bak"); t.Backed = true; }
         if (t.ChecksumAt is int at) RomChecksum.Balance(t.Rom, at);
-        OkiRomSim.Core.SafeFile.WriteAllBytes(t.File, t.Rom);
-        _files[t.File] = (System.IO.File.GetLastWriteTimeUtc(t.File), t);
+        OkiRomSim.Core.SafeFile.WriteAllBytes(file, t.Rom);
+        _files[file] = (System.IO.File.GetLastWriteTimeUtc(file), t);
+        t.Inputs = Program66k.Stamps(t.Inputs.Select(i => i.File));
         t.Dirty = false;
-        return $"written to {_ws.Show(t.File)} (original kept as .bak)";
+        return $"written to {_ws.Show(file)} (the original is kept as .bak)";
     }
 
     static ItemDef Item(Target t, string name) =>
@@ -426,7 +462,8 @@ public sealed class CalTools
     string CalFeatures(JsonObject a)
     {
         var t = Open(a);
-        var file = S(a, "file") ?? FeatureFile.DefaultPath;
+        // a feature file the client names is read from the workspace like any other file; the default is the one that ships with the program
+        var file = S(a, "file") is { Length: > 0 } named ? _ws.Resolve(named) : FeatureFile.DefaultPath;
         if (!File.Exists(file)) throw new ToolException($"no feature file at {file}");
         var ff = FeatureFile.Load(file);
         string action = (S(a, "action") ?? "list").ToLowerInvariant();
@@ -650,10 +687,13 @@ public sealed class CalTools
     {
         var t = Open(a);
         string format = (S(a, "format") ?? "bin").ToLowerInvariant();
-        string baseName = S(a, "output") is { Length: > 0 } o ? o
-            : t.File != null ? Path.ChangeExtension(t.File, null)
-            : t.Session?.RomPath is { } rp ? Path.ChangeExtension(rp, null) + ".tuned" : "tuned";
-        if (Path.HasExtension(baseName) && format != "all") baseName = Path.ChangeExtension(baseName, null);
+        // only a name the client gave has its extension taken off (it is set per format). The default for the app's ROM is
+        // "<rom>.tuned": stripping its ".tuned" as if it were an extension made it "<rom>.bin" - the .bin that was opened, written over
+        string? given = S(a, "output") is { Length: > 0 } o ? o : null;
+        string baseName = given
+            ?? (t.File != null ? Path.ChangeExtension(t.File, null)
+                : t.Session?.RomPath is { } rp ? Path.ChangeExtension(rp, null) + ".tuned" : "tuned");
+        if (given != null && Path.HasExtension(baseName) && format != "all") baseName = Path.ChangeExtension(baseName, null);
         var done = new List<string>();
         if (format is "bin" or "all")
         {
@@ -661,7 +701,8 @@ public sealed class CalTools
             if (t.Session != null) done.Add(t.Session.SaveRom(outPath));
             else
             {
-                if (File.Exists(outPath) && outPath.Equals(t.File, StringComparison.OrdinalIgnoreCase) && !t.Backed) File.Copy(outPath, outPath + ".bak", true);
+                // a .bin of the same name that is not this target (car.bin beside car.asm): kept as .bak before it is replaced
+                if (File.Exists(outPath) && !File.Exists(outPath + ".bak") && (!outPath.Equals(t.File, StringComparison.OrdinalIgnoreCase) || !t.Backed)) File.Copy(outPath, outPath + ".bak");
                 if (t.ChecksumAt is int at) RomChecksum.Balance(t.Rom, at);
                 OkiRomSim.Core.SafeFile.WriteAllBytes(outPath, t.Rom);
                 done.Add($"image -> {_ws.Show(outPath)}");
@@ -742,6 +783,12 @@ public sealed class CalTools
                 }
         }
         var s = Session ?? throw new ToolException($"datalog {action} needs the desktop app (overlay and stats also work on a `log` file)");
+        // a log to load is a file like any other a tool reads: inside the workspace (it was handed to the app as given before)
+        if (action == "load")
+        {
+            a = (JsonObject)a.DeepClone();
+            a["log"] = _ws.Resolve(S(a, "log") ?? throw new ToolException("give log (a file in the workspace)"));
+        }
         return s.Datalog(action, a);
     }
 

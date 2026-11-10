@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Emulators and flashing — Rom Sim Studio guide</title>
+<link rel="icon" href="../favicon.ico">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<header class="topbar"><button class="menu-btn" aria-label="Contents">☰</button><a class="logo" href="index.html">ROM SIM <b>STUDIO</b></a><span class="sp"></span><span class="links"><a href="../">Website</a> &nbsp;·&nbsp; <a href="../#start">Download</a></span></header>
+<div class="frame"><nav class="side"></nav><main>
+
+<h1>Emulators and flashing</h1>
+<p class="lead">Get the ROM into the car: an emulator for changes that land as you make them, or a chip when the tune is done.</p>
+
+<h2>A ROM emulator</h2>
+<p>A <b>Moates Ostrich 2.0</b> or <b>Demon</b> sits in the ECU's chip socket and serves the ROM from its own memory, which the program can change while the engine runs.</p>
+<ol class="steps">
+  <li><b>Settings &gt; Emulator &amp; datalog &gt; Emulator</b>: pick its serial port.</li>
+  <li>In the calibration editor's <b>Emulator</b> menu: <b>Connect / disconnect</b>. The dot beside the menu is green while connected, blinking orange while a lost link is rebuilt.</li>
+  <li><b>Upload</b> sends the whole ROM; <b>Validate</b> reads it back and compares.</li>
+  <li>Tick <b>Upload on changes</b> and every change from then on — a cell, a setting, a patch — goes to the emulator as it is made, only the bytes that changed.</li>
+</ol>
+<p><b>Download</b> reads what the emulator holds into the program (to start from what is in the car).</p>
+<div class="note warn"><b>With the engine running</b>A change reaches the ECU at once. Make small steps, and keep a known-good ROM to upload back.</div>
+
+<h2>Hit trace from a real ECU</h2>
+<p>An emulator sees every byte the ECU reads. With <b>Hit trace</b> ticked on the Trace tab, those reads are recorded and coloured on the source — which code the car runs and which tables it reads. See <a href="memory.html#hit-trace">Hit trace</a>.</p>
+
+<h2>Burning a chip</h2>
+<ol class="steps">
+  <li><b>Tools &gt; Save .bin…</b> writes the 32 KB image, its checksum right.</li>
+  <li>Program it into a 27C256 / 29C256 with your chip programmer.</li>
+  <li>For a 64 KB chip (27C512, SST27SF512), use the <a href="tools.html#bintool">Bin tool</a> to place it in the upper half, or to put two tunes on one chip.</li>
+</ol>
+<p>A ROM built from the skeleton checks its own checksum while it runs: a byte changed by anything that does not keep the checksum right makes the ECU flag it. The program keeps it right on every change and every save.</p>
+
+<footer>Rom Sim Studio 0.0.0.8 · by bmgjet · <a href="licence.html">Licence</a></footer>
+</main></div>
+<script src="guide.js"></script>
+</body>
+</html>

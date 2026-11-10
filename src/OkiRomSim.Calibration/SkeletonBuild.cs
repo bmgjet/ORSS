@@ -8,7 +8,11 @@ namespace OkiRomSim.Calibration;
 /// One function a skeleton ROM can be built with: a stock function the skeleton took out and can put back (FEAT_STOCK_...), or a feature module from its features folder (FEAT_...).
 public sealed record SkeletonFeature(
     string Define, string Name, string Category, string About,
-    IReadOnlyList<string> Conflicts, IReadOnlyList<string> Requires, string Ram, string? File, bool Stock, IReadOnlyList<string>? Pages = null);
+    IReadOnlyList<string> Conflicts, IReadOnlyList<string> Requires, string Ram, string? File, bool Stock, IReadOnlyList<string>? Pages = null)
+{
+    /// The ECUs this module is written for (its ";> platforms:" line; P30 when it has none).
+    public IReadOnlyList<string> Platforms { get; init; } = ["P30"];
+}
 
 /// The result of assembling a skeleton with a set of features. FreeBytes: what is left; when the build is too big, how far over it is, as a negative number.
 public sealed record SkeletonBuildResult(bool Success, AssemblyResult? Assembly, IReadOnlyList<string> Errors, int UsedBytes, int FreeBytes, int ModuleBytes)
@@ -39,6 +43,10 @@ public sealed class Skeleton
     public required string Name { get; init; }
     public required string Description { get; init; }
     public string? FeaturesDir { get; init; }
+    /// The ECU this skeleton is for: its "define PLATFORM_xxx" line (P30 when it has none). Only modules written for it are offered.
+    public string Platform { get; init; } = "P30";
+    /// The part, from its "; processor: MSM66911" line (null when it has none: the MSM66207). Written into each build file, so the app opens the ROM on the right part.
+    public string? Processor { get; init; }
     public List<SkeletonFeature> Features { get; } = [];
 
     public override string ToString() => Name;
@@ -59,8 +67,11 @@ public sealed class Skeleton
     static readonly Regex StockLine = new(@"^;\s+(FEAT_STOCK_\w+)\s{2,}(\S.*)$");
     static readonly Regex StockMore = new(@"^;\s{20,}(\S.*)$");
     static readonly Regex IncludeLine = new(@"^\s*include\s+""([^""]+)""", RegexOptions.IgnoreCase);
+    static readonly Regex PlatformLine = new(@"^\s*define\s+PLATFORM_(\w+)", RegexOptions.IgnoreCase);
+    static readonly Regex ProcessorLine = new(@"^\s*;\s*processor\s*[:=]\s*([A-Za-z0-9_]+)", RegexOptions.IgnoreCase);
 
-    public static Skeleton Load(string path)
+    /// `anyPlatform`: every module, whatever its "platforms:" line says (the porting harness tries them all).
+    public static Skeleton Load(string path, bool anyPlatform = false)
     {
         var lines = File.ReadLines(path).Take(400).ToList();
         // the description: the header comment up to "Putting stock functions back" (or <end>)
@@ -85,7 +96,9 @@ public sealed class Skeleton
             if (m.Success && m.Groups[1].Value.EndsWith("features.inc", StringComparison.OrdinalIgnoreCase))
             { featuresInc = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(path)!, m.Groups[1].Value); break; }
         }
-        var sk = new Skeleton { Path = path, Name = name, Description = about.ToString().Trim(), FeaturesDir = featuresInc == null ? null : System.IO.Path.GetDirectoryName(featuresInc) };
+        var platform = File.ReadLines(path).Select(l => PlatformLine.Match(l)).FirstOrDefault(m => m.Success)?.Groups[1].Value.ToUpperInvariant() ?? "P30";
+        var sk = new Skeleton { Path = path, Name = name, Description = about.ToString().Trim(), FeaturesDir = featuresInc == null ? null : System.IO.Path.GetDirectoryName(featuresInc), Platform = platform,
+            Processor = lines.Take(200).Select(l => ProcessorLine.Match(l)).FirstOrDefault(m => m.Success)?.Groups[1].Value };
 
         // stock functions from the header
         for (int i = 0; i < lines.Count; i++)
@@ -108,7 +121,7 @@ public sealed class Skeleton
                 var m = IncludeLine.Match(l);
                 if (!m.Success) continue;
                 var file = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(featuresInc)!, m.Groups[1].Value);
-                if (File.Exists(file) && ReadModule(file) is { } f) sk.Features.Add(f);
+                if (File.Exists(file) && ReadModule(file) is { } f && (anyPlatform || f.Platforms.Contains(platform, StringComparer.OrdinalIgnoreCase))) sk.Features.Add(f);
             }
         return sk;
     }
@@ -138,7 +151,11 @@ public sealed class Skeleton
         return new SkeletonFeature(define.Trim(), keys.GetValueOrDefault("name", define), keys.GetValueOrDefault("category", "Other"),
             keys.GetValueOrDefault("about", ""), List(keys.GetValueOrDefault("conflicts")), List(keys.GetValueOrDefault("requires")),
             keys.GetValueOrDefault("ram", ""), file, false,
-            keys.GetValueOrDefault("pages", "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+            keys.GetValueOrDefault("pages", "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            Platforms = keys.TryGetValue("platforms", out var pl) && pl.Trim().Length > 0
+                ? pl.Split([',', ' '], StringSplitOptions.RemoveEmptyEntries).Select(x => x.ToUpperInvariant()).ToArray() : ["P30"],
+        };
     }
 
     /// For a ROM built from a skeleton: the calibration pages that belong to modules it was built without (a page key a module's header names, or one of a family of them - "boardopt" is every "boardopt.x"), so "show only valid pages" can leave them out whatever a guess has bound to them. Null when the ROM was not built from a skeleton.
@@ -281,6 +298,7 @@ public sealed class Skeleton
         var chosen = new HashSet<string>(defines, StringComparer.OrdinalIgnoreCase);
         var sb = new StringBuilder();
         sb.AppendLine($"; {romName} - built from {System.IO.Path.GetFileName(Path)} ({Name}) by File > New ROM > Create.");
+        if (Processor != null) sb.AppendLine($"; processor: {Processor}");
         sb.AppendLine(";");
         sb.AppendLine("; Each define builds one function into the ROM. Comment one out (put ; in front of it) or remove the ;");
         sb.AppendLine("; from another, then build again: the assembler places everything, and stops with an error when the");

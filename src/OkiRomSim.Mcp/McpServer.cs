@@ -34,13 +34,16 @@ public sealed class McpServer
     {
         Workspace = workspace;
         Session = session;
+        // no app behind this server: each file is worked on as the part it is for (Program66k.AutoPart)
+        if (session == null) Program66k.AutoPart = true;
         foreach (var t in new OkiTools(workspace, this).All()) _tools[t.Name] = t;
         foreach (var t in new CalTools(workspace, this).All()) _tools[t.Name] = t;
         foreach (var t in new AnnotateTools(workspace, this).All()) _tools[t.Name] = t;
     }
 
     public const string Instructions =
-        "Tools for developing OKI MSM66207 (nX-8/200, 66K) assembly - the CPU in Honda OBD1 ECUs such as the P28. " +
+        "Tools for developing OKI MSM66207 (nX-8/200, 66K) assembly - the CPU in Honda OBD1 ECUs such as the P28 - and the " +
+        "MSM66911 of the P13 (a source that starts \"; processor: MSM66911\" is assembled and run as one). " +
         "Start with `help`, then `arch` (topics: overview, dd, addressing, ...) and `opcode` to learn the instruction set. " +
         "Work on files with file_read / file_search / file_edit (paged, so large .asm files do not flood your context); " +
         "`disassemble` turns a .bin into editable .asm, `assemble` builds it, `run` boots it in the simulator with engine inputs " +
@@ -63,12 +66,25 @@ public sealed class McpServer
         catch (JsonException) { return Error(null, -32700, "parse error").ToJsonString(); }
         if (node is JsonArray batch)
         {
+            // JSON-RPC 2.0: an empty batch is one invalid request, and so is every member that is not an object (each gets its answer)
+            if (batch.Count == 0) return Error(null, -32600, "invalid request: empty batch").ToJsonString();
             var responses = new JsonArray();
             foreach (var item in batch)
-                if (item is JsonObject o && HandleOne(o) is { } r) responses.Add(r);
+            {
+                if (item is not JsonObject o) { responses.Add(Error(null, -32600, "invalid request: not an object")); continue; }
+                if (Safe(o) is { } r) responses.Add(r);
+            }
             return responses.Count == 0 ? null : responses.ToJsonString();
         }
-        return node is not JsonObject msg ? Error(null, -32600, "invalid request").ToJsonString() : (HandleOne(msg)?.ToJsonString());
+        return node is not JsonObject msg ? Error(null, -32600, "invalid request").ToJsonString() : (Safe(msg)?.ToJsonString());
+    }
+
+    /// HandleOne, and an answer whatever it throws: an object with a key twice ({"id":7,"id":8}) throws as it is read, which used to
+    /// leave a stdio client with no answer at all.
+    JsonObject? Safe(JsonObject msg)
+    {
+        try { return HandleOne(msg); }
+        catch (Exception ex) { return Error(null, -32600, "invalid request: " + ex.Message); }
     }
 
     JsonObject? HandleOne(JsonObject msg)
@@ -138,7 +154,9 @@ public sealed class McpServer
         if (!_tools.TryGetValue(name, out var tool)) throw new RpcException(-32602, $"unknown tool '{name}' (call help for the list)");
         var args = p?["arguments"] as JsonObject ?? [];
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var (text, isError) = RunGuarded(tool, args);
+        var (text, isError) = Workspace.ReadOnly && ChangesSomething(name, args) is { } why
+            ? ($"error: the server is read-only (Settings > MCP server): {why}", true)
+            : RunGuarded(tool, args);
         string argText = args.ToJsonString();
         var info = new McpCallInfo(_client.Value ?? "local", name, argText.Length > 400 ? argText[..400] + "..." : argText, !isError, sw.ElapsedMilliseconds,
                                    text.Length > 300 ? text[..300] + "..." : text);
@@ -149,6 +167,27 @@ public sealed class McpServer
         {
             ["content"] = new JsonArray { new JsonObject { ["type"] = "text", ["text"] = text } },
             ["isError"] = isError,
+        };
+    }
+
+    /// What a call would change - the ROM open in the app, its definitions, a file, the emulator, the datalog, the simulator - or null when
+    /// it only looks. Read-only used to be checked only where a file is written (Workspace.Resolve), so a "read-only" server still
+    /// wrote calibration into the app's ROM, sent it to the emulator and started or stopped the datalog.
+    static string? ChangesSomething(string tool, JsonObject args)
+    {
+        string action = (args["action"] is JsonValue v && v.TryGetValue<string>(out var s) ? s : "").Trim().ToLowerInvariant();
+        bool has(string key) => args[key] is JsonValue jv && (!jv.TryGetValue<string>(out var t) || t.Length > 0);
+        return tool switch
+        {
+            "cal_write" or "cal_scale" or "cal_define" or "cal_delete" or "cal_detect" or "cal_save" => $"{tool} changes the calibration or its definitions",
+            "cal_formulas" when has("name") && has("expr") => "adding a formula changes the definitions",
+            "cal_features" when action is "apply" or "remove" => $"cal_features {action} patches the ROM",
+            "emulator" when action != "status" => $"emulator {action} talks to the hardware",
+            "datalog" when action is not ("status" or "latest" or "frames" or "stats" or "overlay" or "protocols" or "detect_layout" or "") => $"datalog {action} changes the datalog",
+            "simulator" when action is not ("state" or "") => $"simulator {action} drives the simulator",
+            "file_write" or "file_upload" or "file_edit" or "file_edit_lines" or "rom_upload" or "app_open" or "workspace_allow" or "rename" or "comment"
+                => $"{tool} changes files or what the app has open",
+            _ => null,
         };
     }
 
@@ -171,7 +210,13 @@ public sealed class McpServer
             }
             finally { done.Set(); _gate.Release(); }
         }, 256 * 1024 * 1024) { IsBackground = true, Name = "mcp-" + tool.Name };
-        t.Start();
+        try { t.Start(); }
+        catch (Exception ex)
+        {
+            // no thread (out of memory for its stack): the gate goes back, or every later call would wait for a tool that never ran
+            _gate.Release();
+            return ($"error: could not start {tool.Name}: {ex.Message}", true);
+        }
         if (!done.Wait(ToolTimeout)) return ($"error: {tool.Name} is still running after {ToolTimeout.TotalSeconds:0} s; its result will be discarded", true);
         return (text, isError);
     }

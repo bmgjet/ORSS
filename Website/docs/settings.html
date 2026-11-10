@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings — Rom Sim Studio guide</title>
+<link rel="icon" href="../favicon.ico">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<header class="topbar"><button class="menu-btn" aria-label="Contents">☰</button><a class="logo" href="index.html">ROM SIM <b>STUDIO</b></a><span class="sp"></span><span class="links"><a href="../">Website</a> &nbsp;·&nbsp; <a href="../#start">Download</a></span></header>
+<div class="frame"><nav class="side"></nav><main>
+
+<h1>Settings</h1>
+<p class="lead">File &gt; Settings (<kbd>Ctrl</kbd>+<kbd>,</kbd>). Every number is held to the range it can take.</p>
+<figure><img src="img/settings.png" alt="The settings window"><figcaption>Settings &gt; General.</figcaption></figure>
+
+<table>
+  <tr><th>Page</th><th>Holds</th></tr>
+  <tr><td>General</td><td>The <b>Language</b> (and your own lang folder, and saving the text not translated yet), UI scale and fit to the screen, <b>Low performance mode</b>, the title bar, <b>Touch screen mode</b>, which mode it opens in and the welcome question, reopen the last file, offer Detect on open, auto save, the editor's font; <b>Simulation</b>: the speed, Fast boot, live trace on the maps, follow reads when stepping; table editing and the live cell's trail.</td></tr>
+  <tr><td>Panel zoom</td><td>Each panel's own zoom (set with <kbd>Ctrl</kbd> + mouse wheel), and putting them back.</td></tr>
+  <tr><td>Colours</td><td>The <b>Theme</b>: Dark (the default), Light, or High contrast for a laptop out in the sun (every window black and white, the colours at full strength); <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> goes round the three. The table colours, the source's colours and the live-cell marks.</td></tr>
+  <tr><td>Hot keys</td><td>Every key the program and the tables answer to — see <a href="shortcuts.html">Keyboard shortcuts</a>.</td></tr>
+  <tr><td>Units</td><td>The unit for each kind of measurement, on its own: temperature, pressure (or as the ROM has it), boost, road speed, distance, weight, power, torque, length, area, inertia, force, mixture (AFR or lambda), injector flow and fuel volume. Buttons set all metric, all imperial (US) or the UK mix. Everything shown follows it, and what you type is put back in the unit the ROM keeps.</td></tr>
+  <tr><td>Dyno</td><td>The <a href="dyno.html">virtual dyno</a>'s results, correction, AFR source and hotkey; restore the default profiles; clear every saved run.</td></tr>
+  <tr><td>Emulator &amp; datalog</td><td>The datalog's port, protocol and interval, how many frames to keep, <b>Smoothing</b>, driving the simulator with the car's readings, a wideband on its own port, aux channels; the <b>Emulator</b>'s port and uploading changes as they are made; hit trace; serial timing (the pause between request and answer, DTR and RTS) and <b>Reconnecting</b> (the attempts and the gap between them).</td></tr>
+  <tr><td>Targets</td><td>The AFR wanted, low cam and high cam, on grids shaped like the fuel map.</td></tr>
+  <tr><td>Corrections</td><td>How a wideband's readings correct the fuel, and the analog input curves (a sensor's volts to its reading).</td></tr>
+  <tr><td>Processor</td><td>The chip being simulated: the MSM66207 (P28 / P30 boards) or the MSM66911 (P13 / P14), each with its own peripherals.</td></tr>
+  <tr><td>MCP server</td><td>The HTTP server for AI agents and other programs: on or off, the port, a password, remote connections, read-only. See <a href="mcp.html">MCP server</a>.</td></tr>
+  <tr><td>Plugins</td><td>The plugin <span class="path">.dll</span>s to load, and the guide to writing one. See <a href="plugins.html">Plugins</a>.</td></tr>
+  <tr><td>Updates</td><td>What the website has that differs from what is here; check at start.</td></tr>
+  <tr><td>About</td><td>The version, the author, the website and the <a href="licence.html">licence</a>.</td></tr>
+</table>
+
+<figure><img src="img/settings-units.png" alt="Settings, Units: a unit for each kind of measurement"><figcaption>Settings &gt; Units.</figcaption></figure>
+<figure><img src="img/settings-dyno.png" alt="Settings, Dyno: results, correction, AFR and runs"><figcaption>Settings &gt; Dyno.</figcaption></figure>
+
+<h2>Languages</h2>
+<p>The app is in English, Chinese, Spanish, French, Portuguese, Russian, Hungarian and German. Each language is a <span class="path">.json</span> file in the <span class="path">lang</span> folder beside the program, read when the app starts: English text on the left, its translation on the right. Anything not in the file stays English. To fix a translation or add a language, copy a file into your own lang folder (the <b>Folder</b> button beside the language), rename it and edit it; it is offered at the next start. With a language in use, <b>Save the text not translated yet</b> writes the English text seen on screen that has no translation, ready to fill in.</p>
+
+<footer>Rom Sim Studio 0.0.0.8 · by bmgjet · <a href="licence.html">Licence</a></footer>
+</main></div>
+<script src="guide.js"></script>
+</body>
+</html>

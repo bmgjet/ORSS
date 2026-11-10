@@ -113,6 +113,7 @@ module provides, only when the module asks for it in its `XP_DEFS` part. One mod
 | `NEED_IACV` | `mod_iacv` | main loop, before the idle valve duty word is stored | A = the duty word; raise or replace it. er0 is free. |
 | `NEED_CFGOVERRIDE` | `mod_cfgoverride` | each time the option bytes / board resistors are decoded (bank page 2) | Change the feature flags 216h/217h/219h/227h. |
 | `NEED_INJSKIP` | `mod_injskip` | injector interrupt, each time injectors are about to open | A (byte) = the injectors to open (a 0 bit opens one); return it, FFh opens none. Keep every register, and return in byte mode (after `POPS A`, `LB A, ACC`). |
+| `NEED_INJCUT` | `mod_injcut` | the same, straight after `mod_injskip` | As `mod_injskip` (a second module can keep injectors shut: the service commands' cylinder test). The bank is page 1 there (`off(001xxh)` reaches 100h-1FFh). |
 | `NEED_VTECHOOK` | `mod_vtec` | main loop, before the stock VTEC decision (its rpm flags and load point worked out) | C clear: the stock decision. C set: A (byte) = 0 no VTEC at all, 1 off for now, 2 on. r0, r1, r6, r7 are free; keep the rest. |
 | `NEED_DECELPOP` | | | A hook in the skeleton with no module using it. |
 
@@ -145,7 +146,8 @@ it alone.
 
 So start every stretch of byte work with `CLRB A` (or an `LB`), and every stretch of word work with an `L`
 or `CLR`. The assembler cannot see a wrong mode, and neither can a quick test on the bench. It shows up as
-an instruction decoded one byte long or short, and the ECU runs off into the weeds.
+an instruction decoded one byte long or short, and the ECU runs off into the weeds. `SkeletonTest --only ddmode`
+reads every module's straight-line code for an accumulator instruction in the wrong mode.
 
 ## Rules
 

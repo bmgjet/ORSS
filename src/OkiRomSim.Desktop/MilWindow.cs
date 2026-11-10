@@ -90,7 +90,7 @@ public sealed class MilWindow : Window
     Control Row(int code, string detail, bool canDisable = false)
     {
         var g = new Grid { ColumnDefinitions = new ColumnDefinitions("44,*,Auto") };
-        var c = new TextBlock { Text = code.ToString(), FontFamily = MainWindow.MonoFont, FontSize = 14, FontWeight = FontWeight.Bold };
+        var c = new TextBlock { Text = code.ToString(), FontFamily = UiFonts.Mono, FontSize = 14, FontWeight = FontWeight.Bold };
         var d = new TextBlock { Text = MilMonitor.Name(code) + (detail.Length > 0 ? "   " + detail : ""), FontSize = 12, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
         Grid.SetColumn(d, 1);
         g.Children.Add(c); g.Children.Add(d);
@@ -147,7 +147,7 @@ public sealed class MilWindow : Window
         var v = _host.Mil();
         _lamp.Fill = v.Lamp ? LampOn : Off;
         _led.Fill = v.Flash ? LedOn : Off;
-        _syncing = true; _scc.IsChecked = v.Scc; _scc.IsEnabled = _setScc != null && !Bus.Is66911; _syncing = false;
+        _syncing = true; _scc.IsChecked = v.Scc; _scc.IsEnabled = _setScc != null && !Chip.Is66911; _syncing = false;
         _state.Text = !_host.IsRunning ? "Simulator paused" + (v.Stored.Count > 0 ? $" - {v.Stored.Count} code(s) stored" : "")
             : v.Stored.Count == 0 ? (v.Lamp ? "Lamp on (bulb check)" : "No codes stored")
             : v.Scc ? "Flashing the stored codes" : "Lamp on: code(s) stored - jump the service check connector to read them on the dash";

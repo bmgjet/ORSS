@@ -15,7 +15,7 @@ namespace OkiRomSim.Desktop;
 /// Tools > Import maps: open another ROM (a .bin of any family the app knows, or a source), see what maps and settings it has, and bring the ones picked into the ROM that is open - a tune's fuel and ignition into a new ROM built from the skeleton, say. Each of the other ROM's tables is paired with this ROM's table that does the same job (the same page row, the same name, or a fuel / ignition / VE map for the same cam); values move in real units, and a table of another size or with other breakpoints goes in the way picked for it: by breakpoints, stretched end to end, or cell for cell. The preview draws the three tables - the other ROM's, this ROM's now and after - in the same Table, Line and 3D views the Calibration page has. Everything imported is one undo step.
 public sealed class ImportMapsWindow : Window
 {
-    readonly SimHost _host;
+    readonly AppHost _host;
     readonly Func<Task>? _detectHere;
     readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0) };
     readonly StackPanel _list = new() { Spacing = 1 };
@@ -66,7 +66,7 @@ public sealed class ImportMapsWindow : Window
             "Cell for cell from the top left corner, whatever the breakpoints say. Cells this table has beyond the other's are left as they are."),
     ];
 
-    public ImportMapsWindow(SimHost host, Func<Task>? detectHere = null)
+    public ImportMapsWindow(AppHost host, Func<Task>? detectHere = null)
     {
         _host = host; _detectHere = detectHere;
         Title = "Import maps";
@@ -225,15 +225,15 @@ public sealed class ImportMapsWindow : Window
         {
             var bytes = await File.ReadAllBytesAsync(path);
             // a 64 KB (512) chip image holds two ROMs: the half the ECU runs
-            if (bytes.Length == Bus.RomSize * 2)
+            if (bytes.Length == Chip.RomSize * 2)
             {
-                bool lowBlank = bytes[..Bus.RomSize].All(b => b == 0xFF) || bytes[..Bus.RomSize].All(b => b == 0);
+                bool lowBlank = bytes[..Chip.RomSize].All(b => b == 0xFF) || bytes[..Chip.RomSize].All(b => b == 0);
                 var pick = lowBlank ? "Upper half" : await Dialogs.Ask(this, "64 KB image",
                     $"{Path.GetFileName(path)} holds two 32 KB ROMs. Which one has the maps you want?", "Cancel", "Lower half", "Upper half");
                 if (pick is null or "Cancel") return;
-                image = pick == "Upper half" ? bytes[Bus.RomSize..] : bytes[..Bus.RomSize];
+                image = pick == "Upper half" ? bytes[Chip.RomSize..] : bytes[..Chip.RomSize];
             }
-            else if (bytes.Length > Bus.RomSize + 1) { _status.Text = $"{Path.GetFileName(path)} is {bytes.Length} bytes: not a ROM image this app reads"; return; }
+            else if (bytes.Length > Chip.RomSize + 1) { _status.Text = $"{Path.GetFileName(path)} is {bytes.Length} bytes: not a ROM image this app reads"; return; }
         }
         _status.Text = $"reading {Path.GetFileName(path)}: working out what it is and finding its maps…";
         _list.Children.Clear(); _rows.Clear(); _src = null; _import.IsEnabled = false;

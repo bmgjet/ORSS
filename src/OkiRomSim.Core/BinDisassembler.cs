@@ -51,12 +51,12 @@ public static class BinDisassembler
     public static BinDisassembly Disassemble(byte[] rom, string title,
         Func<string, (byte[]? image, IEnumerable<int> badLines)>? assemble = null, IReadOnlyDictionary<int, string>? names = null)
     {
-        var image = new byte[Bus.RomSize];
+        var image = new byte[Chip.RomSize];
         Array.Fill(image, (byte)0xFF);
-        Array.Copy(rom, image, Math.Min(rom.Length, Bus.RomSize));
+        Array.Copy(rom, image, Math.Min(rom.Length, Chip.RomSize));
 
         var insns = new SortedDictionary<int, Insn>();
-        var owner = new int[Bus.RomSize];          // address -> start of the instruction covering it, or -1
+        var owner = new int[Chip.RomSize];          // address -> start of the instruction covering it, or -1
         Array.Fill(owner, -1);
         var labels = new Dictionary<int, string>();
         var work = new Stack<(int addr, bool dd)>();
@@ -65,7 +65,7 @@ public static class BinDisassembler
         for (int v = 0; v < VectorTableEnd / 2; v++)
         {
             int target = image[v * 2] | (image[(v * 2) + 1] << 8);
-            if (target < VectorTableEnd || target >= Bus.RomSize) continue;
+            if (target < VectorTableEnd || target >= Chip.RomSize) continue;
             labels.TryAdd(target, VectorNames[v]);
             // Reset starts with PSW cleared (DD=0); handlers inherit whatever was running, and nearly all open with a word load, so try DD=1.
             work.Push((target, v != 0));
@@ -75,13 +75,13 @@ public static class BinDisassembler
         {
             var (start, ddIn) = work.Pop();
             int pc = start; bool dd = ddIn;
-            while (pc >= VectorTableEnd && pc < Bus.RomSize)
+            while (pc >= VectorTableEnd && pc < Chip.RomSize)
             {
                 if (owner[pc] == pc) break;          // already decoded from here
                 if (owner[pc] >= 0) break;           // lands inside another instruction
                 int at = pc;
-                var d = Decoder.Decode(dd, i => at + i < Bus.RomSize ? image[at + i] : (byte)0xFF);
-                if (d == null || at + d.Len > Bus.RomSize) break;
+                var d = Decoder.Decode(dd, i => at + i < Chip.RomSize ? image[at + i] : (byte)0xFF);
+                if (d == null || at + d.Len > Chip.RomSize) break;
                 bool overlaps = false;
                 for (int i = 0; i < d.Len; i++) if (owner[at + i] >= 0) { overlaps = true; break; }
                 if (overlaps) break;
@@ -92,7 +92,7 @@ public static class BinDisassembler
 
                 string op = Op(d.Mnemonic);
                 int? target = Target(d, next);
-                if (target is int t && t >= VectorTableEnd && t < Bus.RomSize)
+                if (target is int t && t >= VectorTableEnd && t < Chip.RomSize)
                 {
                     labels.TryAdd(t, (op is "CAL" or "SCAL" ? "sub_" : "loc_") + t.ToString("X4"));
                     work.Push((t, dd));
@@ -108,7 +108,7 @@ public static class BinDisassembler
             var used = new HashSet<string>(labels.Values, StringComparer.OrdinalIgnoreCase);
             foreach (var (addr, name) in names.OrderBy(kv => kv.Key))
             {
-                if (addr < VectorTableEnd || addr >= Bus.RomSize || !Regex.IsMatch(name, @"^[A-Za-z_]\w*$") || used.Contains(name)) continue;
+                if (addr < VectorTableEnd || addr >= Chip.RomSize || !Regex.IsMatch(name, @"^[A-Za-z_]\w*$") || used.Contains(name)) continue;
                 if (OkiRomSim.Assembler.Lexer.IsReservedWord(name) || OkiRomSim.Assembler.OkiAssembler.Sfrs.ContainsKey(name)) continue;
                 if (owner[addr] >= 0 && owner[addr] != addr) continue;      // inside an instruction: nowhere to put it
                 if (labels.TryGetValue(addr, out var was)) used.Remove(was);
@@ -129,7 +129,7 @@ public static class BinDisassembler
             foreach (var line in badLines)
                 if (lineToInsn.TryGetValue(line, out var a)) bad.Add(a);
             if (built != null)
-                for (int i = 0; i < Bus.RomSize; i++)
+                for (int i = 0; i < Chip.RomSize; i++)
                     if (built[i] != image[i] && owner[i] >= 0) bad.Add(owner[i]);
             if (built != null && bad.Count == 0 && built.AsSpan().SequenceEqual(image))
             {
@@ -148,7 +148,7 @@ public static class BinDisassembler
             // A demoted branch target keeps its label but loses nothing else.
         }
         result.CodeInstructions = insns.Values.Count(i => !i.Demoted);
-        result.DataBytes = Bus.RomSize - insns.Values.Where(i => !i.Demoted).Sum(i => i.D.Len);
+        result.DataBytes = Chip.RomSize - insns.Values.Where(i => !i.Demoted).Sum(i => i.D.Len);
         return result;
     }
 
@@ -181,6 +181,8 @@ public static class BinDisassembler
         Line("; control flow from the reset, interrupt and VCAL vectors; everything that flow");
         Line("; never reached (tables, calibration data, unused space) is kept as DB bytes.");
         Line("; Assembling this file reproduces the original image byte for byte.");
+        // a P13 image: said so, so the file is assembled with the MSM66911's register names when it is opened again
+        if (Chip.Is66911) Line("; processor: " + ProcessorProfile.Msm66911().Name);
         Line("");
         Line("                org 0000h");
 
@@ -206,7 +208,7 @@ public static class BinDisassembler
             data.Clear();
         }
 
-        while (pc < Bus.RomSize)
+        while (pc < Chip.RomSize)
         {
             bool isCode = insns.TryGetValue(pc, out var ins) && !ins.Demoted;
             if (labels.TryGetValue(pc, out var label) || isCode)

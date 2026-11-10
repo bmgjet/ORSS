@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Regression tests for Rom Sim Studio and RomSimTuner: a console program with no test framework and no NuGet packages of its own,
+       so it runs anywhere the .NET 10 SDK does, offline included. How to run it, and the arguments that pick or list the groups, are at
+       the top of Program.cs (an XML comment cannot hold the double dash they start with). The exit code is the number of failures. Both programs are built first (the references below), so the build checks run against
+       the very builds this configuration makes. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>OkiRomSim.Tests</RootNamespace>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\OkiRomSim.Assembler\OkiRomSim.Assembler.csproj" />
+    <ProjectReference Include="..\..\src\OkiRomSim.Core\OkiRomSim.Core.csproj" />
+    <ProjectReference Include="..\..\src\OkiRomSim.Calibration\OkiRomSim.Calibration.csproj" />
+    <ProjectReference Include="..\..\src\OkiRomSim.Sim\OkiRomSim.Sim.csproj" />
+    <ProjectReference Include="..\..\src\OkiRomSim.Mcp\OkiRomSim.Mcp.csproj" />
+    <!-- the tuning-only build: its RomHost and emulator code are tested here (as "tuner::"; it carries its own copy of three MCP ROM-model files) -->
+    <ProjectReference Include="..\..\src\OkiRomSim.Tuner\OkiRomSim.Tuner.csproj" Aliases="tuner" />
+    <!-- the full program is built too (not referenced): its self-tests run as a separate process -->
+    <ProjectReference Include="..\..\src\OkiRomSim.Desktop\OkiRomSim.Desktop.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="data\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

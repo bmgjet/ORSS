@@ -56,7 +56,7 @@ endif
 if XP == XP_CODE
 fueltrim_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -106,7 +106,7 @@ fueltrim_set:   MOV     DP, #fueltrim_value
 ; works in the scratch bank, as lib's mod_fuel_apply does.
 fueltrim_fuel_apply:
                 PUSHS   LRB
-                MOV     LRB, #0007eh
+                MOV     LRB, #SVC_BANKF
                 L       A, DP
                 PUSHS   A
                 MOV     DP, #fueltrim_scale
@@ -115,7 +115,7 @@ fueltrim_fuel_apply:
                 CMP     A, #08000h
                 JEQ     fueltrim_fuel_done     ; x 1.0
                 ST      A, er0
-                MOV     DP, #00146h
+                MOV     DP, #SVC_FUELPW
                 L       A, [DP]
                 MUL                            ; er1:A = pulse x scale
                 SLL     A                      ; / 8000h

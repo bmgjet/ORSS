@@ -194,7 +194,7 @@ public static class CalibrationDetector
             var op = d.Mnemonic.Split(' ')[0];
             if (op is not ("LC" or "LCB") || !d.Mnemonic.Contains("N16")) continue;
             int t = d.Fields.N16;
-            if (t < 0x38 || t >= Bus.RomSize || IsCode(t)) continue;
+            if (t < 0x38 || t >= Chip.RomSize || IsCode(t)) continue;
             targets[t] = op == "LC";
         }
         var keys = targets.Keys.ToList();

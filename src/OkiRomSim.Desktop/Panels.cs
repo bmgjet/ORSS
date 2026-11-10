@@ -81,22 +81,23 @@ public static class Panels
     }
 }
 
+#if !TUNER_ONLY
 /// The CPU at a glance: the PC and the routine it is in, the registers in a grid (a value that changed with the last step shows in orange), the PSW flags as lamps, and the time simulated.
 public sealed class CpuView : Control
 {
-    SimHost.Snapshot? _s;
+    AppHost.Snapshot? _s;
     string _label = "", _hot = "";
     readonly Dictionary<string, string> _before = [], _now = [];
     readonly HashSet<string> _changed = [];
-    static readonly Typeface Mono = new(MainWindow.MonoFont);
-    static readonly Typeface MonoBold = new(MainWindow.MonoFont, FontStyle.Normal, FontWeight.Bold);
+    static readonly Typeface Mono = new(UiFonts.Mono);
+    static readonly Typeface MonoBold = new(UiFonts.Mono, FontStyle.Normal, FontWeight.Bold);
     static readonly Typeface Ui = new(FontFamily.Default);
     static readonly IBrush Lamp = AppTheme.Brush(Color.FromArgb(200, 0x3c, 0xc8, 0x5a));
     static readonly IBrush LampOff = AppTheme.Brush(Color.FromArgb(40, 255, 255, 255));
     static readonly IBrush Cell = AppTheme.Brush(Color.FromArgb(14, 255, 255, 255));
     const double CellW = 116, CellH = 22, Pad = 10;
 
-    public void Update(SimHost.Snapshot s, string label, string hot)
+    public void Update(AppHost.Snapshot s, string label, string hot)
     {
         (string, string)[] regs =
         [
@@ -185,3 +186,4 @@ public sealed class CpuView : Control
         }
     }
 }
+#endif

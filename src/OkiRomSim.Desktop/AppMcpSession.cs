@@ -35,7 +35,7 @@ public sealed class AppMcpSession : IMcpSession
         var s = _host.State();
         var sb = new StringBuilder();
         sb.AppendLine(_host.LoadedPath == null ? "nothing open" : $"open: {_host.LoadedPath}{(_host.RomDirty ? " (calibration edited, not saved)" : "")}");
-        sb.AppendLine($"processor: {ProcessorProfile.Current.Name} on {ProcessorProfile.Current.Board}, {Bus.CrystalMHz:0.##} MHz");
+        sb.AppendLine($"processor: {ProcessorProfile.Current.Name} on {ProcessorProfile.Current.Board}, {Chip.CrystalMHz:0.##} MHz");
         sb.AppendLine($"build: {(_host.Assembly == null ? "none" : $"{_host.Assembly.UsedBytes} bytes used, {_host.Assembly.SourceMap.Count} source lines")}");
         sb.AppendLine($"definitions: {_host.Defs().Items.Count} ({string.Join(", ", _host.Defs().Items.GroupBy(i => i.Category).Select(g => $"{g.Count()} {g.Key}"))})");
         sb.AppendLine($"simulator: {s.StopReason} at {s.Pc:X4} {s.Label}, {s.SimSeconds:0.00} s simulated, rpm {s.Rpm:0}, MAP {s.Map:0} kPa");
@@ -47,7 +47,7 @@ public sealed class AppMcpSession : IMcpSession
 
     public string? RomPath => _host.LoadedPath;
     public int Version => _host.Version;
-    public byte[] Rom() => _host.RomBytes(0, Bus.RomSize);
+    public byte[] Rom() => _host.RomBytes(0, Chip.RomSize);
     public AssemblyResult? Assembly => _host.Assembly;
     public IReadOnlyList<(string Path, string Text)> Sources() => Ui(() => _sources());
     public DefinitionSet Definitions() => _host.Defs();
@@ -123,7 +123,17 @@ public sealed class AppMcpSession : IMcpSession
                     var p = port ?? MoatesTrace.Ports().LastOrDefault() ?? throw new ToolException("no serial port found; give port");
                     var r = _host.EmulatorConnect(p);
                     Notify("MCP connected the emulator: " + r);
-                    return r;
+                    // the same rule as connecting in the app: nothing is written into the emulator until it is known to hold this ROM
+                    // (read back and found the same) or the whole ROM has been uploaded - edits are never spliced into another ROM
+                    if (!_host.CanUpload(out _)) return r + "\nnothing is open in the app: the emulator keeps its ROM";
+                    try
+                    {
+                        var (diff, first) = _host.EmulatorCompare();
+                        return diff == 0
+                            ? r + "\nthe emulator already holds the ROM open in the app: calibration edits go up as they are made when auto-upload is on"
+                            : r + $"\nthe emulator holds a DIFFERENT ROM ({diff} bytes differ, first at {first:X4}): no edit is sent into it until action=upload sends the whole ROM open in the app";
+                    }
+                    catch (Exception ex) { return r + "\ncould not read the emulator back to compare (" + ex.Message + "): no edit is sent into it until action=upload"; }
                 }
             case "upload":
                 if (!_host.Emulator.Connected) throw new ToolException("the emulator is not connected (action connect first)");
@@ -152,7 +162,11 @@ public sealed class AppMcpSession : IMcpSession
                     var (port, proto, baud) = _datalogSettings();
                     port = S("port") ?? port; proto = S("protocol") ?? proto;
                     if (port.Length == 0) throw new ToolException("no port: pass port (a serial port, or 'simulator')");
-                    Ui(() => { _datalog.Port = port; _datalog.Protocol = proto; _datalog.Stop(); _datalog.Start(); return 0; });
+                    Ui(() => { _datalog.Port = port; _datalog.Protocol = proto; return 0; });
+                    // a log already running is stopped here, and the stop waited for: the view's own stop runs in the background, so
+                    // starting straight after it found the old link still up, did nothing, and the log stayed stopped
+                    if (e.Running || e.Watch.Wanted) e.Stop();
+                    Ui(() => { _datalog.UpdateConnect(); _datalog.Start(); return 0; });
                     Thread.Sleep(1500);
                     Notify($"MCP started datalogging on {port}");
                     return $"started on {port} ({proto}): {e.Status}";

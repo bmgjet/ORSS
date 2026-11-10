@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Setting up a ROM — Rom Sim Studio guide</title>
+<link rel="icon" href="../favicon.ico">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<header class="topbar"><button class="menu-btn" aria-label="Contents">☰</button><a class="logo" href="index.html">ROM SIM <b>STUDIO</b></a><span class="sp"></span><span class="links"><a href="../">Website</a> &nbsp;·&nbsp; <a href="../#start">Download</a></span></header>
+<div class="frame"><nav class="side"></nav><main>
+
+<h1>Setting up a ROM</h1>
+<p class="lead">File &gt; Set-up wizard sets a ROM up for the engine stage by stage, with presets for each stage. File &gt; Change functions adds functions to a ROM you already have, or takes them out, and keeps its tune.</p>
+
+<h2>The set-up wizard</h2>
+<p>A new ROM is offered the wizard as soon as it is made (File &gt; New ROM, from a template or from the skeleton). It can be run again at any time from <b>File &gt; Set-up wizard…</b>. It works on the HTS115 and HTS120 templates and on ROMs built from the skeleton. A setting the ROM does not have is greyed out and marked <i>not in this ROM</i>.</p>
+<p>Nothing is written until <b>Apply</b> on the last page, which lists every change first. Everything is applied as one step, so <kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes the whole set-up.</p>
+<table>
+  <tr><th>Page</th><th>What it sets</th></tr>
+  <tr><td>1 Engine</td><td><b>Base maps</b>: keep the ROM's own maps, or start from the fuel and ignition maps of a stock ECU (25 of them, from the D15B and D16 ECUs to the B16A, B18C, H22 and F22, each with its engine and market). Picking one fills in its VTEC point, rev limit and injector size on the pages that follow. <b>VTEC</b>: whether the engine has it and where it engages. <b>Rev limit</b>.</td></tr>
+  <tr><td>2 Injectors and fuel</td><td>The injectors the maps were written for and the ones fitted (every pulse is scaled by the two), the injector <b>lag</b> against battery voltage from a list of 138 injectors, and the overall, cranking, post-start and tip-in trims. It can suggest the cranking and tip-in trims for the new injectors.</td></tr>
+  <tr><td>3 Sensors and gearbox</td><td>The <b>MAP sensor</b> fitted, from the list of sensors (stock, GM, AEM, Omnipower, Motec and more). The <b>gearbox</b>, from 14 Civic, Integra and Prelude gearboxes, sets the gear boundaries the ROM works the gear out from.</td></tr>
+  <tr><td>4 Boost</td><td>Naturally aspirated, or turbo / supercharged: how much boost, the fuel added for each bar, the timing taken out for each psi, and a boost cut.</td></tr>
+  <tr><td>5 Options</td><td>The ROM's own switches (the ROM options page), ticked as they are now.</td></tr>
+  <tr><td>6 Summary</td><td>Everything Apply will change, and anything that could not be done in this ROM and why.</td></tr>
+</table>
+
+<h3>Base maps from a stock ECU</h3>
+<p>On an HTS115 or HTS120 ROM, the stock ECU's whole calibration block goes in where it came from, as the established tuning software's base map does. On a ROM built from the skeleton, each map goes to the map here that does the same job (low and high cam fuel and ignition), converted through real units onto this ROM's own breakpoints. This is the same matching that <a href="tools.html">Import maps</a> uses.</p>
+
+<h3>MAP sensor</h3>
+<p>Every load breakpoint of every map, and every setting that is a pressure (a boost cut, a GIO window), is moved to the count that means the same pressure on the new sensor. The ROM also records which sensor is fitted, so the app shows its pressures, and the datalog's MAP, on the right scale. An HTS ROM records it in its MAP preset; a ROM built from the skeleton records it on its <b>MAP sensor</b> page, in two settings the ECU itself never reads. On the Calibration page, <b>Tools &gt; MAP sensor size…</b> does the same swap on its own.</p>
+<p>A ROM built from the skeleton reads its maps against a load index that starts at about 0.3 bar on a 3 bar sensor, so very high vacuum shares the first column. The index tops out at about 1.9 bar (12 psi of boost). For more boost than that, look-ups by throttle (Alpha-N) or a larger load index are needed.</p>
+
+<h3>Boost</h3>
+<p>On each fuel and ignition map read against manifold pressure, the load columns are spread up to the boost asked for. The columns up to the air outside are kept as far as there is room, and two to four columns are added above it. Each boost column takes its fuel from the last column below the air outside, plus the percentage for each bar of boost (100 % follows the extra air). Its timing is the same column's less the degrees for each psi. Each fuel map's column multipliers are raised where a boost column needs more than a byte can hold. Fit a MAP sensor that reads the boost (page 3) first.</p>
+<div class="note warn"><b>A start, not a tune</b>The wizard gives the engine somewhere sensible to start. Check the fuel on a wideband, and the timing for knock, before using the boost.</div>
+
+<h2 id="change">Changing the functions of a ROM you have</h2>
+<p><b>File &gt; Change functions…</b> rebuilds a ROM made from the skeleton with functions added or taken out, and keeps its tune. For example, VTEC control can be added after the engine is converted to VTEC, or a datalog or launch control added later, without starting a new ROM.</p>
+<ol class="steps">
+  <li>Open the ROM: its build file (the <span class="path">.asm</span> New ROM wrote), or a <span class="path">.bin</span> saved from it.</li>
+  <li><b>File &gt; Change functions…</b> shows the New ROM list with the functions the ROM has now ticked in bold, and the same ROM space, module RAM and interrupt time bars and checks.</li>
+  <li>Tick what to add and untick what to take out, then <b>Rebuild with these</b>.</li>
+  <li>The ROM is built again, and every setting and map the two builds share is carried across from the ROM that was open: the fuel and ignition maps, the rev limits, and every module's settings. Each goes to wherever the new build put it. A function added starts at its factory settings (modules switched off until you switch them on). A function taken out takes its settings with it.</li>
+  <li>A build file has its define lines changed in place. A <span class="path">.bin</span> gets a build file written beside it, and is offered to be saved over the old one (kept as <span class="path">.bak</span>, with a definitions file beside it).</li>
+</ol>
+<p><kbd>Ctrl</kbd>+<kbd>Z</kbd> takes the carried tune back off. Nothing is saved until you save.</p>
+<p>A <span class="path">.bin</span> knows what it was built with because every ROM built from the skeleton carries a short build table: a few bytes, one for each function. A <span class="path">.bin</span> made before 0.0.0.5 has no table: open its build file instead. If it was built from an older skeleton, keep its definitions file beside it.</p>
+<p>A ROM made from a template such as HTS120 or HTS115 has all its functions in already: switch them on in their pages.</p>
+
+<h2>VTEC</h2>
+<p>The VTEC page has the stock VTEC points, and with <b>VTEC control</b> built in (in Default, or added by Change functions) everything the established tuning software offers:</p>
+<table>
+  <tr><th>Setting</th><th>What it does</th></tr>
+  <tr><td>Enable VTEC</td><td>Off: the solenoid is never switched on (a non-VTEC head, or a conversion not wired yet).</td></tr>
+  <tr><td>Use these engage points</td><td>On: the points and conditions on the page decide. Off: the stock points decide, as without the module.</td></tr>
+  <tr><td>High / low load engage</td><td>The engage rpm at or above the high-load throttle, and at or below the low-load throttle, on a straight line in between.</td></tr>
+  <tr><td>Disengage delay</td><td>Once in, VTEC stays in until the rpm is this far under the engage point, so it does not chatter.</td></tr>
+  <tr><td>Minimum ECT, speed and load</td><td>Coolant at least this warm, road speed at least this (above 0 keeps VTEC out at a standstill), manifold pressure at least this.</td></tr>
+  <tr><td>Disable speed / temp / error check</td><td>Leave the road speed or coolant out, or engage even with a sensor fault stored.</td></tr>
+  <tr><td>Alternative output</td><td>Repeat the VTEC solenoid on another output: a VTEC lamp, or a solenoid wired to a different pin.</td></tr>
+</table>
+
+<footer>Rom Sim Studio 0.0.0.8 · by bmgjet · <a href="licence.html">Licence</a></footer>
+</main></div>
+<script src="guide.js"></script>
+</body>
+</html>

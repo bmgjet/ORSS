@@ -7,8 +7,9 @@
 ;> ram: 1F7h, 2FFh
 ;> pages: datalog
 ;> about: Over the datalog cable (Datalogging > Codes and service…): clear the trouble codes, injectors
-;>        off, the timing locked for a timing light, the maps picked and the GIO outputs forced on. The
-;>        check-engine lamp flashes quickly while the injectors are off or the timing is locked.
+;>        off, the timing locked for a timing light, the maps picked, the GIO outputs forced on, and the
+;>        cylinder test - one cylinder's injector cut at a time, to find the one that is not firing (cutting
+;>        it changes nothing). The check-engine lamp flashes quickly while any of these is on.
 ;
 ; The 5xh commands of datalog.asm. Each is one byte, answered with one byte: the command itself when it is
 ; taken, 7Fh when this ROM cannot do it (the module it needs is not built in). Everything they set is
@@ -20,9 +21,12 @@
 ;        (FEAT_MAPSWITCH or FEAT_DUALMAPS; the module must be enabled)
 ;   58h-5Bh  GIO 1-4: forced on, or back to its own conditions (a toggle; the answer is the command when it
 ;        is now forced on, 00h when it is back to its conditions; the GIO must be enabled, with an output)
-;   5Eh  all of the above back to normal         5Fh  the state: the DL_SVC byte below
-; While the injectors are off or the timing is locked the check-engine lamp flashes quickly (about four
-; times a second), whatever else drives it, so a service mode is never left on unnoticed.
+;   5Eh  all of the above back to normal (the cylinder test too)   5Fh  the state: the DL_SVC byte below
+;   63h  the cylinder test off: every injector back      64h-67h  cylinder 1-4's injector cut (only one at a
+;        time: the one cut before comes back first). The engine runs on the other three; on an engine that
+;        already runs on three, the cylinder whose cut changes nothing is the one not firing.
+; While the injectors are off, the timing is locked or a cylinder is cut, the check-engine lamp flashes quickly
+; (about four times a second), whatever else drives it, so a service mode is never left on unnoticed.
 ; ==================================================================================================
 ifdef FEAT_DLSERVICE
 
@@ -31,11 +35,16 @@ ifndef NEED_OUTPORT
 define NEED_OUTPORT
 endif
 ; two bytes the skeleton and stock P30 never touch (not module RAM: that is full with every module built in)
-DL_SVC              EQU     002ffh              ; bits: 0 injectors off, 1 timing locked, 2 map chosen here, 3 that map is
+; DL_SVC (features.inc, by platform): their state: bits 0 injectors off, 1 timing locked, 2 map chosen here, 3 that map is
                                                 ;   the secondary one, 4-7 GIO 1-4 forced on. Written by the receive interrupt only.
-DL_SVCX             EQU     001f7h              ; bits: 0 the lamp is taken for the flashing (tick), 1 clear the codes (set by the
-                                                ;   receive interrupt, cleared by the main loop). Single-instruction bit set and
-                                                ;   clear only, so the three never undo each other.
+DL_SVCX             EQU     SVC_MODLIB + 6              ; bits: 0 the lamp is taken for the flashing (tick), 1 clear the codes (set by the
+                                                ;   receive interrupt, cleared by the main loop), 4-7 the cylinder test's injector
+                                                ;   kept shut (as its P2 bit: 4 P2.0 cylinder 1, 5 P2.1 cylinder 3, 6 P2.2 cylinder 4,
+                                                ;   7 P2.3 cylinder 2 - the injectors are wired in firing order). Single-instruction
+                                                ;   bit set and clear only, so the three never undo each other.
+ifndef NEED_INJCUT
+define NEED_INJCUT
+endif
 ; its tick slot (SLOT_DLSERVICE) comes from features.inc: tick mod 16, about 30 times a second
 endif
 
@@ -181,6 +190,8 @@ dls_gio_off:    CLRB    A
 dls_state:      CMPB    A, #05eh
                 JNE     dls_c5f
                 MOVB    [DP], #000h            ; 5Eh: everything back to normal
+                MOV     DP, #DL_SVCX           ; (the cylinder test too)
+                CAL     dls_cyl_none
                 J       dls_ok
 dls_c5f:        CMPB    A, #05fh
                 JNE     dls_no
@@ -192,6 +203,50 @@ dls_ok:         LB      A, r1
 dls_no:         LB      A, #07fh
                 J       dl_rx_send
 
+; ------------------------------------------------------------------ 63h-67h: the cylinder test (datalog.asm's receive interrupt)
+; In: A (byte) = the command, bank 6Fh, DP pushed. 63h: none cut; 64h-67h: cylinder 1-4's injector kept shut, the one
+; before back first (one at a time). Answer: the command.
+dl_rx_cylcut:   STB     A, r1
+                MOV     DP, #DL_SVCX
+                CAL     dls_cyl_none           ; whichever was cut, back
+                LB      A, r1
+                CMPB    A, #064h
+                JLT     dls_ok                 ; 63h: that is all
+                JNE     dls_cyl_2
+                SB      [DP].4                 ; 64h: cylinder 1 (P2.0)
+                J       dls_ok
+dls_cyl_2:      CMPB    A, #065h
+                JNE     dls_cyl_3
+                SB      [DP].7                 ; 65h: cylinder 2 (P2.3)
+                J       dls_ok
+dls_cyl_3:      CMPB    A, #066h
+                JNE     dls_cyl_4
+                SB      [DP].5                 ; 66h: cylinder 3 (P2.1)
+                J       dls_ok
+dls_cyl_4:      SB      [DP].6                 ; 67h: cylinder 4 (P2.2)
+                J       dls_ok
+; DP = DL_SVCX: no injector cut (a bit at a time: the tick and the main loop write this byte's other bits)
+dls_cyl_none:   RB      [DP].4
+                RB      [DP].5
+                RB      [DP].6
+                RB      [DP].7
+                RT
+
+; ------------------------------------------------------------------ the injector interrupt (NEED_INJCUT): the cut cylinder's injector shut
+; In: A (byte) = the injectors about to open (a 0 bit opens one: P2.0-P2.3). The bank is page 1 here (the injector code's
+; own), so off() reaches DL_SVCX. With none cut (the usual case) one compare and out. Only A and the flags; byte mode kept.
+mod_injcut:     CMPB    off(DL_SVCX), #010h    ; bits 4-7 all clear: below 10h
+                JLT     dls_injcut_ret
+                JBR     off(DL_SVCX).4, dls_injcut_b1
+                ORB     A, #001h
+dls_injcut_b1:  JBR     off(DL_SVCX).5, dls_injcut_b2
+                ORB     A, #002h
+dls_injcut_b2:  JBR     off(DL_SVCX).6, dls_injcut_b3
+                ORB     A, #004h
+dls_injcut_b3:  JBR     off(DL_SVCX).7, dls_injcut_ret
+                ORB     A, #008h
+dls_injcut_ret: RT
+
 ; ------------------------------------------------------------------ every 16 ticks: the fuel cut and the lamp
 ; Tick context (the include site): only A is free; DP is kept here.
 dls_tick:       L       A, DP
@@ -201,7 +256,11 @@ dls_tick:       L       A, DP
                 LB      A, [DP]
                 ANDB    A, #003h
                 JNE     dls_active
-                MOV     DP, #001f0h            ; nothing on (the usual case, kept short): no service fuel cut...
+                MOV     DP, #DL_SVCX           ; a cylinder cut (the cylinder test): the lamp flashes, no fuel cut
+                LB      A, [DP]
+                ANDB    A, #0f0h
+                JNE     dls_cylon
+                MOV     DP, #SVC_FUELCUT            ; nothing on (the usual case, kept short): no service fuel cut...
                 RB      [DP].1
                 MOV     DP, #DL_SVCX           ; ...and the lamp handed back if it was taken
                 MB      C, [DP].0
@@ -209,43 +268,46 @@ dls_tick:       L       A, DP
                 SJ      dls_tick_ret
 dls_active:     LB      A, [DP]
                 ANDB    A, #001h               ; injectors off: the skeleton's fuel-cut request, bit 1 (lib.asm has bit 0)
-                MOV     DP, #001f0h
+                MOV     DP, #SVC_FUELCUT
                 JEQ     dls_fuel_on
                 SB      [DP].1
                 SJ      dls_fuel_set
 dls_fuel_on:    RB      [DP].1
+                SJ      dls_fuel_set
+dls_cylon:      MOV     DP, #SVC_FUELCUT
+                RB      [DP].1
 dls_fuel_set:
 ; the check-engine lamp (P1.4) flashes while the injectors are off or the timing is locked: the output
 ; override masks (3DEh AND, 3DFh OR) take it from whatever else drives it
                 MOV     DP, #DL_SVCX
                 SB      [DP].0
-                MOV     DP, #003deh
+                MOV     DP, #OUT_LAMP_MASK
                 LB      A, [DP]
-                ANDB    A, #0efh
+                ANDB    A, #(0ffh - OUT_LAMP)
                 STB     A, [DP]
                 INC     DP
-                LB      A, 0feh                ; lit while tick bit 6 is set: 131 ms on, 131 ms off
+                LB      A, SVC_TICK                ; lit while tick bit 6 is set: 131 ms on, 131 ms off
                 ANDB    A, #040h
                 JEQ     dls_lamp_dark
                 LB      A, [DP]
-                ORB     A, #010h
+                ORB     A, #OUT_LAMP
                 SJ      dls_lamp_set
 dls_lamp_dark:  LB      A, [DP]
-                ANDB    A, #0efh
+                ANDB    A, #(0ffh - OUT_LAMP)
 dls_lamp_set:   STB     A, [DP]
                 SJ      dls_tick_ret
 dls_lamp_free:  RB      [DP].0                 ; back to normal: the lamp handed back once (DP = DL_SVCX)
-                MOV     DP, #003deh
+                MOV     DP, #OUT_LAMP_MASK
                 LB      A, [DP]
-                ORB     A, #010h
+                ORB     A, #OUT_LAMP
                 STB     A, [DP]
                 INC     DP
                 LB      A, [DP]
-                ANDB    A, #0efh
+                ANDB    A, #(0ffh - OUT_LAMP)
                 STB     A, [DP]
-                MOV     DP, #00022h            ; its latch off: whatever drives it puts it back
+                MOV     DP, #OUT_LAMP_COPY     ; its latch off: whatever drives it puts it back
                 LB      A, [DP]
-                ANDB    A, #0efh
+                ANDB    A, #(0ffh - OUT_LAMP)
                 STB     A, [DP]
 dls_tick_ret:   POPS    A
                 MOV     DP, A
@@ -260,8 +322,8 @@ dls_ign:        L       A, DP
                 ANDB    A, #002h
                 JEQ     dls_ign_ret
                 LCB     A, dls_timing
-                STB     A, off(00246h)         ; both advance bytes the spark timer is built from
-                STB     A, off(00247h)
+                STB     A, off(SVC_ADVF)         ; both advance bytes the spark timer is built from
+                STB     A, off(SVC_ADVF + 1)
 dls_ign_ret:    POPS    A
                 MOV     DP, A
                 RT

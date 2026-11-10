@@ -13,7 +13,7 @@ namespace OkiRomSim.Desktop;
 /// Datalogging > Demon onboard logging: a Moates Demon logs the ECU by itself, into its own memory, with no laptop in the car (DemonOnboard). Here it is set up - what it asks the ECU, how often, when to log - switched on and off, and its sessions read back into the datalog panel or a CSV. The Demon is on the emulator's port; the live datalog through it is paused while this talks to it.
 public sealed class OnboardWindow : Window
 {
-    readonly SimHost _host;
+    readonly AppHost _host;
     readonly DatalogView _view;
     readonly Func<AppSettings>? _settings;
     readonly TextBlock _state = new() { TextWrapping = TextWrapping.Wrap, FontSize = 13 };
@@ -38,7 +38,7 @@ public sealed class OnboardWindow : Window
         ("always, while the key is on", -1, ""), ("throttle above", 6, "%"), ("road speed above", 17, "km/h"), ("manifold pressure above", 5, "kPa"),
     ];
 
-    public OnboardWindow(SimHost host, DatalogView view, Func<AppSettings>? settings)
+    public OnboardWindow(AppHost host, DatalogView view, Func<AppSettings>? settings)
     {
         _host = host; _view = view; _settings = settings;
         Title = "Demon onboard logging";

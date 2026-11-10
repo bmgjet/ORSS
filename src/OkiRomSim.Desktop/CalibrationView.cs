@@ -17,7 +17,7 @@ namespace OkiRomSim.Desktop;
 /// Calibration tab, a full editor for the ROM's settings and maps: - maps drawn as tuners expect (RPM rows, load columns, coloured cells) with Line and 3D views, multi-cell editing, copy/paste, interpolate/smooth, undo/redo; - settings as number boxes, switches as checkboxes, all in a tree by category; - live trace: the cells the simulated program is reading light up (aqua, lime trail) - or, in Tuner mode, the cell the car is in according to the datalog; - a logged channel (wideband AFR, knock...) averaged per cell over the map; - Detect, definitions editing, Import/Export (JSON, TunerPro XDF), Save .bin, and the ROM emulator (connect, upload, upload every change as it is made).
 public sealed class CalibrationView : UserControl
 {
-    readonly SimHost _host;
+    readonly AppHost _host;
     readonly Func<IEnumerable<(string Path, string Text)>> _sources;
     readonly Func<TopLevel?> _top;
     readonly TreeView _tree = new() { FontSize = 12 };
@@ -61,7 +61,7 @@ public sealed class CalibrationView : UserControl
     readonly TextBlock _injLabel = new() { Text = "injector cc/min", FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
     /// One Honda fuel unit in milliseconds: the ROM counts the pulse in 4.00839 us ticks and the map's value is the tick count divided by 4.
     const double FuelUnitMs = 4.00839 * 4 / 1000;
-    readonly TextBox _adjust = new() { Width = 70, Text = "1", FontFamily = MainWindow.MonoFont };
+    readonly TextBox _adjust = new() { Width = 70, Text = "1", FontFamily = UiFonts.Mono };
     readonly Avalonia.Controls.Primitives.ToggleButton _stretchBtn = new() { Content = "⤢ Stretch", FontSize = 11, Padding = new Thickness(8, 1), MinHeight = 0 };
 
     /// The Table view stretched to fill its panel (remembered in the settings).
@@ -128,7 +128,7 @@ public sealed class CalibrationView : UserControl
 
     static NumericUpDown Num(double min, double max) => new() { Width = 130, Minimum = (decimal)min, Maximum = (decimal)max, Increment = 1, FormatString = "0" };
 
-    public CalibrationView(SimHost host, Func<IEnumerable<(string Path, string Text)>> sources, Func<TopLevel?> top)
+    public CalibrationView(AppHost host, Func<IEnumerable<(string Path, string Text)>> sources, Func<TopLevel?> top)
     {
         _host = host; _sources = sources; _top = top;
         _emuButton = Btn("Connect emulator", ToggleEmulator,
@@ -281,7 +281,11 @@ public sealed class CalibrationView : UserControl
         // a tight indent: the theme's left a wide margin down the left of the list
         _tree.Resources["TreeViewItemIndent"] = 10.0;
         _tree.Resources["TreeViewItemExpandCollapseChevronMargin"] = new Thickness(2, 0, 2, 0);
+#if !TUNER_ONLY
         ToolTip.SetTip(_tree, "Feature pages at the top, then the ROM's settings and maps by category. Select one to edit it; double-click a setting to show it in the source.");
+#else
+        ToolTip.SetTip(_tree, "Feature pages at the top, then the ROM's settings and maps by category. Select one to edit it.");
+#endif
         _filter.TextChanged += (_, _) => { if (!_clearingFilter) Refresh(); };
         ToolTip.SetTip(_filter, "Show only items whose name, category or address contains this text.");
 
@@ -641,18 +645,36 @@ public sealed class CalibrationView : UserControl
                     if (leftOut == null || !leftOut(page.Key)) return true;
                     return skeletonFile != null && bound.Any(i => i.Origin?.StartsWith(skeletonFile + ":", StringComparison.OrdinalIgnoreCase) == true);
                 }
-                pageNode.ItemsSource = romPages
-                    .Where(page => !_validOnly || Valid(page))
-                    .GroupBy(page => page.Category)
-                    .OrderBy(g => PageCategoryOrder(g.Key)).ThenBy(g => g.Key)
-                    .Select(g =>
+                // the fuel and ignition maps sit at the top of their page categories too, where a new user looks for them first
+                // (they stay in their own categories below as well)
+                static string? MapCategory(ItemDef i) =>
+                    !i.IsTable || i.Count <= 1 ? null
+                    : i.Category.Equals("Fuel", StringComparison.OrdinalIgnoreCase) || i.Category.Equals("VE", StringComparison.OrdinalIgnoreCase) ? "Fuel"
+                    : i.Category.Equals("Ignition", StringComparison.OrdinalIgnoreCase) ? "Ignition" : null;
+                var maps = _items.Where(i => MapCategory(i) != null)
+                                 .GroupBy(i => MapCategory(i)!).ToDictionary(g => g.Key, g => g.OrderByDescending(i => i.Rows > 1 && i.Cols > 1).ThenBy(i => i.Address).ToList());
+                TreeViewItem MapLeaf(ItemDef i)
+                {
+                    var leaf = new TreeViewItem
                     {
-                        string key = "Pages/" + g.Key;
+                        Header = $"{i.Name}  {i.Rows}×{i.Cols}", Tag = i,
+                        FontWeight = FontWeight.Normal, Padding = new Thickness(2, 0), MinHeight = TreeRow,
+                    };
+                    ToolTip.SetTip(leaf, $"{i.Address:X4}  {i.Type}  {i.Formula}{(i.Description.Length > 0 ? "\n" + i.Description : "")}");
+                    return leaf;
+                }
+                var validPages = romPages.Where(page => !_validOnly || Valid(page)).ToList();
+                pageNode.ItemsSource = validPages.Select(p => p.Category).Concat(maps.Keys).Distinct()
+                    .OrderBy(PageCategoryOrder).ThenBy(c => c)
+                    .Select(c =>
+                    {
+                        string key = "Pages/" + c;
                         var cat = new TreeViewItem
                         {
-                            Header = g.Key, FontWeight = FontWeight.Normal, Padding = new Thickness(2, 0), MinHeight = TreeRow,
+                            Header = c, FontWeight = FontWeight.Normal, Padding = new Thickness(2, 0), MinHeight = TreeRow,
                             IsExpanded = _openCategories.Contains(key),
-                            ItemsSource = g.Select(PageLeaf).ToList(),
+                            ItemsSource = (maps.TryGetValue(c, out var ms) ? ms.Select(MapLeaf) : [])
+                                .Concat(validPages.Where(p => p.Category == c).Select(PageLeaf)).ToList(),
                         };
                         return cat;
                     }).ToList();
@@ -725,6 +747,7 @@ public sealed class CalibrationView : UserControl
             }
             return;
         }
+#if !TUNER_ONLY
         if (_live.IsChecked != true) { _idleTraced = default; if (_model.Heat.Count > 0) { _model.Heat = []; Redraw(); } return; }
         // with the simulator stopped the trace cannot move until a step: look once, not twenty times a second
         var idleKey = (_host.IsRunning, _host.StepSerial, _item);
@@ -738,9 +761,12 @@ public sealed class CalibrationView : UserControl
         _model.Heat = heat;
         Redraw();
         LockToTrace();
+#endif
     }
 
+#if !TUNER_ONLY
     (bool IsRunning, int StepSerial, ItemDef? Item) _idleTraced;
+#endif
 
     /// Lock to live cell: move the selection to where the engine is, when that has changed.
     void LockToTrace()
@@ -965,7 +991,7 @@ public sealed class CalibrationView : UserControl
         // averaging a channel over every frame of a long log: on another core, the map keeps drawing meanwhile
         if (_overlayBusy) return;
         _overlayBusy = true;
-        var (item, model, frames, defs, rom) = (_item, _model, OverlayFrames(), _host.Defs(), _host.RomBytes(0, Bus.RomSize));
+        var (item, model, frames, defs, rom) = (_item, _model, OverlayFrames(), _host.Defs(), _host.RomBytes(0, Chip.RomSize));
         Task.Run(() =>
         {
             try
@@ -1016,7 +1042,9 @@ public sealed class CalibrationView : UserControl
         if (item.CellOf(addr) is { } cell && _model != null)
         {
             _grid.SelectCell(cell.Row, cell.Col);
+#if !TUNER_ONLY
             _model.Heat = _host.TableHeat(item);
+#endif
             Redraw();
         }
         if (!quiet) _status.Text = $"{addr:X4} is in {item.Name}" + (item.CellOf(addr) is { } c ? $" [{c.Row},{c.Col}]" : "");
@@ -1064,8 +1092,8 @@ public sealed class CalibrationView : UserControl
             return;
         }
         _status.Text = cells.Count == 1
-            ? $"{item.Name}[{cells[0] / Math.Max(1, item.Cols)},{cells[0] % Math.Max(1, item.Cols)}] = {_model?.Format(_model.Values[cells[0]])} - patched in the running ROM{(_host.AutoUpload && _host.Emulator.Connected ? " and the emulator" : "")}"
-            : $"{item.Name}: {cells.Count} cells {what} - patched in the running ROM{(_host.AutoUpload && _host.Emulator.Connected ? " and the emulator" : "")}";
+            ? $"{item.Name}[{cells[0] / Math.Max(1, item.Cols)},{cells[0] % Math.Max(1, item.Cols)}] = {_model?.Format(_model.Values[cells[0]])} - patched in the running ROM{(_host.AutoUpload && _host.Emulator.Connected ? (_host.EmulatorInSync ? " and the emulator" : " (not the emulator: it holds another ROM until Upload sends this one)") : "")}"
+            : $"{item.Name}: {cells.Count} cells {what} - patched in the running ROM{(_host.AutoUpload && _host.Emulator.Connected ? (_host.EmulatorInSync ? " and the emulator" : " (not the emulator: it holds another ROM until Upload sends this one)") : "")}";
     }
 
     void UndoEdit()
@@ -1245,7 +1273,12 @@ public sealed class CalibrationView : UserControl
     {
         var message = _host.EmulatorValidate();
         int diff = _host.LastDifferences;
-        if (diff > 0 && _host.CanUpload(out _)) Dispatcher.UIThread.Post(() => _ = OfferUpload(diff, "Validate"));
+        if (diff > 0 && _host.CanUpload(out _))
+        {
+            // the same hold as on connect: no edit goes up, block by block, into a ROM the user may yet decide to keep
+            _host.UploadsHeld = true;
+            Dispatcher.UIThread.Post(() => _ = OfferUpload(diff, "Validate"));
+        }
         return message;
     });
 
@@ -1266,7 +1299,7 @@ public sealed class CalibrationView : UserControl
                 AppLog.Warn("emulator", $"this ROM checks its own checksum while it runs (byte {_host.ChecksumAddress:X4} keeps it right, and goes to the emulator with every change): " +
                                         "a change sent while the engine runs can still land part-way through a pass of the sum, and the ECU resets once (BRK 48h). " +
                                         "For live tuning use a ROM with the check off (the skeleton's ROM checksum check switch, HTS and the tuning ROMs).");
-            string sumNote = _host.ChecksSumWhileRunning ? " - note: this ROM checks its own checksum while it runs, so a live change can reset it once (see the Debug page)" : "";
+            string sumNote = _host.ChecksSumWhileRunning ? $" - note: this ROM checks its own checksum while it runs, so a live change can reset it once (see {DebugView.Where})" : "";
             var (diff, _) = _host.EmulatorCompare();
             if (diff == 0)
             {
@@ -1288,7 +1321,10 @@ public sealed class CalibrationView : UserControl
     /// The emulator holds a different ROM from the one open here: upload the full ROM over it, keep it, or read it in.
     async Task OfferUpload(int diff, string context)
     {
-        if (_offering || !_host.Emulator.Connected) { _host.UploadsHeld = false; return; }
+        // a second offer while the first question is still open (a reconnect, a Validate) leaves the hold to that question's answer:
+        // releasing it here let edits go into a ROM the user might still choose to keep
+        if (_offering) return;
+        if (!_host.Emulator.Connected) { _host.UploadsHeld = false; return; }
         _offering = true;
         try
         {
@@ -1308,13 +1344,15 @@ public sealed class CalibrationView : UserControl
                     AppLog.Action("emulator", "asked: upload the full ROM - yes");
                     break;
                 case "Download it":
-                    _host.DiscardPendingUploads();
+                    // the emulator keeps its ROM until the downloaded one is opened here: nothing from this one is sent into it
+                    _host.MarkEmulatorDiverged();
                     _host.UploadsHeld = false;
                     AppLog.Action("emulator", "asked: upload the full ROM - no, download the emulator's");
                     EmulatorDownload();
                     break;
                 default:
-                    _host.DiscardPendingUploads();
+                    // kept: edits made here must not go into it - auto-upload alone would have sent the next one, block by block
+                    _host.MarkEmulatorDiverged();
                     _host.UploadsHeld = false;
                     _status.Text = "the emulator keeps its own ROM; changes made here are not sent into it (Upload sends the full ROM when you want)";
                     AppLog.Action("emulator", "asked: upload the full ROM - no, keep the emulator's");
@@ -1481,6 +1519,10 @@ public sealed class CalibrationView : UserControl
     /// Show a feature page (GPO 1, ...) instead of a single definition. The first time a page is opened on a ROM its rows are guessed from the definition names; after that the bindings are the user's, and travel with the definitions.
     /// The layout check: show a feature page as a click in the list would.
     internal void ShowPageForCheck(CalPage page) => ShowPage(page);
+    /// The Pages node's categories and what each holds, as the tree has them.
+    internal List<string> PagesTreeForCheck() =>
+        [.. (_tree.ItemsSource?.OfType<TreeViewItem>().FirstOrDefault(n => n.Header as string == "Pages")?.ItemsSource?.OfType<TreeViewItem>() ?? [])
+            .Select(c => $"{c.Header}: {string.Join(", ", c.ItemsSource?.OfType<TreeViewItem>().Select(l => l.Header?.ToString()) ?? [])}")];
     internal void ValidOnlyForCheck(bool on) => _validBox.IsChecked = on;
 
     void ShowPage(CalPage page)
@@ -1728,7 +1770,11 @@ public sealed class CalibrationView : UserControl
             ColAxis = TableModel.Shown(item.ColAxis == null ? [.. Enumerable.Range(0, item.Cols).Select(i => (double)i)] : _host.AxisValues(item.ColAxis, item.Cols), _colUnit),
             RowUnit = Units.Label(Units.Shown(_rowUnit)), ColUnit = Units.Label(Units.Shown(_colUnit)),
             Unit = unit, Decimals = decimals,
+#if !TUNER_ONLY
             Heat = _live.IsChecked == true && !_tuner ? _host.TableHeat(item) : [],
+#else
+            Heat = [],
+#endif
         };
         _grid.Model = _model; _graph.Model = _model; _surface.Model = _model;
         // a single row or column is a line, not a surface: no 3D view for it
@@ -1834,7 +1880,7 @@ public sealed class CalibrationView : UserControl
             };
             ToolTip.SetTip(name, (it.Description.Length > 0 ? it.Description + "\n" : "") + $"{it.Address:X4}  {it.Type}  [{f.Name}]" + (f.Notes != null ? "\n" + f.Notes : ""));
             Control editor;
-            var info = new TextBlock { FontSize = 11, Opacity = 0.7, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0), FontFamily = MainWindow.MonoFont };
+            var info = new TextBlock { FontSize = 11, Opacity = 0.7, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0), FontFamily = UiFonts.Mono };
             void Info(CellValue v) => info.Text = $"raw {(long)v.Raw} (0x{(long)v.Raw:X2}) @ {it.Address:X4}";
             Info(c);
             var item = it;
@@ -1883,7 +1929,7 @@ public sealed class CalibrationView : UserControl
                 {
                     Width = 150, Minimum = (decimal)Math.Max(-1e9, slo), Maximum = (decimal)Math.Min(1e9, shi),
                     Increment = (decimal)Math.Round(step * Units.ScaleOf(fu), 6), Value = (decimal)Math.Round(double.IsFinite(c.Value) ? S(c.Value) : 0, 6),
-                    FormatString = "0." + new string('#', Math.Clamp(f.Decimals, 0, 6)), FontFamily = MainWindow.MonoFont,
+                    FormatString = "0." + new string('#', Math.Clamp(f.Decimals, 0, 6)), FontFamily = UiFonts.Mono,
                 };
                 string su = Units.Label(Units.Shown(fu));
                 ToolTip.SetTip(nud, $"{it.Name} in {(su.Length > 0 ? su : "raw units")}, {slo:0.##} to {shi:0.##}. Arrows step one raw count; typing a value rounds to the nearest the ROM can store, and one outside the range is held to it. Changes the running ROM at once.");
@@ -1925,7 +1971,7 @@ public sealed class CalibrationView : UserControl
         int len = wm ? WatermarkCodec.Length : it.Count;
         var name = new TextBlock { Text = it.Name, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 2, 12, 2), FontWeight = bold ? FontWeight.Bold : FontWeight.Normal, FontSize = 12 };
         ToolTip.SetTip(name, (it.Description.Length > 0 ? it.Description + "\n" : "") + $"{it.Address:X4}, {it.Count} bytes");
-        var box = new TextBox { Width = 190, MaxLength = len, FontFamily = MainWindow.MonoFont };
+        var box = new TextBox { Width = 190, MaxLength = len, FontFamily = UiFonts.Mono };
         var state = new TextBlock { FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0) };
         void Show()
         {
@@ -2294,12 +2340,15 @@ public sealed class CalibrationView : UserControl
             _status.Text = "Detect: lining the code up with the known ROMs…";
             var loaded = _host.LoadedPath;
             var refs = await Task.Run(() => RomReference.ShippedFor(loaded));
-            var rom = _host.RomBytes(0, Bus.RomSize);
+            // the references take seconds the first time: a ROM opened (or built again) meanwhile is not this one, and gets none of what is found here
+            if (!ReferenceEquals(_host.Assembly, asm)) { _status.Text = "Detect stopped: the ROM was replaced (opened or built again) while it ran - run it again on this one"; return; }
+            var rom = _host.RomBytes(0, Chip.RomSize);
             // only the files this ROM was built from: another ROM may still be open in a tab
             var built = asm.SourceMap.Select(e => e.File).Distinct().ToHashSet(StringComparer.OrdinalIgnoreCase);
             var sources = _sources().Where(x => { try { return built.Contains(Path.GetFullPath(x.Path)); } catch { return false; } }).ToList();
             if (sources.Count == 0) sources = [.. _sources()];
-            var r = await Task.Run(() => _host.EditDefinitions(defs => CalibrationDetector.Detect(defs, asm, rom, sources, refs)));
+            var r = await Task.Run(() => _host.EditDefinitions(defs => ReferenceEquals(_host.Assembly, asm) ? CalibrationDetector.Detect(defs, asm, rom, sources, refs) : null));
+            if (r == null) { _status.Text = "Detect stopped: the ROM was replaced (opened or built again) while it ran - run it again on this one"; return; }
             Refresh();
             _status.Text = "Detect: " + r.Summary + (r.Added + r.Replaced > 0 ? " - check types and formulas" : "");
             AppLog.Action("calibration", "Detect: " + r.Summary);
@@ -2431,7 +2480,7 @@ public sealed class CalibrationView : UserControl
                        : answer == "Padding only" ? XdfExport.Stride.PaddingOnly
                        : XdfExport.Stride.PaddingAsColumns;
             }
-            SafeFile.WriteAllText(path, XdfExport.Write(defs, _host.RomBytes(0, Bus.RomSize), Path.GetFileNameWithoutExtension(path), stride, values, layout));
+            SafeFile.WriteAllText(path, XdfExport.Write(defs, _host.RomBytes(0, Chip.RomSize), Path.GetFileNameWithoutExtension(path), stride, values, layout));
             _status.Text = $"wrote {path}: {defs.Items.Count} definitions for TunerPro " +
                            $"({(layout == XdfExport.Layout.Reference ? "maps only" : "with notes and categories")}; open it with the matching .bin)";
             AppLog.Action("calibration", "exported XDF " + path);

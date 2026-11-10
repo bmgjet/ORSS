@@ -6,10 +6,11 @@ using OkiRomSim.Core;
 
 namespace OkiRomSim.Desktop;
 
-/// Owns the simulator and its background run loop, plus the build and calibration state. No Avalonia types in here, so it can be driven from a test or another front end.
-public sealed class SimHost
+/// Owns the simulator and its background run loop; the ROM, its build, the calibration state and the emulator are RomHost's, and the
+/// ROM array RomHost edits is the simulator's own (Sim.Bus.Rom), so the program it runs is the one being tuned. No Avalonia types in
+/// here, so it can be driven from a test or another front end.
+public sealed class SimHost : RomHost
 {
-    readonly object _lock = new();
     bool _running;
     double _speed = 1;
     string _stopReason = "nothing loaded";
@@ -28,33 +29,20 @@ public sealed class SimHost
     ulong _runStartCycles;
     long _runStartInstr;
     double _rate;
-    Dictionary<long, string> _labels = [];
     /// Engine/board inputs as last set from the UI, re-applied to every freshly loaded simulator.
     readonly Dictionary<string, double> _inputs = [];
 
     public SimHost()
     {
+        Rom = Sim.Bus.Rom;
         var t = new Thread(Loop) { IsBackground = true, Name = "sim" };
         t.Start();
-        var u = new Thread(UploadLoop) { IsBackground = true, Name = "emulator-upload" };
-        u.Start();
     }
 
-    /// Bumped whenever the ROM image, the build or the definitions change (MCP caches).
-    public int Version => _version;
-    int _version;
-    /// Raised (on the thread that changed it) when calibration data or definitions changed outside the Calibration page - an MCP client, undo - so the page can redraw.
-    public event Action<string, string?>? CalibrationChanged;
-    public void RaiseCalibrationChanged(string what, string? item = null)
-    {
-        Interlocked.Increment(ref _version);
-        try { CalibrationChanged?.Invoke(what, item); } catch { }
-    }
+    /// The simulator runs the ROM straight out of its own array: a change made in place needs the decoded instructions read afresh.
+    protected override void RomBytesChanged() => Sim.InvalidateDecodeCache();
 
     public Simulator Sim { get; private set; } = new();
-    public AssemblyResult? Assembly { get; private set; }
-    public DefinitionSet? Definitions { get; private set; }
-    public string? LoadedPath { get; private set; }
     public bool IsRunning { get { lock (_lock) return _running; } }
     /// The simulated clock (CPU cycles): the simulator link's timeouts run on it.
     public ulong SimCycles { get { lock (_lock) return Sim.Cpu.Cycles; } }
@@ -63,19 +51,22 @@ public sealed class SimHost
     /// The simulated VTEC solenoid is on: the ROM is reading the high-cam maps.
     public bool VtecActive { get { lock (_lock) return Sim.Bus.VtecSolenoidActive; } }
     public double Speed { get { lock (_lock) return _speed; } set { lock (_lock) _speed = Math.Max(0, value); } }
-    public bool RomDirty { get; private set; }
     /// Skip the ROM's boot delay loops in no real time (Simulator.FastForwardDelayLoops).
     public bool FastBoot { get; set { lock (_lock) { field = value; Sim.FastForwardDelayLoops = value; } } } = true;
 
     // ------------------------------------------------------------------ loading
 
-    public void LoadImage(byte[] image, AssemblyResult? asm, string path)
+    public override void LoadImage(byte[] image, AssemblyResult? asm, string path)
     {
         lock (_lock)
         {
             var keep = Sim.Breakpoints.ToList();
             bool same = path == LoadedPath;
+            NoteImageReplaced(image);
             Sim = new Simulator { FastForwardDelayLoops = FastBoot };
+            // the editor's ROM is the new simulator's from here on - also when the load below throws (an image of the wrong size): the
+            // calibration, the checksum and the emulator uploads must never work on a different array from the one the simulator runs
+            Rom = Sim.Bus.Rom;
             Sim.LoadRom(image);
             Assembly = asm;
             ChecksumAddress = RomChecksum.Site(image, asm);
@@ -101,7 +92,7 @@ public sealed class SimHost
     }
 
     /// Make a processor profile active (clock, names, pins) and restart the loaded image from reset so the new clock applies.
-    public void ApplyProfile(ProcessorProfile profile)
+    public override void ApplyProfile(ProcessorProfile profile)
     {
         lock (_lock)
         {
@@ -160,51 +151,13 @@ public sealed class SimHost
         }
     }
 
-    public string LabelAt(long addr) => _labels.TryGetValue(addr, out var n) ? n : "";
-
-    /// After a patch build: the definitions from the new build, and every one the old set had that the source does not
-    /// (found by Detect, or defined by an MCP client with cal_define) carried across, so the Calibration pages lose nothing.
-    void KeepDefinitions(DefinitionSet? old)
-    {
-        if (old == null) return;
-        var fresh = Defs();
-        foreach (var f in old.Formulas.Where(f => !fresh.Formulas.Any(x => x.Name.Equals(f.Name, StringComparison.OrdinalIgnoreCase)))) fresh.Formulas.Add(f);
-        foreach (var it in old.Items.Where(it => !fresh.Items.Any(x => x.Name.Equals(it.Name, StringComparison.OrdinalIgnoreCase) || x.Address == it.Address)))
-            fresh.Items.Add(it);
-    }
-
-    public DefinitionSet Defs()
-    {
-        lock (_lock)
-        {
-            if (Definitions != null) return Definitions;
-            if (Assembly != null) Definitions = DefinitionBuilder.FromAssembly(Assembly, Path.GetFileName(LoadedPath ?? ""));
-            else
-            {
-                Definitions = new DefinitionSet();
-                var side = LoadedPath == null ? null : Path.ChangeExtension(LoadedPath, null) + ".okidef.json";
-                if (side != null && File.Exists(side)) Definitions = DefinitionSet.Load(side);
-                var sym = LoadedPath == null ? null : Path.ChangeExtension(LoadedPath, ".sym");
-                if (sym != null && File.Exists(sym))
-                    foreach (var line in File.ReadAllLines(sym))
-                    {
-                        var p = line.Split(' ', 2);
-                        if (p.Length == 2 && int.TryParse(p[0], System.Globalization.NumberStyles.HexNumber, null, out var a))
-                            Definitions.Symbols.TryAdd(p[1].Trim(), a);
-                    }
-            }
-            Definitions.MergeBuiltinFormulas();
-            return Definitions;
-        }
-    }
-
     // ------------------------------------------------------------------ who writes RAM, and RAM held at a value
 
     /// The last few instructions (distinct, newest first) that wrote each RAM byte, and how many writes it has had: the memory map's "written by". Recorded as the simulator runs, from power-up.
     const int WritersKept = 4;
-    readonly ushort[] _writerPc = new ushort[Bus.RamSize * WritersKept];
-    readonly byte[] _writerN = new byte[Bus.RamSize];
-    readonly long[] _writes = new long[Bus.RamSize];
+    readonly ushort[] _writerPc = new ushort[Chip.RamSize * WritersKept];
+    readonly byte[] _writerN = new byte[Chip.RamSize];
+    readonly long[] _writes = new long[Chip.RamSize];
     /// RAM bytes held at a value (the memory map's Hold): whatever the ROM writes there is put back at once.
     readonly Dictionary<int, byte> _held = [];
 
@@ -234,7 +187,7 @@ public sealed class SimHost
     {
         lock (_lock)
         {
-            int a = addr & (Bus.RamSize - 1);
+            int a = addr & (Chip.RamSize - 1);
             return (_writerPc.AsSpan(a * WritersKept, _writerN[a]).ToArray(), _writes[a]);
         }
     }
@@ -258,14 +211,14 @@ public sealed class SimHost
         {
             for (int i = 0; i < size; i++)
             {
-                int a = (addr + i) & (Bus.RamSize - 1);
+                int a = (addr + i) & (Chip.RamSize - 1);
                 if (bytes == null) _held.Remove(a);
                 else { _held[a] = bytes[i]; Sim.Bus.Ram[a] = bytes[i]; }
             }
         }
     }
 
-    public bool IsHeld(int addr) { lock (_lock) return _held.ContainsKey(addr & (Bus.RamSize - 1)); }
+    public bool IsHeld(int addr) { lock (_lock) return _held.ContainsKey(addr & (Chip.RamSize - 1)); }
 
     /// Write RAM bytes now (the memory map's edit): the ROM may write them again straight after, unless they are held.
     public void WriteRamBytes(int addr, byte[] bytes)
@@ -273,29 +226,13 @@ public sealed class SimHost
         lock (_lock)
             for (int i = 0; i < bytes.Length; i++)
             {
-                int a = (addr + i) & (Bus.RamSize - 1);
+                int a = (addr + i) & (Chip.RamSize - 1);
                 Sim.Bus.Ram[a] = bytes[i];
                 if (_held.ContainsKey(a)) _held[a] = bytes[i];
             }
     }
 
-    RamEntry[]? _ramMap;
-    object? _ramMapFor;
-    /// What each RAM byte holds (RamMap), for the loaded ROM.
-    public IReadOnlyList<RamEntry> RamMapNow()
-    {
-        lock (_lock)
-        {
-            var defs = Defs();
-            if (_ramMap == null || !ReferenceEquals(_ramMapFor, defs)) { _ramMap = [.. RamMap.Build(defs, Assembly, Sim.Bus.Rom)]; _ramMapFor = defs; }
-            return _ramMap;
-        }
-    }
-
     // ------------------------------------------------------------------ building
-
-    public sealed record BuildOutcome(bool Success, List<Diagnostic> Diagnostics, AssemblyResult? Assembly,
-        long Milliseconds);
 
     public sealed record PatchOutcome(bool Success, List<Diagnostic> Diagnostics, AssemblyResult? Assembly, int Bytes,
         List<(int Start, int Length)> Ranges, bool RunningInside, string Note);
@@ -313,7 +250,7 @@ public sealed class SimHost
             var old = Assembly.Image;
             var neu = asm.Image;
             int sumAt = ChecksumAddress ?? -1;
-            int end = Math.Min(Bus.RomSize, neu.Length);
+            int end = Math.Min(Chip.RomSize, neu.Length);
             bool Differs(int i) => i != sumAt && (i >= old.Length || old[i] != neu[i]);
             var ranges = new List<(int Start, int Length)>();
             for (int i = 0; i < end; i++)
@@ -353,27 +290,6 @@ public sealed class SimHost
             foreach (var (start, len) in ranges) QueueUpload(start, len);
             return new(true, diags, asm, bytes, ranges, running, $"{bytes} byte(s) in {ranges.Count} place(s) patched into the running ROM");
         }
-    }
-
-    /// Assemble a .asm and load the result into the simulator.
-    public BuildOutcome Build(string path, Func<string, string?>? unsavedBuffers = null, bool load = true)
-    {
-        var sw = Stopwatch.StartNew();
-        AssemblyResult? asm = null;
-        var diags = new List<Diagnostic>();
-        try
-        {
-            asm = new OkiAssembler(new AssemblerOptions { ReadFile = unsavedBuffers }).AssembleFile(path);
-            diags.AddRange(asm.Diagnostics);
-        }
-        catch (Exception ex)
-        {
-            diags.Add(new Diagnostic(Severity.Error, path, 0, 0, ex.Message));
-        }
-        sw.Stop();
-        bool ok = asm != null && diags.All(d => d.Severity != Severity.Error);
-        if (ok && load) LoadImage(asm!.Image, asm, path);
-        return new BuildOutcome(ok, diags, asm, sw.ElapsedMilliseconds);
     }
 
     // ------------------------------------------------------------------ running
@@ -608,7 +524,7 @@ public sealed class SimHost
                 if (_speed > 0)
                 {
                     double wall = (DateTime.UtcNow - _runStartWall).TotalSeconds;
-                    if (Sim.Cpu.Cycles - _runStartCycles > wall * _speed * Bus.CpuHz) budget = 0;
+                    if (Sim.Cpu.Cycles - _runStartCycles > wall * _speed * Chip.CpuHz) budget = 0;
                 }
                 long sliceEnd = Stopwatch.GetTimestamp() + (Stopwatch.Frequency / 250);     // 4 ms
                 for (int i = 0; i < budget && _running; i++)
@@ -617,7 +533,7 @@ public sealed class SimHost
                     if (_speed > 0 && (i & 255) == 255)
                     {
                         double wall = (DateTime.UtcNow - _runStartWall).TotalSeconds;
-                        if (Sim.Cpu.Cycles - _runStartCycles > wall * _speed * Bus.CpuHz) break;
+                        if (Sim.Cpu.Cycles - _runStartCycles > wall * _speed * Chip.CpuHz) break;
                     }
                     ushort pc = Sim.Cpu.Pc;
                     if (_skipOnce == pc) _skipOnce = null;
@@ -653,23 +569,23 @@ public sealed class SimHost
     public bool SerialEcho
     {
         get { lock (_lock) return Sim.Bus.SerialEcho; }
-        set { lock (_lock) { Sim.Bus.SerialEcho = value; Sim.Bus.EchoByteCycles = (uint)Math.Max(1, (long)Bus.CpuHz * 10 / Math.Max(300, SerialBaud)); } }
+        set { lock (_lock) { Sim.Bus.SerialEcho = value; Sim.Bus.EchoByteCycles = (uint)Math.Max(1, (long)Chip.CpuHz * 10 / Math.Max(300, SerialBaud)); } }
     }
 
     /// Send bytes to the simulated ROM's serial port, as a datalogging tool would.
     public void SerialToRom(byte[] data)
     {
-        lock (_lock) Sim.Bus.QueueSerialRx(BaudMismatchLocked() ? Garble(data) : data, (uint)Math.Max(1, (long)Bus.CpuHz * 10 / Math.Max(300, SerialBaud)));
+        lock (_lock) Sim.Bus.QueueSerialRx(BaudMismatchLocked() ? Garble(data) : data, (uint)Math.Max(1, (long)Chip.CpuHz * 10 / Math.Max(300, SerialBaud)));
     }
 
     /// The baud rate the ROM set its serial port to (0: it has not, or this chip is not modelled that way).
-    public int RomSerialBaud { get { lock (_lock) return Bus.Is66911 ? 0 : Sim.Bus.RomSerialBaud; } }
+    public int RomSerialBaud { get { lock (_lock) return Chip.Is66911 ? 0 : Sim.Bus.RomSerialBaud; } }
 
     /// The ROM's line speed and the cable's more than 4 % apart: as on a car, every byte comes out garbled both ways.
     public bool BaudMismatch { get { lock (_lock) return BaudMismatchLocked(); } }
     bool BaudMismatchLocked()
     {
-        int rom = Bus.Is66911 ? 0 : Sim.Bus.RomSerialBaud;
+        int rom = Chip.Is66911 ? 0 : Sim.Bus.RomSerialBaud;
         return rom > 0 && Math.Abs(rom - SerialBaud) > rom * 0.04;
     }
     static byte[] Garble(byte[] data) => [.. data.Select((b, i) => (byte)(b * 37 + 0x5B + i))];
@@ -702,7 +618,7 @@ public sealed class SimHost
     double _playSimStart, _playLogStart;
     public int PlaybackIndex { get { lock (_lock) return _playIndex; } }
     public bool PlaybackActive { get { lock (_lock) return _play != null; } }
-    double SimNow => (double)Sim.Cpu.Cycles / Bus.CpuHz;
+    double SimNow => (double)Sim.Cpu.Cycles / Chip.CpuHz;
 
     /// Drive the engine inputs from a log, frame by frame in simulated time, and run.
     public void StartPlayback(List<LogFrame> frames, int from)
@@ -755,9 +671,6 @@ public sealed class SimHost
 
     // ------------------------------------------------------------------ hit trace & table trace
 
-    /// Hits reported by a Moates Ostrich/Demon trace (the simulator's own hits come from its coverage and ROM-read counters).
-    public readonly HitStore ExternalHits = new();
-
     /// Hit state of the simulated ROM: per address, the cycle it last ran as an instruction (0 = never) and the cycle it was last read as data, plus the current cycle.
     // reused between calls: three arrays of 32768 rebuilt several times a second was a lot of rubbish for the collector to clear up
     ulong[]? _hitExec, _hitData;
@@ -767,12 +680,12 @@ public sealed class SimHost
     {
         lock (_lock)
         {
-            _hitExec ??= new ulong[Bus.RomSize];
-            _hitData ??= new ulong[Bus.RomSize];
-            _hitCount ??= new uint[Bus.RomSize];
-            for (int a = 0; a < Bus.RomSize; a++) _hitExec[a] = Sim.Coverage.LastExecuted((ushort)a);
-            Array.Copy(Sim.Bus.RomReadAt, _hitData, Bus.RomSize);
-            Array.Copy(Sim.Bus.RomReadCount, _hitCount, Bus.RomSize);
+            _hitExec ??= new ulong[Chip.RomSize];
+            _hitData ??= new ulong[Chip.RomSize];
+            _hitCount ??= new uint[Chip.RomSize];
+            for (int a = 0; a < Chip.RomSize; a++) _hitExec[a] = Sim.Coverage.LastExecuted((ushort)a);
+            Array.Copy(Sim.Bus.RomReadAt, _hitData, Chip.RomSize);
+            Array.Copy(Sim.Bus.RomReadCount, _hitCount, Chip.RomSize);
             return (Sim.Cpu.Cycles, _hitExec, _hitData, _hitCount);
         }
     }
@@ -805,12 +718,12 @@ public sealed class SimHost
         var heat = new Dictionary<int, double>();
         var b = Sim.Bus;
         ulong now = Sim.Cpu.Cycles;
-        double hz = Bus.CpuHz;
+        double hz = Chip.CpuHz;
         int count = item.Count;
         for (int i = 0; i < count; i++)
         {
             int a = item.CellAddress(i);
-            if ((uint)a >= Bus.RomSize || b.RomReadCount[a] == 0) continue;
+            if ((uint)a >= Chip.RomSize || b.RomReadCount[a] == 0) continue;
             ulong at = b.RomReadAt[a];
             double age = (now - Math.Min(now, at)) / hz;
             if (age <= fresh) heat[i] = 1;
@@ -848,7 +761,7 @@ public sealed class SimHost
             ushort bank = c.BankBase();
             return new Snapshot(
                 _running, Sim.State.ToString(), _stopReason, Sim.FaultMessage, c.Pc, LabelAt(c.Pc),
-                src?.File, src?.Line ?? 0, (long)c.Instructions, (double)c.Cycles / Bus.CpuHz, _running ? _rate : 0,
+                src?.File, src?.Line ?? 0, (long)c.Instructions, (double)c.Cycles / Chip.CpuHz, _running ? _rate : 0,
                 c.A, Preg(4), Preg(0), Preg(2), Preg(6), c.Ssp, c.Lrb, bank, c.PswU16(),
                 c.Cf, c.Zf, c.Hc, c.Dd, c.Mie(), c.Scb(),
                 [.. Enumerable.Range(0, 4).Select(i => b.Ram[(bank + (i * 2)) & 0xFFF] | (b.Ram[(bank + (i * 2) + 1) & 0xFFF] << 8))],
@@ -927,7 +840,7 @@ public sealed class SimHost
                 Inputs = new(_inputs),
                 ForcedPins = [.. _forced.Select(kv => $"{kv.Key.Port}.{kv.Key.Bit}={(kv.Value ? 1 : 0)}")],
                 Analog = new(_analog),
-                CrystalMHz = Bus.CrystalMHz,
+                CrystalMHz = Chip.CrystalMHz,
                 Trace = [.. _trace.Select(t => $"{t.Pc:X4}|{t.Text}")],
             }, b.Ram.ToArray(), b.Rom.ToArray());
         }
@@ -971,7 +884,7 @@ public sealed class SimHost
             _disabledBps.Clear();
             foreach (var bp in st.DisabledBreakpoints) _disabledBps.Add(bp);
             _held.Clear();
-            foreach (var (addr, v) in st.HeldRam) { _held[addr & (Bus.RamSize - 1)] = v; b.Ram[addr & (Bus.RamSize - 1)] = v; }
+            foreach (var (addr, v) in st.HeldRam) { _held[addr & (Chip.RamSize - 1)] = v; b.Ram[addr & (Chip.RamSize - 1)] = v; }
             RomDirty = !rom.AsSpan().SequenceEqual(Assembly?.Image ?? rom);
             _trace.Clear();
             foreach (var t in st.Trace)
@@ -988,7 +901,7 @@ public sealed class SimHost
     }
 
     /// Forget everything tied to the ROM that was open: definitions, undo, coverage, hits, traces and caches. Called when another ROM is opened and by Clear project.
-    public void ResetRomState()
+    public override void ResetRomState()
     {
         lock (_lock)
         {
@@ -1007,13 +920,14 @@ public sealed class SimHost
     }
 
     /// Close the ROM and let go of everything: a fresh, low-memory state.
-    public void Clear()
+    public override void Clear()
     {
         lock (_lock)
         {
             _running = false;
             ResetRomState();
             Sim = new Simulator { FastForwardDelayLoops = FastBoot };
+            Rom = Sim.Bus.Rom;
             _hitExec = null; _hitData = null; _hitCount = null;
             Assembly = null;
             _labels = [];
@@ -1027,49 +941,6 @@ public sealed class SimHost
         GC.WaitForPendingFinalizers();
         GC.Collect();
         AppLog.Info("host", "project cleared");
-    }
-
-    /// Put a saved set of definitions (a project's) in place. A ROM built from source keeps what its annotations say now (a module added or taken out since, a table the build moved), with the saved set's own additions on top.
-    public void ReplaceDefinitions(DefinitionSet defs)
-    {
-        lock (_lock)
-        {
-            if (Assembly != null && Assembly.Annotations.Count > 0)
-                defs = DefinitionSet.MergeSaved(DefinitionBuilder.FromAssembly(Assembly, Path.GetFileName(LoadedPath ?? "")), defs);
-            defs.MergeBuiltinFormulas();
-            Definitions = defs;
-            Interlocked.Increment(ref _version);
-        }
-    }
-
-    /// Run a change to the definitions under the simulator lock.
-    public T EditDefinitions<T>(Func<DefinitionSet, T> change)
-    {
-        lock (_lock) { var r = change(Defs()); Interlocked.Increment(ref _version); return r; }
-    }
-
-    /// The MAP sensor the ROM says is fitted: its pressure formulas rebuilt to suit, and the datalog's MAP read on the same scale.
-    public void RefreshMapSensor()
-    {
-        lock (_lock)
-        {
-            var defs = Defs();
-            var rom = RomBytes(0, Bus.RomSize);
-            MapSensorScale.ApplyFormulas(defs, rom);
-            HondaDatalog.MapSensor = MapSensorScale.Of(defs, rom) ?? MapSensorScale.Stock;
-            // the functions' state channels are named from this build's symbols
-            ModuleDebug.Name(Assembly?.Symbols.Values.Where(sy => sy.Kind is SymbolKind.Equate or SymbolKind.Define).Select(sy => (sy.Name, (long)sy.Value)));
-            // ...and the RAM addresses picked on the ROM's Datalog page, for what the memory map says is at each
-            var user = defs.Items.FirstOrDefault(i => i.Name.Equals("DatalogUserAddress", StringComparison.OrdinalIgnoreCase) || i.HasSlot("dlextra.user"));
-            var ram = user != null ? RamMapNow() : [];
-            for (int k = 0; k < 8; k++)
-            {
-                int at = user == null || user.Address + (k * 2) + 1 >= rom.Length ? 0 : rom[user.Address + (k * 2)] | (rom[user.Address + (k * 2) + 1] << 8);
-                if (at is < 0x80 or >= RamMap.RamEnd) at = 0;
-                UserRam.Set(k, at, ram.FirstOrDefault(e => e.Address == at)?.Name);
-            }
-            Interlocked.Increment(ref _version);
-        }
     }
 
     // ------------------------------------------------------------------ outputs & pins
@@ -1106,7 +977,7 @@ public sealed class SimHost
     OutputState Outputs()
     {
         var b = Sim.Bus; var pins = b.Pins; ulong now = Sim.Cpu.Cycles;
-        double dt = (double)(now - _rateCycles) / Bus.CpuHz;
+        double dt = (double)(now - _rateCycles) / Chip.CpuHz;
         if (dt >= 0.5)
         {
             for (int n = 0; n < 4; n++) { _injPerSec[n] = (b.InjectorEvents[n] - _rateInj[n]) / dt; _rateInj[n] = b.InjectorEvents[n]; }
@@ -1116,8 +987,8 @@ public sealed class SimHost
                 { _pinPerSec[p, i] = (pins.Changes[p, i] - _ratePins[p, i]) / dt; _ratePins[p, i] = pins.Changes[p, i]; }
             _rateCycles = now;
         }
-        double Ms(ulong cycles) => cycles * 1000.0 / Bus.CpuHz;
-        bool Stale(ulong at) => now - at > Bus.CpuHz;   // nothing for a second: show as stopped
+        double Ms(ulong cycles) => cycles * 1000.0 / Chip.CpuHz;
+        bool Stale(ulong at) => now - at > Chip.CpuHz;   // nothing for a second: show as stopped
         var injMs = Enumerable.Range(0, 4).Select(n =>
             b.InjectorEvents[n] == 0 || Stale(b.InjectorLastEventAt[n]) ? 0 : b.InjectorPulseUs[n] / 1000.0).ToArray();
         var injAgo = Enumerable.Range(0, 4).Select(n =>
@@ -1152,14 +1023,6 @@ public sealed class SimHost
             d0, f0, d1, f1, rows, b.Ppi.Read(0), b.Ppi.PortB, b.Ppi.PortC);
     }
 
-    /// "label+offset" for an address, from the assembled source's labels.
-    public string NearestLabel(int addr)
-    {
-        long best = -1;
-        foreach (var k in _labels.Keys) if (k <= addr && k > best) best = k;
-        return best < 0 ? "" : addr == best ? _labels[best] : $"{_labels[best]}+{addr - best:X}";
-    }
-
     public List<(int Addr, string Label, string Bytes, string Text, bool Bp, bool Current, string Source)> Disassemble(int? from, int count)
     {
         lock (_lock)
@@ -1178,7 +1041,7 @@ public sealed class SimHost
             }
             bool dd = Sim.Cpu.Dd;
             var list = new List<(int, string, string, string, bool, bool, string)>();
-            for (int n = 0; n < count && pc < Bus.RomSize; n++)
+            for (int n = 0; n < count && pc < Chip.RomSize; n++)
             {
                 int at = pc;
                 var d = Decoder.Decode(dd, i => Sim.Bus.Rom[(at + i) & 0x7FFF]);
@@ -1210,7 +1073,7 @@ public sealed class SimHost
             for (int i = 0; i < len; i++)
             {
                 int a = (addr + i) & 0xFFFF;
-                b[i] = a >= 0x480 && a < Bus.RomSize ? Sim.Bus.Rom[a] : Sim.Bus.Ram[a & (Bus.RamSize - 1)];
+                b[i] = a >= 0x480 && a < Chip.RomSize ? Sim.Bus.Rom[a] : Sim.Bus.Ram[a & (Chip.RamSize - 1)];
             }
             return b;
         }
@@ -1218,7 +1081,7 @@ public sealed class SimHost
 
     public void WriteRam(int addr, byte value)
     {
-        lock (_lock) { if (addr >= 0 && addr < Bus.RamSize) Sim.Bus.WriteDataU8((ushort)addr, value); }
+        lock (_lock) { if (addr >= 0 && addr < Chip.RamSize) Sim.Bus.WriteDataU8((ushort)addr, value); }
     }
 
     // ------------------------------------------------------------------ breakpoints & lookup
@@ -1285,19 +1148,6 @@ public sealed class SimHost
         }
     }
 
-    /// Run the calibration detector on the built ROM, reading its sources from disk. Returns the summary, or null when there is nothing built to detect from.
-    public string? DetectDefinitions()
-    {
-        var asm = Assembly;
-        if (asm == null) return null;
-        var sources = asm.SourceMap.Select(e => e.File).Distinct()
-            .Where(File.Exists).Select(f => (Path: f, Text: File.ReadAllText(f))).ToList();
-        var rom = RomBytes(0, Bus.RomSize);
-        var refs = RomReference.ShippedFor(LoadedPath);
-        var r = EditDefinitions(d => CalibrationDetector.Detect(d, asm, rom, sources, refs));
-        return r.Summary;
-    }
-
     // ------------------------------------------------------------------ check-engine lamp
 
     /// What the MIL window shows: the lamp and flash line now, what the flashes decoded to, the codes the ROM has stored (what the lamp will flash) and the fault bits set right now.
@@ -1324,7 +1174,7 @@ public sealed class SimHost
             var current = Enumerable.Range(0, 48)
                 .Where(b => (r[_milField + b / 8] >> (b % 8) & 1) != 0 && MilMonitor.FaultBitCode(b) != null)
                 .Select(b => (b, MilMonitor.FaultBitCode(b)!.Value)).ToList();
-            bool scc = !Bus.Is66911 && (Sim.Bus.Ppi.PortAInput & 0x80) != 0;
+            bool scc = !Chip.Is66911 && (Sim.Bus.Ppi.PortAInput & 0x80) != 0;
             return new MilView(m.Lamp, m.Flash, scc, m.Flashing, [.. m.LastRound], [.. m.CurrentRound], stored, _milStored, current, _milField);
         }
     }
@@ -1364,6 +1214,7 @@ public sealed class SimHost
                 case "vbatt": e.VbattVolts = value; break;
                 case "speed": e.SpeedKmh = value; break;
                 case "cranking": e.Cranking = value != 0; break;
+                case "trigfault": e.Trigger = (TriggerFault)(int)value; break;
                 case "baro": e.BaroKpa = value; break;
                 case "oilpressure": Sim.Board.VtecPressureSwitch = value != 0; break;
                 case "eld": e.EldVolts = value; break;
@@ -1371,8 +1222,8 @@ public sealed class SimHost
                 case "crankvbatt": e.CrankingVbattVolts = value; break;
                 case "ac": e.AcRequest = value != 0; break;
                 case "power": Sim.Board.PowerGood = value != 0; break;
-                // P13 port 4 pins 51/52 read low when active
-                case "starter": Sim.Bus.StarterSignal = value == 0; break;
+                // P13 port 4: the starter signal (pin 51) high while the starter turns; the power-steering switch (pin 52) low when active
+                case "starter": Sim.Bus.StarterHeld = value != 0; break;
                 case "psp": Sim.Bus.PowerSteeringPressure = value == 0; break;
                 // raw switch buffers (P28): 8255 port A, and the 4700h buffer (bit 2 is the A/C switch above)
                 case "porta": Sim.Bus.Ppi.PortAInput = (byte)value; break;
@@ -1381,396 +1232,5 @@ public sealed class SimHost
         }
     }
 
-    public List<XrefHit> Xref(string target, int max = 60)
-    {
-        lock (_lock)
-        {
-            var defs = Defs();
-            if (!defs.TryResolve(target, out var addr)) return [];
-            var labels = defs.Symbols.GroupBy(kv => kv.Value).ToDictionary(g => g.Key, g => g.First().Key);
-            return Calibration.Xref.Find([.. Sim.Bus.Rom], addr,
-                Assembly?.SourceMap.Select(e => e.Address),
-                a => labels.GetValueOrDefault(a, ""),
-                a => Assembly?.Lookup(a) is { } e ? $"{Path.GetFileName(e.File)}:{e.Line}" : null,
-                maxHits: max);
-        }
-    }
 
-    public List<(string Name, int Address, int Offset, string Kind)> Lookup(string q)
-    {
-        lock (_lock)
-        {
-            var defs = Defs();
-            q = q.Trim();
-            var res = new List<(string, int, int, string)>();
-            bool looksHex = q.Length > 0 && (q.All(Uri.IsHexDigit) || q.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ||
-                                             q.EndsWith("h", StringComparison.OrdinalIgnoreCase));
-            if (looksHex && defs.TryResolve(q, out var addr))
-            {
-                foreach (var (nm, a) in defs.SymbolsAt(addr, 64).Take(4)) res.Add((nm, a, addr - a, "near"));
-                var s = Assembly?.Lookup(addr);
-                res.Add(($"0x{addr:X4}", addr, 0, s == null ? "address" : $"{Path.GetFileName(s.File)}:{s.Line}"));
-            }
-            foreach (var kv in defs.Symbols.Where(kv => kv.Key.Contains(q, StringComparison.OrdinalIgnoreCase))
-                         .OrderBy(kv => kv.Key.Length).Take(60))
-                res.Add((kv.Key, kv.Value, 0, "symbol"));
-            foreach (var i in defs.Items.Where(i => i.Name.Contains(q, StringComparison.OrdinalIgnoreCase)).Take(20))
-                res.Add((i.Name, i.Address, 0, "setting"));
-            return res;
-        }
-    }
-
-    // ------------------------------------------------------------------ calibration
-
-    public CellValue[] ReadItem(ItemDef item)
-    {
-        lock (_lock) return RomData.Read(Defs(), Sim.Bus.Rom, item);
-    }
-
-    /// The byte that keeps the 8-bit sum of the ROM at 0, for a ROM that checks its own sum (the skeleton's "checksum" byte, or a free byte of a stock image that sums to 0). Every write below puts it right again, so the image in the simulator, in a saved .bin and in the emulator always passes the check.
-    public int? ChecksumAddress { get; private set; }
-
-    /// The ROM checks its own 8-bit sum while it runs and resets when it is wrong: stock Honda code does, the skeleton only with its RomSumCheck switch on, HTS and the tuning ROMs not at all (they do not keep the sum). A change sent to an emulator while the engine runs can land part-way through a pass of that sum.
-    public bool ChecksSumWhileRunning
-    {
-        get
-        {
-            lock (_lock)
-            {
-                if (ChecksumAddress == null) return false;
-                if (Assembly?.Symbols.Values.FirstOrDefault(s => s.Name.Equals("RomSumCheck", StringComparison.OrdinalIgnoreCase)) is { } sw)
-                    return Sim.Bus.Rom[(int)sw.Value & (Bus.RomSize - 1)] == 1;
-                return RomChecksum.Sum(Sim.Bus.Rom) == 0;
-            }
-        }
-    }
-
-    /// The ROM's 8-bit sum now (0 = what a ROM checking its own sum needs), and the byte kept to balance it, if any.
-    public (int Sum, int? Site) ChecksumNow()
-    {
-        lock (_lock) return (RomChecksum.Sum(Sim.Bus.Rom), ChecksumAddress);
-    }
-
-    /// Make the ROM's sum 0: with its balancing byte, or - a ROM that has none (HTS) - a free byte at the top of the ROM,
-    /// which from then on every edit keeps right. What was done, for the status line.
-    public string RecalculateChecksum()
-    {
-        lock (_lock)
-        {
-            ChecksumAddress ??= RomChecksum.Site(Sim.Bus.Rom, Assembly) ?? RomChecksum.FreeByte(Sim.Bus.Rom, Assembly);
-            if (ChecksumAddress is not int at) return "no free byte at the top of the ROM to balance the sum with";
-            byte was = Sim.Bus.Rom[at];
-            if (RomChecksum.Balance(Sim.Bus.Rom, at)) QueueUpload(at, 1);
-            Interlocked.Increment(ref _version);
-            return $"checksum recalculated: byte {at:X4}h {was:X2}h -> {Sim.Bus.Rom[at]:X2}h, the ROM now sums to {RomChecksum.Sum(Sim.Bus.Rom):X2}h";
-        }
-    }
-
-    /// Re-balance the checksum byte after the ROM changed (under the lock).
-    void BalanceChecksum()
-    {
-        if (ChecksumAddress is not int at) return;
-        if (RomChecksum.Balance(Sim.Bus.Rom, at)) QueueUpload(at, 1);
-    }
-
-    public CellValue WriteItem(ItemDef item, int index, double value, bool raw = false)
-    {
-        lock (_lock)
-        {
-            var defs = Defs();
-            if (raw) RomData.WriteRawCell(Sim.Bus.Rom, item, index, value, defs);
-            else RomData.Write(defs, Sim.Bus.Rom, item, index, value);
-            BalanceChecksum();
-            Sim.InvalidateDecodeCache();
-            RomDirty = true;
-            Interlocked.Increment(ref _version);
-            QueueUpload(item.CellAddress(index), item.ElementSize);
-            return RomData.Read(defs, Sim.Bus.Rom, item)[index];
-        }
-    }
-
-    /// Write several cells as one undoable step (the Calibration page and MCP clients). A definition's cells were written (on the thread that wrote them): the source may keep some of them (the build file of a New ROM keeps the ROM's name and version and the watermark).
-    public event Action<ItemDef>? ItemWritten;
-
-    public void WriteCells(ItemDef item, IReadOnlyList<(int Index, double Value)> cells, bool raw, string what)
-    {
-        WriteCellsCore(item, cells, raw, what);
-        try { ItemWritten?.Invoke(item); } catch (Exception ex) { AppLog.Error("calibration", "after-write handler failed", ex); }
-    }
-
-    void WriteCellsCore(ItemDef item, IReadOnlyList<(int Index, double Value)> cells, bool raw, string what)
-    {
-        if (cells.Count == 0) return;
-        lock (_lock)
-        {
-            int lo = cells.Min(c => item.CellAddress(c.Index)), hi = cells.Max(c => item.CellAddress(c.Index)) + item.ElementSize;
-            var before = RomBytes(lo, hi - lo);
-            var defs = Defs();
-            foreach (var (i, v) in cells)
-            {
-                if (raw) RomData.WriteRawCell(Sim.Bus.Rom, item, i, v, defs);
-                else RomData.Write(defs, Sim.Bus.Rom, item, i, v);
-            }
-            BalanceChecksum();
-            Sim.InvalidateDecodeCache();
-            RomDirty = true;
-            var after = RomBytes(lo, hi - lo);
-            if (!before.AsSpan().SequenceEqual(after)) PushUndo(lo, before, after, $"{item.Name} {what}");
-            Interlocked.Increment(ref _version);
-            QueueUpload(lo, hi - lo);
-        }
-    }
-
-    /// Write scattered bytes (a scaling, an imported section) as one undoable step. The bytes are given as addresses, so a table and the multiplier row beside it change together.
-    public int ApplyPatches(IReadOnlyList<BytePatch> patches, string what)
-    {
-        if (patches.Count == 0) return 0;
-        lock (_lock)
-        {
-            int lo = patches.Min(p => p.Address), hi = patches.Max(p => p.Address) + 1;
-            if (lo < 0 || hi > Sim.Bus.Rom.Length) throw new ArgumentOutOfRangeException(nameof(patches), "a patch is outside the ROM");
-            var before = RomBytes(lo, hi - lo);
-            foreach (var p in patches) Sim.Bus.Rom[p.Address] = p.Value;
-            BalanceChecksum();
-            Sim.InvalidateDecodeCache();
-            RomDirty = true;
-            var after = RomBytes(lo, hi - lo);
-            if (before.AsSpan().SequenceEqual(after)) return 0;
-            PushUndo(lo, before, after, what);
-            Interlocked.Increment(ref _version);
-            QueueUpload(lo, hi - lo);
-            return patches.Count;
-        }
-    }
-
-    // undo / redo of ROM edits: (address, bytes before, bytes after, description)
-    readonly Stack<(int Addr, byte[] Before, byte[] After, string What)> _undo = new(), _redo = new();
-
-    public void PushUndo(int addr, byte[] before, byte[] after, string what)
-    {
-        lock (_lock) { _undo.Push((addr, before, after, what)); _redo.Clear(); }
-    }
-
-    public string? Undo()
-    {
-        lock (_lock)
-        {
-            if (_undo.Count == 0) return null;
-            var u = _undo.Pop();
-            PatchRom(u.Addr, u.Before);
-            _redo.Push(u);
-            return u.What;
-        }
-    }
-
-    public string? Redo()
-    {
-        lock (_lock)
-        {
-            if (_redo.Count == 0) return null;
-            var u = _redo.Pop();
-            PatchRom(u.Addr, u.After);
-            _undo.Push(u);
-            return u.What;
-        }
-    }
-
-    // ------------------------------------------------------------------ ROM emulator
-
-    /// The Moates Ostrich 2.0 / Demon, shared by the Calibration page (upload), the Trace page's Hit trace and MCP clients.
-    public readonly MoatesTrace Emulator = new();
-    /// Upload every calibration edit to the emulator as it is made. Switched on, whatever changed before (or while the emulator was away) goes up too.
-    public bool AutoUpload { get => _autoUpload; set { _autoUpload = value; if (value) _uploadWake.Set(); } }
-    bool _autoUpload;
-    public string EmulatorStatus { get; private set; } = "not connected";
-    readonly object _uploadLock = new();
-    /// The 256-byte blocks changed here since they were last written to the emulator: every edit marks them, connected or not, so nothing is missed when uploading starts later or the link comes back.
-    readonly bool[] _notUploaded = new bool[Bus.RomSize / 256];
-    readonly AutoResetEvent _uploadWake = new(false);
-
-    void QueueUpload(int addr, int len)
-    {
-        lock (_uploadLock)
-            for (int b = Math.Max(0, addr) / 256; b <= Math.Min(Bus.RomSize - 1, addr + Math.Max(1, len) - 1) / 256; b++) _notUploaded[b] = true;
-        if (AutoUpload && Emulator.Connected) _uploadWake.Set();
-    }
-
-    /// Held while the user is asked whether the emulator's ROM is to be replaced (just connected, and it holds a different one): edits waiting to go up must not land, block by block, in a ROM that may be kept.
-    public volatile bool UploadsHeld;
-
-    /// The user kept the emulator's own ROM: edits made to the one here are not to be sent into it.
-    public void DiscardPendingUploads() => ForgetUploads(true);
-
-    /// How many bytes the emulator holds differently from the ROM here (it is read back), and where the first is.
-    public (int Differences, int FirstAt) EmulatorCompare() => Emulator.Validate(RomBytes(0, Bus.RomSize));
-
-    /// Bytes that differed at the last Validate.
-    public int LastDifferences { get; private set; }
-
-    /// Blocks not yet in the emulator, for the status line.
-    public int NotUploadedBlocks { get { lock (_uploadLock) return _notUploaded.Count(x => x); } }
-
-    void ForgetUploads(bool all, int lo = 0, int hi = 0)
-    {
-        lock (_uploadLock)
-            if (all) Array.Clear(_notUploaded);
-            else for (int b = lo / 256; b < (hi + 255) / 256; b++) _notUploaded[b] = false;
-    }
-
-    void UploadLoop()
-    {
-        while (true)
-        {
-            try { UploadSlice(); }
-            catch (Exception ex) { AppLog.Error("emulator", "upload thread", ex); Thread.Sleep(200); }
-        }
-    }
-
-    void UploadSlice()
-    {
-        {
-            _uploadWake.WaitOne(2000);  // and every so often: a link that came back takes what it missed
-            Thread.Sleep(40);      // let a burst of edits coalesce into one write
-            if (!AutoUpload || !Emulator.Connected || UploadsHeld) return;
-            // nothing open (a cleared project): the emulator keeps what it has
-            if (!CanUpload(out _)) { ForgetUploads(true); return; }
-            // every run of changed blocks, one write each
-            var runs = new List<(int Lo, int Hi)>();
-            lock (_uploadLock)
-                for (int b = 0; b < _notUploaded.Length; b++)
-                {
-                    if (!_notUploaded[b]) continue;
-                    int e = b;
-                    while (e + 1 < _notUploaded.Length && _notUploaded[e + 1]) e++;
-                    runs.Add((b * 256, (e + 1) * 256));
-                    b = e;
-                }
-            if (runs.Count == 0) return;
-            var rom = RomBytes(0, Bus.RomSize);
-            foreach (var (lo, hi) in runs)
-                try
-                {
-                    // taken off the list first: an edit made while this block is being written marks it again
-                    ForgetUploads(false, lo, hi);
-                    Emulator.WriteRange(rom, lo, hi - lo);
-                    EmulatorStatus = $"{Emulator.Version}: uploaded {lo:X4}-{hi - 1:X4} at {DateTime.Now:HH:mm:ss}";
-                    AppLog.Write(LogKind.Serial, "emulator", $"uploaded {lo:X4}-{hi - 1:X4}");
-                }
-                catch (Exception ex)
-                {
-                    QueueUpload(lo, hi - lo);        // still to go: tried again on the next pass
-                    EmulatorStatus = "upload failed: " + ex.Message;
-                    AppLog.Error("emulator", "upload failed", ex);
-                    Thread.Sleep(500);
-                    return;
-                }
-        }
-    }
-
-    public string EmulatorConnect(string port)
-    {
-        var v = Emulator.Connect(port);
-        EmulatorStatus = $"{v} on {port}";
-        return EmulatorStatus;
-    }
-
-    /// Whether what is here may go to the emulator: a ROM has to be open, and the image must not be blank (all FF or all 00) - sending that would wipe what the emulator holds, which is the one thing an upload must never do by accident.
-    public bool CanUpload(out string why)
-    {
-        why = "";
-        if (LoadedPath == null) { why = "nothing is open here to upload (Download reads what the emulator has)"; return false; }
-        var rom = RomBytes(0, Bus.RomSize);
-        if (rom.All(b => b == 0xFF) || rom.All(b => b == 0x00)) { why = "the ROM here is blank: not uploaded, so the emulator keeps what it has"; return false; }
-        return true;
-    }
-
-    public string EmulatorUploadAll()
-    {
-        if (!CanUpload(out var why)) { AppLog.Warn("emulator", "upload refused: " + why); throw new InvalidOperationException(why); }
-        ForgetUploads(true);
-        var rom = RomBytes(0, Bus.RomSize);
-        try { Emulator.Upload(rom); }
-        catch { QueueUpload(0, Bus.RomSize); throw; }
-        EmulatorStatus = $"{Emulator.Version}: whole ROM uploaded at {DateTime.Now:HH:mm:ss}";
-        AppLog.Write(LogKind.Serial, "emulator", "uploaded the whole ROM");
-        return EmulatorStatus;
-    }
-
-    /// Read the image back out of the emulator and compare it with the one here.
-    public string EmulatorValidate()
-    {
-        var rom = RomBytes(0, Bus.RomSize);
-        var (diff, first) = Emulator.Validate(rom);
-        LastDifferences = diff;
-        bool can = CanUpload(out var why);
-        EmulatorStatus = diff == 0
-            ? $"{Emulator.Version}: the emulator matches this ROM ({rom.Length} bytes checked at {DateTime.Now:HH:mm:ss})"
-            : $"{Emulator.Version}: {diff} byte(s) differ, first at {first:X4}" + (!can ? " - " + why : "");
-        AppLog.Write(LogKind.Serial, "emulator", EmulatorStatus);
-        return EmulatorStatus;
-    }
-
-    /// Read the whole image out of the emulator into a .bin of its own (in the ROMs folder), to be opened as the ROM.
-    public string EmulatorDownload(out string path)
-    {
-        var there = Emulator.Download(Bus.RomSize);
-        var dir = AppPaths.Roms;
-        Directory.CreateDirectory(dir);
-        path = Path.Combine(dir, $"emulator-{DateTime.Now:yyyyMMdd-HHmmss}.bin");
-        SafeFile.WriteAllBytes(path, there);
-        EmulatorStatus = $"{Emulator.Version}: read {there.Length} bytes out of the emulator into {path}";
-        AppLog.Write(LogKind.Serial, "emulator", EmulatorStatus);
-        return EmulatorStatus;
-    }
-
-    public void EmulatorDisconnect()
-    {
-        Emulator.Close();
-        EmulatorStatus = "not connected";
-    }
-
-    /// A copy of the whole ROM image, for working something out without holding the lock (a scaling preview, an export).
-    public byte[] RomCopy()
-    {
-        lock (_lock) return [.. Sim.Bus.Rom];
-    }
-
-    public byte[] RomBytes(int addr, int len)
-    {
-        lock (_lock)
-        {
-            var b = new byte[Math.Max(0, len)];
-            for (int i = 0; i < b.Length; i++) b[i] = Sim.Bus.Rom[(addr + i) & (Bus.RomSize - 1)];
-            return b;
-        }
-    }
-
-    /// Put bytes back into the running ROM (calibration undo/redo).
-    public void PatchRom(int addr, byte[] bytes)
-    {
-        lock (_lock)
-        {
-            for (int i = 0; i < bytes.Length; i++) Sim.Bus.Rom[(addr + i) & (Bus.RomSize - 1)] = bytes[i];
-            BalanceChecksum();
-            Sim.InvalidateDecodeCache();
-            RomDirty = true;
-            Interlocked.Increment(ref _version);
-            QueueUpload(addr, bytes.Length);
-        }
-    }
-
-    public double[] AxisValues(AxisDef? axis, int count)
-    {
-        lock (_lock) return RomData.AxisValues(Defs(), Sim.Bus.Rom, axis, count);
-    }
-
-    public void SaveRom(string path)
-    {
-        lock (_lock)
-        {
-            if (File.Exists(path)) File.Copy(path, path + ".bak", overwrite: true);
-            SafeFile.WriteAllBytes(path, [.. Sim.Bus.Rom]);
-            RomDirty = false;
-        }
-    }
 }

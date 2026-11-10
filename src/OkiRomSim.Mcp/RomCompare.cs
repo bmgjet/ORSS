@@ -43,7 +43,7 @@ public static class RomCompare
         if (vec.Count > 0) { sb.AppendLine(); sb.AppendLine("VECTORS CHANGED"); foreach (var x in vec) sb.AppendLine("  " + x); }
 
         // ---- tables
-        var tableMask = new bool[Bus.RomSize];
+        var tableMask = new bool[Chip.RomSize];
         if (o.Tables)
         {
             var (da, db) = (Tables(a), Tables(b));
@@ -52,7 +52,7 @@ public static class RomCompare
             int same = 0, shown = 0;
             foreach (var ia in da.Items.Where(i => i.Count > 0).OrderBy(i => i.Address))
             {
-                for (int k = ia.Address; k < ia.Address + ia.Span && k < Bus.RomSize; k++) if (k >= 0) tableMask[k] = true;
+                for (int k = ia.Address; k < ia.Address + ia.Span && k < Chip.RomSize; k++) if (k >= 0) tableMask[k] = true;
                 var ib = db.Items.FirstOrDefault(x => x.Address == ia.Address && x.Rows == ia.Rows && x.Cols == ia.Cols && x.Type == ia.Type);
                 if (ib == null)
                 {
@@ -84,11 +84,11 @@ public static class RomCompare
         }
 
         // ---- functions
-        var codeMask = new bool[Bus.RomSize];
+        var codeMask = new bool[Chip.RomSize];
         if (o.Functions)
         {
             var fa = Functions(a); var fb = Functions(b);
-            foreach (var f in fa.Values) foreach (var (addr, (d, _)) in f.R.Code) for (int k = 0; k < d.Len; k++) codeMask[(addr + k) & (Bus.RomSize - 1)] = true;
+            foreach (var f in fa.Values) foreach (var (addr, (d, _)) in f.R.Code) for (int k = 0; k < d.Len; k++) codeMask[(addr + k) & (Chip.RomSize - 1)] = true;
             var byShapeB = fb.Values.GroupBy(f => f.Shape).ToDictionary(g => g.Key, g => g.ToList());
             var matchedB = new HashSet<int>();
             var changed = new List<string>(); var moved = new List<string>(); var removed = new List<string>();
@@ -138,7 +138,7 @@ public static class RomCompare
         foreach (var (st, en) in ranges)
             for (int i = st; i < en; i++)
             {
-                if (i >= Bus.RomSize) break;
+                if (i >= Chip.RomSize) break;
                 if (tableMask[i]) inTables++;
                 else if (codeMask[i]) inCode++;
             }
@@ -175,7 +175,7 @@ public static class RomCompare
         for (int v = 0; v < 0x38 / 2; v++)
         {
             int t = p.Image[v * 2] | (p.Image[(v * 2) + 1] << 8);
-            if (t >= 0x38 && t < Bus.RomSize) todo.Enqueue(t);
+            if (t >= 0x38 && t < Chip.RomSize) todo.Enqueue(t);
         }
         while (todo.Count > 0 && result.Count < 3000)
         {
@@ -191,7 +191,7 @@ public static class RomCompare
                 for (int i = 0; i < d.Len; i++) bytes.Append(p.Image[(addr + i) & 0x7FFF].ToString("X2"));
             }
             result[e] = new Fn(e, r.Name, r.Code.Count, Hash(shape.ToString()), Hash(bytes.ToString()), r);
-            foreach (var c in r.Calls.Concat(r.TailJumps)) if (c >= 0x38 && c < Bus.RomSize && !result.ContainsKey(c)) todo.Enqueue(c);
+            foreach (var c in r.Calls.Concat(r.TailJumps)) if (c >= 0x38 && c < Chip.RomSize && !result.ContainsKey(c)) todo.Enqueue(c);
         }
         return result;
     }

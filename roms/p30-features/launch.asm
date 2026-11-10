@@ -46,7 +46,7 @@ endif
 
 if XP == XP_CODE
 launch_tick:    PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -64,7 +64,7 @@ launch_tick:    PUSHS   LRB
                 JEQ     launch_decide          ; input off: no launch (C clear)
                 CLRB    A                      ; and standing: road speed below the limit
                 LCB     A, launch_speed
-                CMPB    0b4h, A                ; speed - limit borrows (C set) while below it
+                CMPB    ENG_VSS, A                ; speed - limit borrows (C set) while below it
 launch_decide:  MOV     X1, #launch_block
                 L       A, #MB_LAUNCH
                 CAL     mod_limit

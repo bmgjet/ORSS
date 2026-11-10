@@ -62,7 +62,7 @@ endif
 if XP == XP_CODE
 wbcl_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -74,22 +74,22 @@ wbcl_tick:
                 CMPB    A, #000h
                 JEQ     wbcl_off
                 LCB     A, wbcl_ect            ; warm (a smaller byte is warmer)
-                CMPB    0c1h, A
+                CMPB    ENG_ECT, A
                 JGE     wbcl_off
                 LCB     A, wbcl_tps
-                CMPB    0b9h, A
+                CMPB    ENG_TPS, A
                 JGT     wbcl_off
                 LC      A, wbcl_rpmmin         ; rpm window
-                CMP     0ach, A
+                CMP     ENG_RPMP, A
                 JGT     wbcl_off
                 LC      A, wbcl_rpmmax
-                CMP     0ach, A
+                CMP     ENG_RPMP, A
                 JLT     wbcl_off
                 MOV     X1, #wbcl_input
                 CAL     mod_afr
                 MOV     DP, #wbcl_afr
                 STB     A, [DP]
-                LB      A, 0a3h
+                LB      A, ENG_MAP
                 MOV     X1, #wbcl_target
                 CAL     mod_lookup9
                 STB     A, r4                  ; target

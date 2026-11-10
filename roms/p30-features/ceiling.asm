@@ -40,7 +40,7 @@ endif
 if XP == XP_CODE
 ceiling_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -55,7 +55,7 @@ ceiling_tick:
                 MOVB    r5, #005h
 ceiling_find:   CLRB    A
                 LCB     A, 00000h[X1]          ; the entry's speed
-                CMPB    0b4h, A                ; road speed - entry: no borrow at or above it
+                CMPB    ENG_VSS, A                ; road speed - entry: no borrow at or above it
                 JGE     ceiling_found
                 INC     X1
                 INC     X1
@@ -71,7 +71,7 @@ ceiling_found:  LC      A, 00001h[X1]          ; its ceiling
                 AND     A, #MB_CEILING
                 JNE     ceiling_cutting
                 L       A, er2
-                CMP     0ach, A                ; period above the ceiling's: below the rpm
+                CMP     ENG_RPMP, A                ; period above the ceiling's: below the rpm
                 JGT     ceiling_off
                 SJ      ceiling_on
 ceiling_cutting:
@@ -82,7 +82,7 @@ ceiling_cutting:
                 SRL     A
                 SRL     A
                 ADD     A, er2
-                CMP     0ach, A
+                CMP     ENG_RPMP, A
                 JGT     ceiling_off
 ceiling_on:     MOV     X1, #ceiling_block
                 L       A, #MB_CEILING

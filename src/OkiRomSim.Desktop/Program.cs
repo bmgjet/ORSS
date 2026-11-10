@@ -14,9 +14,11 @@ public static class Program
         // `RomSimStudio --mcp [--root DIR]... [--read-only]` runs the MCP server over stdio for a local MCP client instead of opening the window (same tools as romsim-mcp).
         if (args.Contains("--mcp")) return RunMcp(args);
         if (Array.IndexOf(args, "--selftest-live") is int st and >= 0 && st + 1 < args.Length) return SelfTest.Live(args[st + 1]);
-        // --update-check [folder]: what the start-up check would offer, for the install in that folder (default: this one)
-        if (Array.IndexOf(args, "--update-check") is int uc and >= 0) return Updater.CheckFromCommandLine(uc + 1 < args.Length ? args[uc + 1] : null);
+        // --update-check [folder [site]]: what the start-up check would offer, for the install in that folder (default: this one); a site to check instead of the real one
+        if (Array.IndexOf(args, "--update-check") is int uc and >= 0) return Updater.CheckFromCommandLine(uc + 1 < args.Length ? args[uc + 1] : null, uc + 2 < args.Length ? args[uc + 2] : null);
         if (Array.IndexOf(args, "--selftest-smooth") >= 0) return SelfTest.Smooth();
+        // --isr-timing SKELETON DEFINES: New ROM's interrupt-time meter for a pick on another part than the one the app runs
+        if (Array.IndexOf(args, "--isr-timing") is int it and >= 0 && it + 2 < args.Length) return IsrTimingProcess.Run(args[it + 1], args[it + 2]);
         if (Array.IndexOf(args, "--selftest-project") is int sp and >= 0 && sp + 1 < args.Length) return SelfTest.Project(args[sp + 1]);
         // Errors on background threads are logged (Debug page and %TEMP%) rather than lost.
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
@@ -48,6 +50,16 @@ public static class Program
         Console.SetOut(Console.Error);
         OkiRomSim.Mcp.McpStdio.RunAsync(server, new StreamReader(Console.OpenStandardInput(), System.Text.Encoding.UTF8), protocolOut).GetAwaiter().GetResult();
         return 0;
+    }
+
+    /// How to start this program again: its own executable, or - when it runs as "dotnet RomSimStudio.dll" (Linux, macOS) -
+    /// the dotnet host with the program's file as the first argument.
+    public static (string Command, string[] Args) SelfCommand()
+    {
+        var exe = Environment.ProcessPath ?? "RomSimStudio";
+        return Path.GetFileNameWithoutExtension(exe).Equals("dotnet", StringComparison.OrdinalIgnoreCase)
+            ? (exe, [Path.Combine(AppContext.BaseDirectory, "RomSimStudio.dll")])
+            : (exe, []);
     }
 
     public static AppBuilder BuildAvaloniaApp() =>

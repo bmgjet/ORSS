@@ -54,7 +54,11 @@ public static class ScreenFit
     /// A window other than the main one, once it is open: drawn at the app's UI scale, and scaled down further if even then it would not fit the screen, so its inputs are never off the edge. Its content goes inside a scaler; everything else about it is untouched.
     public static void FitWindow(Window w)
     {
+#if !TUNER_ONLY
         if (w is MainWindow || w.Content is not Control content) return;
+#else
+        if (w is TunerWindow || w.Content is not Control content) return;
+#endif
         var scr = w.Screens.ScreenFromWindow(w) ?? w.Screens.Primary;
         if (scr == null) return;
         var dip = Dip(scr);

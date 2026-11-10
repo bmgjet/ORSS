@@ -13,16 +13,21 @@ string password = Environment.GetEnvironmentVariable("OKIROMSIM_MCP_PASSWORD") ?
 string? cert = null, certPw = null;
 for (int i = 0; i < args.Length; i++)
 {
-    string Next() => i + 1 < args.Length ? args[++i] : throw new ArgumentException($"{args[i]} needs a value");
+    // a missing or bad value is a usage error (exit 2 with a message), not an unhandled exception
+    string? Next() => i + 1 < args.Length ? args[++i] : null;
+    string? value = args[i] is "--root" or "--port" or "--password" or "--cert" or "--cert-password" ? Next() : "";
+    if (value == null) { Console.Error.WriteLine($"{args[i]} needs a value"); return 2; }
     switch (args[i])
     {
-        case "--root": roots.Add(Next()); break;
+        case "--root": roots.Add(value); break;
         case "--http": http = true; break;
-        case "--port": port = int.Parse(Next()); break;
+        case "--port":
+            if (!int.TryParse(value, out port) || port is < 1 or > 65535) { Console.Error.WriteLine($"--port {value}: not a port number (1-65535)"); return 2; }
+            break;
         case "--remote": remote = true; break;
-        case "--password": password = Next(); break;
-        case "--cert": cert = Next(); break;
-        case "--cert-password": certPw = Next(); break;
+        case "--password": password = value; break;
+        case "--cert": cert = value; break;
+        case "--cert-password": certPw = value; break;
         case "--read-only": readOnly = true; break;
         case "-h" or "--help":
             Console.Error.WriteLine("romsim-mcp [--root DIR]... [--read-only] [--http [--port N] [--remote] [--password PW] [--cert f.pfx --cert-password PW]]");
@@ -50,5 +55,8 @@ await host.StartAsync();
 Console.Error.WriteLine($"workspace: {string.Join(", ", server.Workspace.Roots)}; Ctrl+C to stop");
 var done = new TaskCompletionSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; done.TrySetResult(); };
+// a service manager's stop (systemd, launchd, docker, `kill`) is SIGTERM: stop cleanly then too - only Ctrl+C was heard before, and the
+// server went on serving after it was told to stop
+using var onTerm = System.Runtime.InteropServices.PosixSignalRegistration.Create(System.Runtime.InteropServices.PosixSignal.SIGTERM, c => { c.Cancel = true; done.TrySetResult(); });
 await done.Task;
 return 0;

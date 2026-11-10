@@ -48,7 +48,7 @@ endif
 if XP == XP_CODE
 wmi_tick:
                 PUSHS   LRB
-                MOV     LRB, #0003fh
+                MOV     LRB, #SVC_BANKT
                 L       A, DP
                 PUSHS   A
                 L       A, X1
@@ -63,17 +63,17 @@ wmi_tick:
                 CMPB    A, #000h
                 JEQ     wmi_zero
                 LCB     A, wmi_tps
-                CMPB    0b9h, A
+                CMPB    ENG_TPS, A
                 JLT     wmi_zero
                 LCB     A, wmi_ect             ; a larger byte is colder
-                CMPB    0c1h, A
+                CMPB    ENG_ECT, A
                 JGT     wmi_zero
                 CLR     A
                 LC      A, wmi_rpm
-                CMP     0ach, A
+                CMP     ENG_RPMP, A
                 JGT     wmi_zero
                 MOV     X1, #wmi_duty
-                LB      A, 0a3h
+                LB      A, ENG_MAP
                 CAL     mod_lookup9            ; A = duty, %
                 SRLB    A                      ; / 4: steps of the 25-step cycle
                 SRLB    A

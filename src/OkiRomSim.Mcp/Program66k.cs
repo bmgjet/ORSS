@@ -16,14 +16,57 @@ public sealed class Program66k
     public bool FromBinary { get; init; }
 
     static readonly Dictionary<string, (DateTime Stamp, Program66k Program)> Cache = new(StringComparer.OrdinalIgnoreCase);
+
+    /// Every file a load read (the main file and, for a source, everything it includes) with its time stamp then: a cached load is used
+    /// again only while all of them are unchanged. Keyed on the main file alone, an edit to an included file (the skeleton under a build
+    /// file, a feature module) was not seen, and run / compare_bins / cal_save went on with the old bytes.
+    public static (string File, DateTime Stamp)[] Stamps(IEnumerable<string> files) =>
+        [.. files.Distinct(StringComparer.OrdinalIgnoreCase).Select(f => (f, File.Exists(f) ? File.GetLastWriteTimeUtc(f) : DateTime.MinValue))];
+
+    public static bool Unchanged((string File, DateTime Stamp)[] inputs) =>
+        inputs.All(i => (File.Exists(i.File) ? File.GetLastWriteTimeUtc(i.File) : DateTime.MinValue) == i.Stamp);
+
+    /// The files a load read: the main file, and every source file the assembly took lines from.
+    public (string File, DateTime Stamp)[] Inputs { get; private set; } = [];
     static readonly Regex DataLine = new(@"^\s*([A-Za-z_][\w]*\s*:)?\s*(DB|DW|DS)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// A server of its own (stdio or HTTP, no app behind it): each file is worked on as the part it is for - a source's
+    /// "; processor:" line (or the P13 skeleton it includes), a .bin's vectors - since nothing else picks the part. Inside
+    /// the app the part is the app's (the ROM open there), and is left alone.
+    public static bool AutoPart { get; set; }
+
+    /// The part this program is for, when AutoPart worked it out (applied again each time it is loaded).
+    public ProcessorProfile? Part { get; init; }
+
+    static ProcessorProfile? PartOf(string fullPath)
+    {
+        if (!AutoPart) return null;
+        try
+        {
+            if (fullPath.EndsWith(".asm", StringComparison.OrdinalIgnoreCase) || fullPath.EndsWith(".inc", StringComparison.OrdinalIgnoreCase))
+                return ProcessorProfile.Declared(File.ReadAllText(fullPath)) ?? ProcessorProfile.Msm66207();
+            var bytes = File.ReadAllBytes(fullPath);
+            return bytes.Length >= Chip.RomSize ? ProcessorProfile.ForImage(bytes) : null;
+        }
+        catch { return null; }
+    }
+
+    /// Put the part a file is for in place before working on it some other way than Load (with AutoPart; else nothing).
+    public static void UsePartOf(string fullPath) => Use(PartOf(fullPath));
+
+    static void Use(ProcessorProfile? part)
+    {
+        if (part != null && !part.Name.Equals(ProcessorProfile.Current.Name, StringComparison.OrdinalIgnoreCase)) part.Apply();
+    }
 
     /// Load a .asm (assembled) or .bin/.rom (disassembled, then assembled from that text).
     public static Program66k Load(string fullPath, Func<string, bool>? allowInclude = null)
     {
         var stamp = File.GetLastWriteTimeUtc(fullPath);
         lock (Cache)
-            if (Cache.TryGetValue(fullPath, out var c) && c.Stamp == stamp) return c.Program;
+            if (Cache.TryGetValue(fullPath, out var c) && c.Stamp == stamp && Unchanged(c.Program.Inputs)) { Use(c.Program.Part); return c.Program; }
+        var part = PartOf(fullPath);
+        Use(part);
         Program66k p;
         if (fullPath.EndsWith(".asm", StringComparison.OrdinalIgnoreCase) || fullPath.EndsWith(".inc", StringComparison.OrdinalIgnoreCase))
         {
@@ -33,16 +76,19 @@ public sealed class Program66k
                 var first = asm.Diagnostics.Where(d => d.Severity == Severity.Error).Take(5).Select(d => $"{System.IO.Path.GetFileName(d.File)}:{d.Line}: {d.Message}");
                 throw new ToolException("the source does not assemble; fix these first (see `assemble`):\n  " + string.Join("\n  ", first));
             }
-            p = new Program66k { Path = fullPath, Image = asm.Image, Asm = asm };
+            p = new Program66k { Path = fullPath, Image = asm.Image, Asm = asm, Part = part };
             foreach (var f in asm.SourceMap.Select(e => e.File).Distinct())
                 if (File.Exists(f)) p.Sources[f] = File.ReadAllLines(f);
         }
         else
         {
             var bytes = File.ReadAllBytes(fullPath);
-            if (bytes.Length > Bus.RomSize + 1) throw new ToolException($"{System.IO.Path.GetFileName(fullPath)} is {bytes.Length} bytes; a 66207 image is at most {Bus.RomSize}");
-            p = FromImage(bytes, fullPath);
+            if (bytes.Length > Chip.RomSize + 1) throw new ToolException($"{System.IO.Path.GetFileName(fullPath)} is {bytes.Length} bytes; a ROM image is at most {Chip.RomSize}");
+            var img = FromImage(bytes, fullPath);
+            p = new Program66k { Path = img.Path, Image = img.Image, Asm = img.Asm, FromBinary = true, Part = part };
+            foreach (var (f, l) in img.Sources) p.Sources[f] = l;
         }
+        p.Inputs = Stamps([fullPath, .. (p.Asm?.SourceMap.Select(e => e.File) ?? []).Where(f => !p.FromBinary)]);
         lock (Cache) Cache[fullPath] = (stamp, p);
         return p;
     }
@@ -50,9 +96,9 @@ public sealed class Program66k
     /// An image in memory (disassembled, then assembled from that text for symbols and lines).
     public static Program66k FromImage(byte[] bytes, string path)
     {
-        var image = new byte[Bus.RomSize];
+        var image = new byte[Chip.RomSize];
         Array.Fill(image, (byte)0xFF);
-        Array.Copy(bytes, image, Math.Min(bytes.Length, Bus.RomSize));
+        Array.Copy(bytes, image, Math.Min(bytes.Length, Chip.RomSize));
         string virt = System.IO.Path.ChangeExtension(System.IO.Path.GetFullPath(path), ".disasm.asm");
         var dis = Disassemble(image, path, virt);
         var asm = new OkiAssembler(new AssemblerOptions { ReadFile = f => string.Equals(f, virt, StringComparison.OrdinalIgnoreCase) ? dis.Text : null })
@@ -132,7 +178,7 @@ public sealed class Program66k
     /// Decode the instruction at `addr`, using the source line to settle the DD ambiguity (the source says LB or L, ADDB or ADD...). Without source, `ddHint` decides.
     public Decoded? DecodeAt(int addr, bool ddHint = true)
     {
-        Decoded? Try(bool dd) => Decoder.Decode(dd, i => Image[(addr + i) & (Bus.RomSize - 1)]);
+        Decoded? Try(bool dd) => Decoder.Decode(dd, i => Image[(addr + i) & (Chip.RomSize - 1)]);
         var w = Try(true); var b = Try(false);
         if (w == null) return b;
         if (b == null || w.Mnemonic == b.Mnemonic && w.Len == b.Len) return w;

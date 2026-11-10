@@ -218,7 +218,7 @@ public static class UiCheck
                 foreach (var (title, build) in pm.SettingsPages)
                     await ShotNew("settings " + title, () =>
                     {
-                        var win = new Window { Width = 900, Height = 700, Content = build() };
+                        var win = DarkWindow(title, build(), 900, 700);
                         win.Show();
                         return Task.CompletedTask;
                     });
@@ -228,6 +228,61 @@ public static class UiCheck
                 lock (errors) { report.Add($"TOTAL errors {errors.Count}"); report.AddRange(errors); }
                 File.WriteAllLines(Path.Combine(dir, "report.txt"), report);
                 lifetime?.Shutdown();
+                return;
+            }
+            // OKIROM_UICHECK_NEWROM_PROC=1: the app left on the P13's processor (a P13 ROM was open last), then New ROM > Create on
+            // the P30 base it opens on: the processor follows the base and the pick builds
+            if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_NEWROM_PROC") == "1")
+            {
+                ProcessorProfile.Msm66911().Apply();
+                var nw = new NewRomWindow { ProcessorWanted = p => p.Apply() };
+                nw.Show();
+                await Settle();
+                nw.ShowCreate();
+                for (int k = 0; k < 60 && !nw.CanCreateForCheck(); k++) await Task.Delay(500);
+                await Settle();
+                report.Add($"base {nw.BaseNameForCheck()}, processor {ProcessorProfile.Current.Name}, can create {nw.CanCreateForCheck()} | {nw.AdviceForCheck()}");
+                Check(nw, "new rom proc p30", dir, report);
+                nw.BaseForCheck("P13");
+                for (int k = 0; k < 60 && !nw.CanCreateForCheck(); k++) await Task.Delay(500);
+                await Task.Delay(1000); await Settle();
+                report.Add($"base {nw.BaseNameForCheck()}, processor {ProcessorProfile.Current.Name}, can create {nw.CanCreateForCheck()} | {nw.AdviceForCheck()}");
+                nw.BaseForCheck("P30");
+                for (int k = 0; k < 60 && !nw.CanCreateForCheck(); k++) await Task.Delay(500);
+                await Task.Delay(1000); await Settle();
+                report.Add($"base {nw.BaseNameForCheck()}, processor {ProcessorProfile.Current.Name}, can create {nw.CanCreateForCheck()} | {nw.AdviceForCheck()}");
+                nw.Close();
+                File.WriteAllLines(Path.Combine(dir, "report.txt"), report);
+                (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.Shutdown();
+                return;
+            }
+            // OKIROM_UICHECK_NEWROM_P13=1: New ROM on the P13 skeleton, the Default pick, its meters
+            if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_NEWROM_P13") == "1")
+            {
+                var wanted = new List<string>();
+                var nw = new NewRomWindow { ProcessorWanted = p => wanted.Add(p.Name) };
+                nw.ShowCreate();
+                nw.Show();
+                await Settle();
+                report.Add("opens on: " + nw.BaseNameForCheck());
+                nw.BaseForCheck("P13");
+                await Task.Delay(1500); await Settle();
+                report.Add("processor asked for: " + string.Join(", ", wanted));
+                // the Stock pick: the stock ROM, which can be created (its own rev limiter counts)
+                nw.StockForCheck();
+                for (int k = 0; k < 60 && !nw.CanCreateForCheck(); k++) await Task.Delay(500);
+                await Settle();
+                report.Add("P13 stock: can create " + nw.CanCreateForCheck() + " | " + nw.AdviceForCheck());
+                Check(nw, "new rom p13 stock", dir, report);
+                nw.DefaultForCheck();
+                for (int k = 0; k < 20 && !nw.TickForCheck().Contains("measuring"); k++) await Task.Delay(250);
+                for (int k = 0; k < 120 && (nw.TickForCheck().Contains("measuring") || nw.TickForCheck().StartsWith(" ")); k++) await Task.Delay(500);
+                await Task.Delay(500); await Settle();
+                report.Add("P13 default: base " + nw.BaseNameForCheck() + " | interrupt time " + nw.TickForCheck() + " | RAM " + nw.RamForCheck() + " | space " + nw.SpaceTipForCheck().Replace("\n", " | "));
+                Check(nw, "new rom p13 default", dir, report);
+                nw.Close();
+                File.WriteAllLines(Path.Combine(dir, "report.txt"), report);
+                (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.Shutdown();
                 return;
             }
             // OKIROM_UICHECK_NEWROM_ALL=1: New ROM with every module, the module RAM fixes it offers, and the first one taken
@@ -280,7 +335,7 @@ public static class UiCheck
                 // OKIROM_UICHECK_PAGES_ALL=1: first a skeleton ROM with every module that fits (all but rolling idle), so every page has rows
                 if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_PAGES_ALL") == "1")
                 {
-                    var skA = Skeleton.Find(NewRomWindow.Templates()).First();
+                    var skA = Skeleton.Find(NewRomWindow.Templates()).First(s => s.Platform == "P30");
                     var pickA = new List<string>();
                     foreach (var f in skA.Features.Where(f => !f.Stock && f.Define is not "FEAT_ROLLIDLE" and not "FEAT_REMOTE" and not "FEAT_TPSRETARD"))
                         if (skA.Problems([.. pickA, f.Define]).Count == 0) pickA.Add(f.Define);
@@ -313,6 +368,7 @@ public static class UiCheck
                 var defsP = main.Host.Defs();
                 var forRom = OkiRomSim.Calibration.CalPage.ForRom(defsP);
                 report.Add($"pages for this ROM: {forRom.Count}");
+                foreach (var line in main.CalibrationForCheck.PagesTreeForCheck()) report.Add("  tree " + line);
                 foreach (var pg in forRom.Concat(OkiRomSim.Calibration.CalPage.All()).DistinctBy(pg => pg.Key))
                 {
                     if (filter != null && !filter.Any(f => pg.Name.Contains(f, StringComparison.OrdinalIgnoreCase))) continue;
@@ -336,30 +392,41 @@ public static class UiCheck
                 main.Host.Control("run");
                 for (int i = 0; i < 25; i++) await Settle();
                 main.Host.Control("pause");
-                main.LookupForCheck("0ach");
+                // OKIROM_UICHECK_LOOKUP=label: look that up instead, with two breakpoints set (one of them off), for the guide's picture
+                if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_LOOKUP") is { Length: > 0 } lookFor)
+                {
+                    foreach (var bp in (Environment.GetEnvironmentVariable("OKIROM_UICHECK_BREAKS") ?? "").Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                        report.Add($"-- breakpoint {bp}: {main.Host.AddBreakpoint(bp)}");
+                    if (main.Host.State().Breakpoints.LastOrDefault() is { } last) main.Host.SetBreakpointEnabled(last.Address, false);
+                    main.LookupForCheck(lookFor);
+                }
+                else main.LookupForCheck("0ach");
                 await Settle();
             }
             // OKIROM_UICHECK_TABLES=1: the three views of a map - Table, Line and 3D - and the 3D view turned right round, one picture per 10 degrees
             if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_TABLES") == "1")
             {
-                async Task Shot(Window w, string file)
+                // the view alone in the picture (not the window's title bar)
+                async Task Shot(Window w, Control view, string file)
                 {
                     w.Show(); await Settle();
-                    using var bmp = new RenderTargetBitmap(new PixelSize((int)w.Bounds.Width, (int)w.Bounds.Height));
-                    bmp.Render(w); bmp.Save(Path.Combine(dir, file + ".png"));
+                    using var bmp = new RenderTargetBitmap(new PixelSize((int)view.Bounds.Width, (int)view.Bounds.Height));
+                    bmp.Render(view); bmp.Save(Path.Combine(dir, file + ".png"));
                 }
                 var grid = new TableGrid { Model = SampleMap(), ReadOnly = true, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Top };
-                var gw = new Window { Width = 620, Height = 218, Content = grid };
-                await Shot(gw, "table-grid"); gw.Close();
-                var gr = new Window { Width = 1000, Height = 560, Content = new TableGraph { Model = SampleMap() } };
-                await Shot(gr, "table-line"); gr.Close();
-                var surf = new TableSurface { Model = SampleMap(), ReadOnly = true };
-                var sw = new Window { Width = 1000, Height = 640, Content = surf };
+                var gridBox = new Border { Width = 620, Height = 218, Child = grid };
+                var gw = DarkWindow("Table", gridBox, 620, 218);
+                await Shot(gw, gridBox, "table-grid"); gw.Close();
+                var graph = new TableGraph { Model = SampleMap(), Width = 1000, Height = 560 };
+                var gr = DarkWindow("Line", graph, 1000, 560);
+                await Shot(gr, graph, "table-line"); gr.Close();
+                var surf = new TableSurface { Model = SampleMap(), ReadOnly = true, Width = 1000, Height = 640 };
+                var sw = DarkWindow("3D", surf, 1000, 640);
                 sw.Show(); await Settle();
                 for (int k = 0; k < 36; k++)
                 {
                     surf.SetAngles(-0.7 + (k * Math.PI / 18), 0.55);
-                    await Shot(sw, $"table-3d-{k:00}");
+                    await Shot(sw, surf, $"table-3d-{k:00}");
                 }
                 sw.Close();
                 (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.Shutdown();
@@ -367,9 +434,79 @@ public static class UiCheck
             }
             // OKIROM_UICHECK_STREAM=1: a Default skeleton ROM logged from the simulator by the channel stream; channels picked and
             // unpicked while logging must show up (and go) in the frames, the values list and the channel lists
+            // OKIROM_UICHECK_TRIGGER=1: a skeleton ROM with the trigger pattern log, logged from the simulator; the trigger pattern
+            // window captured healthy and with each simulated sensor fault, a picture of each
+            if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_TRIGGER") == "1")
+            {
+                var sk = Skeleton.Find(NewRomWindow.Templates()).First(s => s.Platform == "P30");
+                var dirT = Path.Combine(Path.GetTempPath(), "romsim-triggercheck");
+                Directory.CreateDirectory(dirT);
+                var rom = Path.Combine(dirT, "triggercheck.asm");
+                var trigPick = SkeletonPresets.Fit(sk, [.. SkeletonPresets.Default, "FEAT_TRIGLOG"]);
+                report.Add($"build: {string.Join(" ", trigPick)}");
+                File.WriteAllText(rom, sk.BuildSource(trigPick, sk.Path, "triggercheck"));
+                main.OpenFileForCheck(rom);
+                for (int i = 0; i < 120 && main.Host.LoadedPath == null; i++) await Task.Delay(250);
+                await Task.Delay(1500);
+                main.Host.SetInput("rpm", 2500);
+                var eng = main.DatalogPanel.Engine;
+                ChannelStream.Selected = [.. DatalogChannels.Defaults];
+                eng.Good = 0;
+                _ = Task.Run(() => { try { eng.Start("simulator", "auto", 38400); } catch (Exception ex) { report.Add("start: " + ex.Message); } });
+                var t0 = DateTime.Now;
+                while ((DateTime.Now - t0).TotalSeconds < 30 && eng.Good < 10) await Task.Delay(250);
+                report.Add($"connected: {eng.Protocol?.Name ?? "-"}, {eng.Good} frames, trigger log {(eng.Protocol as ChannelStream)?.HasTriggerLog}");
+                var w = new TriggerWindow(eng, main.Host);
+                w.Show(main);
+                await Task.Delay(500); await Settle();
+                foreach (var f in new[] { TriggerFault.None, TriggerFault.CkpMissedTooth, TriggerFault.CkpExtraPulse, TriggerFault.TdcMissing, TriggerFault.CypMissing, TriggerFault.CypLate })
+                {
+                    main.Host.SetInput("trigfault", (int)f);
+                    await Task.Delay(400);
+                    var (p, note) = await eng.CaptureTrigger();
+                    if (p != null) w.ShowForCheck(p);
+                    await Settle(); await Task.Delay(200); await Settle();
+                    report.Add($"{f}: {(p == null ? note : p.Summary())}");
+                    Check(w, "trigger_" + f, dir, report);
+                }
+                main.Host.SetInput("trigfault", 0);
+                // the repeats: real time for 8 s, then every 1 s for 4 s - what each caught, and what was missed
+                w.RepeatForCheck(3);
+                await Task.Delay(8000);
+                var rt = w.StatsForCheck;
+                w.RepeatForCheck(2);
+                await Task.Delay(4200);
+                var one = w.StatsForCheck;
+                w.RepeatForCheck(0);
+                await Task.Delay(1500); await Settle();
+                report.Add($"real time 8 s: {rt.Good} caught, {rt.Missed} missed; every 1 s for 4 s: {one.Good} caught, {one.Missed} missed; datalog frames still coming {eng.Running}");
+                Check(w, "trigger_after_repeats", dir, report);
+                w.Close();
+                // the cylinder test in Codes and service: cylinder 2 cut (its injector P2.3 stops, the others go on), then all back
+                main.Host.SetInput("rpm", 850);
+                var svc = new ServiceWindow(eng, main.Host);
+                svc.Show(main);
+                await Task.Delay(1500); await Settle();
+                await svc.CylinderForCheck(2);
+                await Task.Delay(500);
+                long[] Inj() { lock (main.Host.Sim) return (long[])main.Host.Sim.Bus.InjectorEvents.Clone(); }
+                var i0 = Inj(); await Task.Delay(1500); var i1 = Inj();
+                await Settle();
+                report.Add($"cylinder 2 cut: injector openings (P2.0-P2.3) {string.Join("/", i1.Zip(i0, (a, b) => a - b))}");
+                Check(svc, "service_cylinder2", dir, report);
+                await svc.CylinderForCheck(0);
+                await Task.Delay(500);
+                var j0 = Inj(); await Task.Delay(1500); var j1 = Inj();
+                report.Add($"all back: injector openings {string.Join("/", j1.Zip(j0, (a, b) => a - b))}");
+                svc.Close();
+                eng.Stop();
+                File.WriteAllLines(Path.Combine(dir, "report.txt"), report);
+                (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.Shutdown();
+                return;
+            }
             if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_STREAM") == "1")
             {
-                var sk = Skeleton.Find(NewRomWindow.Templates()).First(s => s.Name.Contains("p30", StringComparison.OrdinalIgnoreCase) || true);
+                var sk = Skeleton.Find(NewRomWindow.Templates()).First(s => s.Platform == "P30");
                 var dirS = Path.Combine(Path.GetTempPath(), "romsim-streamcheck");
                 Directory.CreateDirectory(dirS);
                 var rom = Path.Combine(dirS, "streamcheck.asm");
@@ -575,6 +712,13 @@ public static class UiCheck
                 if (w == 0) main.WindowState = WindowState.Maximized;
                 else { main.WindowState = WindowState.Normal; main.Width = w; main.Height = h; }
                 await Settle();
+                // OKIROM_UICHECK_ITEM=FUEL1_Lo: that table open, stretched to its panel (the guide's pictures)
+                if (Environment.GetEnvironmentVariable("OKIROM_UICHECK_ITEM") is { Length: > 0 } item)
+                {
+                    main.CalibrationPanel.TableStretch = true;
+                    main.CalibrationPanel.RestoreView(item, 0);
+                    await Settle();
+                }
                 string size = $"{main.Bounds.Width:0}x{main.Bounds.Height:0}";
                 foreach (var tab in main.TabNames())
                 {
@@ -631,7 +775,7 @@ public static class UiCheck
                 ("new rom", () => new NewRomWindow()),
                 ("new rom create", () => { var w = new NewRomWindow(); w.ShowCreate(); w.ForCheck(); return w; }),
                 ("new rom default", () => { var w = new NewRomWindow(); w.ShowCreate(); w.PickDefault(); return w; }),
-                ("change functions", () => new NewRomWindow(new NewRomWindow.ChangeRequest(Skeleton.Find(NewRomWindow.Templates()).First(),
+                ("change functions", () => new NewRomWindow(new NewRomWindow.ChangeRequest(Skeleton.Find(NewRomWindow.Templates()).First(s => s.Platform == "P30"),
                     [.. SkeletonPresets.Default], @"D:\Tunes\p30-custom.asm", true, "p30-custom.asm"))),
                 ("setup wizard 1", () => new SetupWizardWindow(host)),
                 ("setup wizard 2", () => { var w = new SetupWizardWindow(host); w.ShowPage(1); return w; }),
@@ -656,7 +800,7 @@ public static class UiCheck
                 ("datalog channels", () => new DatalogChannelsWindow(DatalogChannels.Defaults, ["4|afr|10|0|1"], null, ["rpm", "map_kpa", "afr", "lambda"])),
                 ("demon onboard", () => new OnboardWindow(host, main.DatalogPanel, null)),
                 ("updates", () => new UpdatesWindow(Environment.GetEnvironmentVariable("OKIROM_UPDATE_SITE") ?? Updater.DefaultSite)),
-                ("line view", () => new Window { Width = 1000, Height = 560, Content = new TableGraph { Model = SampleMap() } }),
+                ("line view", () => DarkWindow("Line view", new TableGraph { Model = SampleMap() }, 1000, 560)),
             };
             // the virtual dyno driven as a user would: the Start button, the hotkey, auto start
             if (Wanted("dyno run"))
@@ -680,6 +824,8 @@ public static class UiCheck
                     await Settle();
                     // reading another ROM takes a few seconds
                     if (name == "import maps") for (int k = 0; k < 40 && win.IsVisible; k++) await Settle();
+                    // the site's answer
+                    if (name == "updates") { await Task.Delay(5000); await Settle(); }
                     // the pick's interrupt time is measured in the simulator in the background (a second or two)
                     if (name is "new rom create" or "new rom default") { await Task.Delay(7000); await Settle(); }
                     // the smallest the window lets itself be made
@@ -719,6 +865,19 @@ public static class UiCheck
             RowAxis = [.. Enumerable.Range(0, rows).Select(r => 800.0 + (r * 800))], ColAxis = [.. Enumerable.Range(0, cols).Select(c => 20.0 + (c * 8))],
             RowUnit = "rpm", ColUnit = "kPa", Unit = "ms", ExternalTrace = (4.4, 6.3),
         };
+    }
+
+    /// A window of the check's own, dark like the app's (its title bar too): the content under the bar, the given size for the content.
+    static Window DarkWindow(string title, Control content, double width, double height)
+    {
+        var w = new Window { Title = title, Width = width };
+        var chrome = DarkChrome.Apply(w, title);
+        var g = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
+        Grid.SetRow(chrome, 0); g.Children.Add(chrome);
+        Grid.SetRow(content, 1); g.Children.Add(content);
+        w.Content = g;
+        w.Height = height + (chrome.Height is > 0 and var bar ? bar : 0);
+        return w;
     }
 
     static IEnumerable<GaugeWindow> GaugeWindows() =>
