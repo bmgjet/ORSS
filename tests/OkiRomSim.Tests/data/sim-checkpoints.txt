@@ -2,30 +2,31 @@
 # 85 C / 25 C / 14.2 V / 60 km/h, delay loops fast-forwarded): machine state hashed every 500,000. Recorded with the simulator as it
 # was before any change (2026-10-14) and identical after the changes; the skeleton Default runs recorded again on 2026-10-17
 # (the coolant protection module grew a warm-up limit, which moves the code after it).
-p30.bin @500000: pc 4D4D cycles 14012836 traps 0 state CF5FD54E5237B78E
-p30.bin @1000000: pc 0682 cycles 17017467 traps 0 state B47C2AAAE7660B9A
-p30.bin @1500000: pc 4D3F cycles 20021178 traps 0 state D594293E4C7F7EBC
-p30.bin @2000000: pc 5214 cycles 23027079 traps 0 state 19E03EDBE4A0CF72
-p30.bin @2500000: pc 4E77 cycles 26030165 traps 0 state E99B20F6776407C5
-p30.bin @3000000: pc 03DC cycles 29037311 traps 0 state 7CE592D66132B2E3
+# The 66207 runs recorded again with the machine cycle at 200 ns (fOSC/2): every instruction now takes half the time against the timers and the crank, so the P30 states move; the P13 (66911) runs are unchanged.
+p30.bin @500000: pc 5AC5 cycles 14023225 traps 0 state CE43B5D9A5513E03
+p30.bin @1000000: pc 4CE5 cycles 17042456 traps 0 state FAABB0F59F0B87BC
+p30.bin @1500000: pc 43F3 cycles 20062639 traps 0 state EB1AD604FE8479AF
+p30.bin @2000000: pc 4E6A cycles 23079657 traps 0 state 638CED18C82F0E70
+p30.bin @2500000: pc 03F3 cycles 26099864 traps 0 state 2F1278D1C30A7FAA
+p30.bin @3000000: pc 4E83 cycles 29122048 traps 0 state 5B48EE8BCA39B3FA
 p13.bin @500000: pc 46B3 cycles 13950608 traps 1 state D454EC2CF4EA44C7
 p13.bin @1000000: pc 4711 cycles 16806922 traps 1 state 269DFD8290FD9C21
 p13.bin @1500000: pc 2FF0 cycles 19661005 traps 1 state E6F13E243B8A6D6E
 p13.bin @2000000: pc 34B6 cycles 22514676 traps 1 state DF4EA179637665AC
 p13.bin @2500000: pc 4D4F cycles 25370332 traps 1 state 8DC36F86569B3A6F
 p13.bin @3000000: pc 3698 cycles 28225138 traps 1 state F425C677630BAEFF
-p30-skeleton bare @500000: pc 330B cycles 14061959 traps 0 state F7D3229B5A4330B3
-p30-skeleton bare @1000000: pc 0783 cycles 17116980 traps 0 state EFD70318960AA14D
-p30-skeleton bare @1500000: pc 32F5 cycles 20171210 traps 0 state 6E0B061D4A141CB7
-p30-skeleton bare @2000000: pc 35FC cycles 23223956 traps 0 state 51759E791F2EA0E7
-p30-skeleton bare @2500000: pc 04ED cycles 26278383 traps 0 state C8F26BB5F8FCEA35
-p30-skeleton bare @3000000: pc 184E cycles 29335098 traps 0 state D39E5DF581AF5538
-p30-skeleton Default @500000: pc 4F5C cycles 13987016 traps 0 state C1E3DCB9172AAFE1
-p30-skeleton Default @1000000: pc 08A4 cycles 16964978 traps 0 state 430A8023BB9BEDF3
-p30-skeleton Default @1500000: pc 04CB cycles 19941789 traps 0 state 0A217A0771497093
-p30-skeleton Default @2000000: pc 466D cycles 22918728 traps 0 state 642FD2DED243954E
-p30-skeleton Default @2500000: pc 43F3 cycles 25896313 traps 0 state C616761CA02C007B
-p30-skeleton Default @3000000: pc 0EBE cycles 28874044 traps 0 state 3A77CBADE7661124
+p30-skeleton bare @500000: pc 3280 cycles 14125949 traps 0 state 36BFF5A28A3B3F28
+p30-skeleton bare @1000000: pc 32AD cycles 17246310 traps 0 state 853EA98DC443AA2D
+p30-skeleton bare @1500000: pc 068C cycles 20366314 traps 0 state 70DE97BA8C7C3FA9
+p30-skeleton bare @2000000: pc 327D cycles 23485613 traps 0 state 5B97C67C0EAAC517
+p30-skeleton bare @2500000: pc 327D cycles 26605963 traps 0 state 89D103CDFD10FEFE
+p30-skeleton bare @3000000: pc 3484 cycles 29725125 traps 0 state 2B2D7FF5353D2169
+p30-skeleton Default @500000: pc 465B cycles 14020743 traps 0 state 6E4F92EB8ED68383
+p30-skeleton Default @1000000: pc 4405 cycles 17033759 traps 0 state 9157ACFB4DA92F41
+p30-skeleton Default @1500000: pc 4546 cycles 20049165 traps 0 state 21A0319E844CC694
+p30-skeleton Default @2000000: pc 3B12 cycles 23064483 traps 0 state 5C10EAC594DD142A
+p30-skeleton Default @2500000: pc 1291 cycles 26078419 traps 0 state 042B424397D73A99
+p30-skeleton Default @3000000: pc 44D1 cycles 29097358 traps 0 state CEBAFD763424180E
 p13-skeleton bare @500000: pc 4521 cycles 13949093 traps 1 state 3D77CC50B1273CDC
 p13-skeleton bare @1000000: pc 00BB cycles 16804722 traps 1 state 51784DB5E5A7CB0C
 p13-skeleton bare @1500000: pc 41AB cycles 19659307 traps 1 state 38006EB3CF02EAC4

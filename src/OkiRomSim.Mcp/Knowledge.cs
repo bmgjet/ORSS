@@ -17,9 +17,10 @@ ADC, serial port, 2 PWM outputs. Used in Honda OBD1 ECUs (P28, P30, P72, P08...)
 
 Code and data are separate spaces: `L A, 1234h` reads RAM; `LC A, 1234h` reads ROM.
 
-Clock: the P28 board has a 10 MHz crystal. Instruction timing and timers run at fOSC/4 = 2.5 MHz in
-the simulator's cycle units, timers /8 = 312.5 kHz: the stock ROMs' rpm word then reads 1,875,000/rpm
-and injector ticks are 3.2 us, exactly the tuning software's scalings.
+Clock: the P28 board has a 10 MHz crystal. Instructions run at fOSC/2 = 5 MHz machine cycles (200 ns;
+NOP = 2 cycles = the datasheet's 400 ns minimum instruction); the timers count fOSC/32 = 312.5 kHz:
+the stock ROMs' rpm word then reads 1,875,000/rpm and injector ticks are 3.2 us, exactly the tuning
+software's scalings.
 
 Workflow for a client:
   1. `disassemble` a .bin (or open the .asm) -> `symbols` / `file_search` to find things

@@ -13,7 +13,7 @@ public sealed class ProcessorProfile
     /// Crystal on OSC0/OSC1, MHz.
     public double CrystalMHz { get; set; } = 10.0;
     /// Oscillator clocks per simulator machine cycle (Decoder.IntCycles counts machine cycles).
-    public int ClockDivider { get; set; } = 4;
+    public int ClockDivider { get; set; } = 2;
     /// Which on-chip peripherals the simulator should model: "66207" (the OBD1 P28 family) or "66911" (the Honda P13 / P14 part). The two have different register maps, timers, one-shots and injector drivers, so this decides whether a ROM can be *run* as well as read.
     public string Peripherals { get; set; } = "66207";
     public int RomSize { get; set; } = Chip.RomSize;
@@ -250,7 +250,7 @@ public sealed class ProcessorProfile
                           "timer with four capture channels, eight one-shot timers (four of them the injector drivers), two PWM " +
                           "channels (IACV and EGR), an 8-channel 12-bit A/D behind two analog multiplexers, and a UART with one " +
                           "shared RX/TX interrupt. Honda P11 / P12 / P13 / P14 / P39.",
-            // 5 MHz with no divider: one machine cycle is 200 ns, so NOP - two cycles, one byte, like every 2*len instruction in the table - takes 400 ns. That is what was measured on the bench, and it is the figure the P13 serial-ISR cost estimate was built on (51 instructions, about 285 cycles). The 66207 runs its 10 MHz crystal through a divide-by-four for a 400 ns cycle; this part does not divide.
+            // 5 MHz with no divider: one machine cycle is 200 ns, so NOP - two cycles, one byte, like every 2*len instruction in the table - takes 400 ns. That is what was measured on the bench, and it is the figure the P13 serial-ISR cost estimate was built on (51 instructions, about 285 cycles). The 66207 runs its 10 MHz crystal through a divide-by-two for the same 200 ns cycle (its datasheet's 400 ns minimum instruction is a 2-cycle NOP); this part does not divide.
             CrystalMHz = 5.0,
             ClockDivider = 1,
             Peripherals = "66911",

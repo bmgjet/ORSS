@@ -740,7 +740,7 @@ public sealed class SettingsWindow : Window
         speed.SelectionChanged += (_, _) => _s.SpeedIndex = speed.SelectedIndex;
         p.Children.Add(Row("Simulation speed", speed, "How fast the simulator runs relative to the real chip. Unlimited runs as fast as this PC allows (the window stays responsive)."));
         p.Children.Add(Check("Fast boot", _s.FastBoot, v => _s.FastBoot = v,
-            "Skip through the ROM's boot delay loops (8 x 65,536 passes, about 4.5 s of ECU time - as long as the check-engine light stays on at key-on) " +
+            "Skip through the ROM's boot delay loops (8 x 65,536 passes, about 2.25 s of ECU time at the 200 ns machine cycle) " +
             "in no real time. The simulated clock, timers and crank signal still advance by exactly that time."));
         p.Children.Add(Check("Live trace on the Calibration page", _s.LiveTrace, v => _s.LiveTrace = v, "Colour the table cells the program reads."));
         p.Children.Add(Check("Follow reads when stepping", _s.FollowReads, v => _s.FollowReads = v, "When a step reads a defined table or setting, switch the Calibration page to it."));
