@@ -42,6 +42,26 @@ static class CoreTests
             sim.StepOne();
             T.Check("J [DP] still goes to DP itself (the serial dispatch the 66207 ROMs use)", sim.Cpu.Pc == 0x0280, $"PC {sim.Cpu.Pc:X4}h");
         }
+        // ROR / RORB (43h) rotate through carry and leave Z as it was. The P08 / HTS rpm index (DIV / SLL A / LB A,r1 / RORB A / SC / JNE)
+        // depends on it: its JNE tests the Z of LB A,r1.
+        {
+            var sim = Load(Program(0x43));
+            sim.Cpu.Dd = false; sim.Cpu.A = 0x0001; sim.Cpu.Cf = false; sim.Cpu.Zf = false;
+            sim.StepOne();
+            T.Check("RORB A giving 00h leaves Z clear (rotates change C only)", (sim.Cpu.A & 0xFF) == 0x00 && sim.Cpu.Cf && !sim.Cpu.Zf, $"A {sim.Cpu.A & 0xFF:X2}h, C {sim.Cpu.Cf}, Z {sim.Cpu.Zf}");
+        }
+        {
+            var sim = Load(Program(0x43));
+            sim.Cpu.Dd = false; sim.Cpu.A = 0x0002; sim.Cpu.Cf = false; sim.Cpu.Zf = true;
+            sim.StepOne();
+            T.Check("RORB A giving 01h leaves Z set", (sim.Cpu.A & 0xFF) == 0x01 && !sim.Cpu.Cf && sim.Cpu.Zf, $"A {sim.Cpu.A & 0xFF:X2}h, C {sim.Cpu.Cf}, Z {sim.Cpu.Zf}");
+        }
+        {
+            var sim = Load(Program(0x43));
+            sim.Cpu.Dd = true; sim.Cpu.A = 0x0001; sim.Cpu.Cf = false; sim.Cpu.Zf = false;
+            sim.StepOne();
+            T.Check("ROR A giving 0000h leaves Z clear", sim.Cpu.A == 0x0000 && sim.Cpu.Cf && !sim.Cpu.Zf, $"A {sim.Cpu.A:X4}h, C {sim.Cpu.Cf}, Z {sim.Cpu.Zf}");
+        }
         // decimal adjust: 99h + 99h = 132h leaves A = 32h with carry and half carry; DAA makes 98h and keeps the carry (the hundreds)
         {
             var sim = Load(Program(0x93));
