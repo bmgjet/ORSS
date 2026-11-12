@@ -62,6 +62,22 @@ static class CoreTests
             sim.StepOne();
             T.Check("DAS after 00h - 01h: 99h with the decimal borrow kept", (sim.Cpu.A & 0xFF) == 0x99 && sim.Cpu.Cf, $"A {sim.Cpu.A & 0xFF:X2}h, borrow {sim.Cpu.Cf}");
         }
+        // the MSM66207 clock: 10 MHz crystal, 200 ns machine cycle (datasheet: 400 ns minimum instruction = NOP, 2 cycles); the timers and
+        // the baud generator count the oscillator / 32, so the timer tick stays 3.2 us (rpm word = 1,875,000 / rpm) and STTMR F8h 39,062 baud
+        {
+            var sim = Load(Program(new byte[1000]));                     // 1000 NOPs
+            T.Check("66207 machine cycle is 200 ns (fOSC/2)", Chip.CpuHz == 5_000_000 && Chip.ClockDivider == 2, $"{Chip.CpuHz} Hz, divider {Chip.ClockDivider}");
+            sim.Bus.Ram[Bus.SfrTcon0] = 0x10;                           // timer 0 running, prescaler 00b
+            sim.Bus.Ram[Bus.SfrTm0] = 0; sim.Bus.Ram[Bus.SfrTm0 + 1] = 0;
+            ulong c0 = sim.Cpu.Cycles;
+            for (int i = 0; i < 1000; i++) sim.StepOne();
+            double us = (sim.Cpu.Cycles - c0) / Chip.CyclesPerUs;
+            int tm0 = sim.Bus.Ram[Bus.SfrTm0] | sim.Bus.Ram[Bus.SfrTm0 + 1] << 8;
+            T.Check("1000 NOPs take 400 us and timer 0 (00b) ticks every 3.2 us", Math.Abs(us - 400) < 0.01 && tm0 == 125, $"{us:0.###} us, TM0 {tm0}");
+            sim.Bus.Ram[Bus.SfrSttmr] = 0xF8; sim.Bus.Ram[Bus.SfrSttmc] = 0x01;
+            T.Check("STTMR F8h: 39,062 baud, a byte (10 bits) in 256 us", sim.Bus.RomSerialBaud == 39_062 && sim.Bus.TxByteCycles() / Chip.CyclesPerUs == 256,
+                $"{sim.Bus.RomSerialBaud} baud, {sim.Bus.TxByteCycles() / Chip.CyclesPerUs:0.###} us a byte");
+        }
         // the serial line: a tool that keeps writing while the simulator is paused does not pile up an endless backlog
         {
             var sim = Load(Program(0x00));

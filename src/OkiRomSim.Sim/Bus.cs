@@ -12,7 +12,7 @@ public sealed class Bus
 
     /// The board's crystal, MHz (Chip.CrystalMHz).
     public static double CrystalMHz => Chip.CrystalMHz;
-    /// Rate of the simulator's machine cycles, Hz (fOSC / 4).
+    /// Rate of the simulator's machine cycles, Hz (fOSC / 2).
     public static ulong CpuHz => Chip.CpuHz;
     /// Machine cycles per microsecond.
     public static double CyclesPerUs => Chip.CyclesPerUs;
@@ -23,7 +23,7 @@ public sealed class Bus
     public static int ClockDivider => Chip.ClockDivider;
 
     /// Change the crystal (and the clocks per machine cycle). Affects simulators created or reset afterwards.
-    public static void SetCrystal(double mhz, int divider = 4) => Chip.SetCrystal(mhz, divider);
+    public static void SetCrystal(double mhz, int divider = 2) => Chip.SetCrystal(mhz, divider);
 
     /// Which set of on-chip peripherals to model (Chip.PeripheralSet).
     public static string PeripheralSet => Chip.PeripheralSet;
@@ -240,12 +240,15 @@ public sealed class Bus
 
     public const ushort SfrSttmr = 0x49, SfrSttmc = 0x4A;
 
-    /// The baud rate the ROM set its serial timer to (0 when it has not started it): machine clock / 8 / (256 - STTMR).
+    /// Oscillator clocks per serial bit at the ROM's baud setting: the baud generator counts fOSC/32, so 32 x (256 - STTMR).
+    static ulong OscPerSerialBit(byte sttmr) => 32UL * (ulong)(256 - sttmr);
+
+    /// The baud rate the ROM set its serial timer to (0 when it has not started it): fOSC / 32 / (256 - STTMR).
     /// At 10 MHz F8h is 39,063 (the "38400" setting), FBh 62,500, DFh 9,470.
-    public int RomSerialBaud => Ram[SfrSttmc] == 0 ? 0 : (int)(CpuHz / 8 / (ulong)(256 - Ram[SfrSttmr]));
+    public int RomSerialBaud => Ram[SfrSttmc] == 0 ? 0 : (int)(CrystalMHz * 1_000_000 / OscPerSerialBit(Ram[SfrSttmr]));
 
     /// Machine cycles one transmitted byte takes: ten bit times at the ROM's own baud rate, or SerialByteCycles before it set one.
-    public uint TxByteCycles() => Ram[SfrSttmc] == 0 ? SerialByteCycles : (uint)(80 * (256 - Ram[SfrSttmr]));
+    public uint TxByteCycles() => Ram[SfrSttmc] == 0 ? SerialByteCycles : (uint)(10 * OscPerSerialBit(Ram[SfrSttmr]) / (ulong)ClockDivider);
 
     /// Serial transmit-complete interrupt, vector-table slot 2 (int_serial_tx_vec at code address 0x000C).
     public const int IrqSerialTx = 2;
@@ -875,14 +878,16 @@ public sealed class Bus
             // TCON bit 4 is the run bit; a stopped timer neither counts nor toggles its pin.
             if ((tcon & (1 << 4)) == 0) continue;
 
-            // Prescaler (in machine cycles). Only encodings 00b (/8) and 01b (/2, timer 1's 4x-faster rate) are attested by the P28 ROMs.
+            // Prescaler. The shifts below are in units of 4 oscillator clocks: 00b (/8 = fOSC/32) and 01b (/2 = fOSC/8, timer 1's 4x-faster rate) are
+            // the encodings the P28 ROMs use. The prescaler divides the oscillator, so Chip.PeripheralShiftExtra turns them into machine cycles.
             // (every division is a power of two: 8, 2, then 2 and 1 - a shift gives the same count as a 64-bit divide, at a fraction of the cost)
             int shift = ((tcon >> 5) & 0x03) switch
             {
                 0b00 => 3,
                 0b01 => 1,
                 var other => 3 - Math.Min(other, 3),
-            };
+            } + Chip.PeripheralShiftExtra;
+            if (shift < 0) shift = 0;
             // One prescaler feeds every timer, so timers on the same division tick on the same machine cycles (the ROMs' boot self-test checks TM2 and TM3 agree).
             uint steps = (uint)((ElapsedCycles >> shift) - ((ElapsedCycles - cycles) >> shift));
             if (steps == 0) continue;

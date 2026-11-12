@@ -241,7 +241,7 @@ public sealed class OkiTools
         yield return new McpTool("run",
             "Boot the ROM (.asm is assembled first) in the MSM66207 simulator with a simulated engine and report: where it is, faults/BRK traps, fuel pump, injector pulse widths and rates, " +
             "ignition events, VTEC, coverage, and optional RAM watches. Stops at `until` (label/address) or after `seconds` of simulated time. Boot delay loops are fast-forwarded.",
-            Schema(("path", "string", ".asm or .bin (inside the app: leave out for the ROM open there)", false), ("seconds", "number", "simulated seconds (default 8; the stock ROMs spend ~4.5 s of chip time in a boot delay, fast-forwarded here)", false),
+            Schema(("path", "string", ".asm or .bin (inside the app: leave out for the ROM open there)", false), ("seconds", "number", "simulated seconds (default 8; the stock ROMs spend ~2.25 s of chip time in a boot delay, fast-forwarded here)", false),
                    ("rpm", "number", "engine rpm (default 800)", false), ("map_kpa", "number", "manifold pressure kPa (default 33)", false),
                    ("tps_pct", "number", "throttle % (default 0)", false), ("ect_c", "number", "coolant C (default 85)", false), ("iat_c", "number", "intake air C (default 25)", false),
                    ("o2_v", "number", "O2 volts (default 0.45)", false), ("batt_v", "number", "battery volts (default 14.2)", false), ("speed_kmh", "number", "road speed (default 0)", false),
