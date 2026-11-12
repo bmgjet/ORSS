@@ -487,7 +487,11 @@ internal sealed class Exec
                             res = (v32 >> 1) | (v32 & msb); carry = (v32 & 1) != 0; break;
                     }
                     _cpu.Cf = carry;
-                    SetZf((ushort)res, byteWidth);
+                    // ROR / RORB leave Z alone (nX-8/500 manual: the rotates change C only). The factory code depends on it: the P08 (0835h)
+                    // and HTS (078Fh) rpm index is DIV / SLL A / LB A,r1 / RORB A / SC / JNE, and that JNE tests the Z of LB A,r1. Setting Z
+                    // here flipped the index byte (0C2h) to FFh at many rpm: high-cam map read past its last row, dwell started a tooth early,
+                    // no spark around 6900-7100 rpm on HTS 1.15. The other shifts keep setting Z: no factory code tells them apart.
+                    if (baseOp != "ROR") SetZf((ushort)res, byteWidth);
                     Write(args[0], byteWidth, (ushort)res);
                     break;
                 }
