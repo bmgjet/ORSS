@@ -1709,7 +1709,7 @@ public static class FullOpcodes
         new("ORB N16[X2], #N8", 'U', new[] { "C1", "NL", "NH", "E0", "N8" }),
         new("POPS A", 'S', new[] { "65" }),
         new("POPS LRB", 'U', new[] { "64" }),
-        new("PUSHS A", 'U', new[] { "55" }),   // 66207.op says DD=1 only, but the push is word-wide either way and some tuning mods reach it with DD=0
+        new("PUSHS A", 'U', new[] { "55" }),   // Manual 3-113: word push, independent of DD.
         new("PUSHS LRB", 'U', new[] { "54" }),
         new("PUSHU A", '1', new[] { "76" }),
         new("RB r0.0", 'U', new[] { "20", "08" }),

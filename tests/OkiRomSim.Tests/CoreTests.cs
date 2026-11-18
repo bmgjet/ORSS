@@ -4,7 +4,8 @@ using OkiRomSim.Core;
 
 namespace OkiRomSim.Tests;
 
-/// Core and simulator regressions, each on the smallest program that shows it.
+/// Core and simulator regressions on small programs. The p30 / p13 / roms groups
+/// separately compare upstream test fixtures with the current simulation checkpoints.
 static class CoreTests
 {
     /// A 32 KB image of FF with the reset vector pointing at 0100h and `code` there.
@@ -126,13 +127,13 @@ static class CoreTests
         {
             var sim = Load(Program(new byte[1000]));                     // 1000 NOPs
             T.Check("66207 machine cycle is 200 ns (fOSC/2)", Chip.CpuHz == 5_000_000 && Chip.ClockDivider == 2, $"{Chip.CpuHz} Hz, divider {Chip.ClockDivider}");
-            sim.Bus.Ram[Bus.SfrTcon0] = 0x10;                           // timer 0 running, prescaler 00b
+            sim.Bus.Ram[Bus.SfrTcon0] = 0x93;                           // timer 0 running, realtime mode, selector 100b (/32)
             sim.Bus.Ram[Bus.SfrTm0] = 0; sim.Bus.Ram[Bus.SfrTm0 + 1] = 0;
             ulong c0 = sim.Cpu.Cycles;
             for (int i = 0; i < 1000; i++) sim.StepOne();
             double us = (sim.Cpu.Cycles - c0) / Chip.CyclesPerUs;
             int tm0 = sim.Bus.Ram[Bus.SfrTm0] | sim.Bus.Ram[Bus.SfrTm0 + 1] << 8;
-            T.Check("1000 NOPs take 400 us and timer 0 (00b) ticks every 3.2 us", Math.Abs(us - 400) < 0.01 && tm0 == 125, $"{us:0.###} us, TM0 {tm0}");
+            T.Check("1000 NOPs take 400 us and timer 0 (100b) ticks every 3.2 us", Math.Abs(us - 400) < 0.01 && tm0 == 125, $"{us:0.###} us, TM0 {tm0}");
             sim.Bus.Ram[Bus.SfrSttmr] = 0xF8; sim.Bus.Ram[Bus.SfrSttmc] = 0x01;
             T.Check("STTMR F8h: 39,062 baud, a byte (10 bits) in 256 us", sim.Bus.RomSerialBaud == 39_062 && sim.Bus.TxByteCycles() / Chip.CyclesPerUs == 256,
                 $"{sim.Bus.RomSerialBaud} baud, {sim.Bus.TxByteCycles() / Chip.CyclesPerUs:0.###} us a byte");

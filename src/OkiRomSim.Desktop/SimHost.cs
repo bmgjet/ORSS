@@ -51,7 +51,7 @@ public sealed class SimHost : RomHost
     /// The simulated VTEC solenoid is on: the ROM is reading the high-cam maps.
     public bool VtecActive { get { lock (_lock) return Sim.Bus.VtecSolenoidActive; } }
     public double Speed { get { lock (_lock) return _speed; } set { lock (_lock) _speed = Math.Max(0, value); } }
-    /// Skip the ROM's boot delay loops in no real time (Simulator.FastForwardDelayLoops).
+    /// Accelerate eligible NOP-only countdown loops (Simulator.FastForwardDelayLoops).
     public bool FastBoot { get; set { lock (_lock) { field = value; Sim.FastForwardDelayLoops = value; } } } = true;
 
     // ------------------------------------------------------------------ loading
@@ -1015,7 +1015,8 @@ public sealed class SimHost : RomHost
                     // high/low phase lengths only mean something once the pin has toggled
                     pins.Changes[p, i] >= 3 ? Ms(pins.LastHighCycles[p, i]) : 0,
                     pins.Changes[p, i] >= 3 ? Ms(pins.LastLowCycles[p, i]) : 0,
-                    pins.Changes[p, i] == 0 ? "" : $"{pc:X4} {NearestLabel(pc)}"));
+                    pins.Changes[p, i] == 0 ? "" : pins.LastChangeWasHardware[p, i]
+                        ? $"hardware edge; observed at {pc:X4}" : $"{pc:X4} {NearestLabel(pc)}"));
             }
         bool pressure = (b.SwitchLatchPins & 0x02) == 0;   // VTEC pressure switch D6: 4700h bit 1, low = pressure
         return new OutputState(b.FuelPumpActive, b.VtecSolenoidActive, pressure,

@@ -50,12 +50,105 @@ public sealed class Decoded
 
 public static class Decoder
 {
-    /// INT (internal-memory) machine-cycle count for one instruction, from the MSM66201/66207 instruction manual's "Instruction List" cycle tables (chapter 3 sec.3, the Int*1/Int*2 column). Across every operation class the all-internal-operand cost is 2 cycles per instruction byte plus a small per-operation adjustment.
+    /// INT (internal-memory) machine-cycle count for one instruction, from the MSM66201/66207 instruction manual's "Instruction List" cycle tables (chapter 3 sec.3, the Int*1/Int*2 column). Operand-specific costs are handled explicitly where qualified; the remaining operation classes use the existing length-based estimate.
     public static ushort IntCycles(string mnemonic, int len)
     {
         ushort baseCycles = (ushort)(2 * len);
         int sp = mnemonic.IndexOfAny(new[] { ' ', ',' });
         string op = sp >= 0 ? mnemonic[..sp] : mnemonic;
+
+        // OKI instruction manual, pp. 3-150..3-153 (INT data operands).
+        // SRL A / SRLB A are 2; register objects 5; direct/off/[DP] 7;
+        // USP displacement 8; X1/X2 displacement 9. Length alone is insufficient.
+        if (op is "SRL" or "SRLB")
+        {
+            string operand = mnemonic[(sp + 1)..].Trim();
+            return operand switch
+            {
+                "A" => 2,
+                "[DP]" => 7,
+                _ when operand.Contains("[USP]", StringComparison.Ordinal) => 8,
+                _ when operand.Contains("[X1]", StringComparison.Ordinal) ||
+                       operand.Contains("[X2]", StringComparison.Ordinal) => 9,
+                _ when operand.StartsWith("off ", StringComparison.Ordinal) || operand == "N8" => 7,
+                _ => 5,
+            };
+        }
+
+
+        // Explicit INT rows visually checked in the OKI manual. These costs are not
+        // extrapolated to unlisted byte forms, EXT memory, wait states or other mnemonics.
+        // Printed pp.3-13/16/35/39/156: accumulator arithmetic/comparison rows.
+        // Byte and word register forms are 3 cycles despite their one-byte encoding.
+        if ((op is "CMP" or "ADD" or "SUB" or "CMPB" or "ADDB") &&
+            mnemonic[(sp + 1)..].StartsWith("A, ", StringComparison.Ordinal))
+        {
+            string operand = mnemonic[(sp + 4)..];
+            if (operand.StartsWith('#')) return (ushort)(op is "CMPB" or "ADDB" ? 4 : 6);
+            if (operand.StartsWith("er", StringComparison.Ordinal) ||
+                (operand.Length == 2 && operand[0] == 'r' && char.IsAsciiDigit(operand[1]))) return 3;
+            if (operand.StartsWith("off ", StringComparison.Ordinal)) return 4;
+            if (operand == "N8" || operand == "[DP]") return 6;
+            if (operand.Contains("[USP]", StringComparison.Ordinal)) return 7;
+            if (operand.Contains("[X1]", StringComparison.Ordinal) || operand.Contains("[X2]", StringComparison.Ordinal)) return 8;
+            return 4;
+        }
+        // Printed pp.3-36/40: object-to-accumulator compare, both widths.
+        if ((op is "CMP" or "CMPB") && mnemonic.EndsWith(", A", StringComparison.Ordinal))
+            return ObjectCycles(mnemonic[(sp + 1)..^3], 5, 7, 8, 9);
+        // Printed pp.3-69/70: L sets DD=1, LB sets DD=0; [DP] accesses memory.
+        if ((op is "L" or "LB") && mnemonic[(sp + 1)..].StartsWith("A, ", StringComparison.Ordinal))
+        {
+            string operand = mnemonic[(sp + 4)..];
+            if (operand.StartsWith('#')) return (ushort)(op == "LB" ? 4 : 6);
+            return ObjectCycles(operand, 2, 4, 5, 6);
+        }
+        // Printed pp.3-70/154: byte load and word store indirect/indexed rows.
+        if (mnemonic.StartsWith("ST A, ", StringComparison.Ordinal))
+            return ObjectCycles(mnemonic[6..], 2, 4, 5, 6);
+        // Printed pp.3-55/56/60/61: pointer/LRB and byte-local short forms
+        // still take three INT cycles; the other object forms use the full table.
+        if (op is "INC" or "INCB" or "DEC" or "DECB")
+        {
+            string operand = mnemonic[(sp + 1)..];
+            if (operand is "DP" or "X1" or "X2" or "LRB"
+                || operand.Length == 2 && operand[0] == 'r' && char.IsDigit(operand[1])) return 3;
+            return ObjectCycles(operand, 5, 7, 8, 9);
+        }
+        // Printed pp.3-77..80/114/127: MB/MBR costs depend on the transfer direction and addressing mode.
+        if ((op is "MB" or "MBR") && mnemonic[(sp + 1)..].StartsWith("C, ", StringComparison.Ordinal))
+            return ObjectCycles(mnemonic[(sp + 4)..], 5, 7, 8, 9);
+        if (op is "SB" or "RB")
+            return ObjectCycles(mnemonic[3..], 7, 9, 10, 11);
+        if ((op is "MB" or "MBR") && mnemonic.EndsWith(", C", StringComparison.Ordinal))
+            return ObjectCycles(mnemonic[(sp + 1)..^3], 10, 12, 13, 14);
+        // Printed pp.3-27/110: only the object/immediate byte logical forms.
+        if ((op is "ANDB" or "ORB") && mnemonic.EndsWith(", #N8", StringComparison.Ordinal)
+            && !mnemonic[(sp + 1)..].StartsWith("A, ", StringComparison.Ordinal))
+            return ObjectCycles(mnemonic[(sp + 1)..^5], 6, 8, 9, 10);
+        // Printed p.3-82: MOV DP,obj is word-wide and does not establish DD.
+        if (mnemonic.StartsWith("MOV DP, ", StringComparison.Ordinal))
+        {
+            string operand = mnemonic[8..];
+            if (operand == "A") return 2;
+            if (operand.StartsWith('#')) return 6;
+            return ObjectCycles(operand, 4, 6, 7, 8);
+        }
+
+        // Printed pp.3-84/87: MOV preserves DD; off destination and source
+        // each access memory, so an indirect source is not a short register move.
+        if (mnemonic.StartsWith("MOV LRB, ", StringComparison.Ordinal))
+        {
+            string operand = mnemonic[9..];
+            if (operand.StartsWith('#')) return 6;
+            return ObjectCycles(operand, 4, 6, 7, 8);
+        }
+        if (mnemonic.StartsWith("MOV off ", StringComparison.Ordinal))
+        {
+            string operand = mnemonic[(mnemonic.IndexOf(',') + 2)..];
+            if (operand.StartsWith('#')) return 10;
+            return ObjectCycles(operand, 6, 8, 9, 10);
+        }
 
         int extra = op switch
         {
@@ -83,6 +176,17 @@ public static class Decoder
             _ => 0,
         };
         return (ushort)(baseCycles + extra);
+    }
+
+
+    // Qualified operand classes for the tables above; the decoder supplies a valid mnemonic.
+    private static ushort ObjectCycles(string operand, ushort register, ushort direct, ushort usp, ushort indexed)
+    {
+        if (operand.Contains("[USP]", StringComparison.Ordinal)) return usp;
+        if (operand.Contains("[X1]", StringComparison.Ordinal) || operand.Contains("[X2]", StringComparison.Ordinal)) return indexed;
+        if (operand.StartsWith("off ", StringComparison.Ordinal) || operand.StartsWith("N8", StringComparison.Ordinal) || operand.StartsWith("N'8", StringComparison.Ordinal)
+            || operand.StartsWith("[DP]", StringComparison.Ordinal)) return direct;
+        return register;
     }
 
     private static byte? HexByte(string tok)

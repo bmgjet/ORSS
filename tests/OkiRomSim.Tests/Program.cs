@@ -14,10 +14,18 @@ using OkiRomSim.Tests;
 
 var groups = new (string Name, string About, Action Run)[]
 {
+    ("lineage", "Immutable historical checkpoint identity and complete qualified coverage", CheckpointLineageTests.Run),
     ("p30", "P30 skeleton: builds, checksum, build-info table, the images and the simulation against the saved baseline", SkeletonTests.P30),
     ("p13", "P13 skeleton (work in progress): the same checks against its own saved baseline", SkeletonTests.P13),
     ("roms", "ROM files: the stock images and sources unchanged, and each source assembling to its image", RomFileTests.Run),
     ("core", "Core and simulator fixes: indirect jumps, decimal adjust, the serial backlog, snapshots, processor profiles", CoreTests.Run),
+    ("cpu", "CPU manual vectors: JRNZ low-byte loop, SRL flags and internal cycles", CpuInstructionTests.Run),
+    ("timing", "Selected manufacturer INT cycle tables and PUSHS width", CpuTimingTests.Run),
+    ("timing-closeout", "Internal-memory instruction rows, flags and IRQ frame", TimingCloseoutTests.Run),
+    ("timers", "MSM66207 timer prescalers, realtime output and capture equality", TimerTests.Run),
+    ("pwm", "MSM66207 PWM run, modes, TBC clocks, reload, output and interrupt gating", PwmTests.Run),
+    ("incdec", "Manual increment/decrement INT costs and flags", IncDecTests.Run),
+    ("encoding", "Manual MBR encodings, INT costs, addressing and assembler diagnostics", InstructionEncodingTests.Run),
     ("assembler", "Assembler fixes: division by -1, oversized align", AssemblerTests.Run),
     ("definitions", "Definitions: every shipped source and build against the saved snapshot, bad annotations, XDF switches, feature files", DefinitionTests.Run),
     ("datalog", "Datalogging: the Demon relay's footer, detection leaving the line plain, decimal commas, frame shapes", DatalogTests.Run),

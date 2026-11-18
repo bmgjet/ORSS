@@ -1,0 +1,15 @@
+{
+  "historical_source": "01d678730ccba53f81cd7d64f2037c6c686d0594",
+  "historical_file": "sim-checkpoints.txt",
+  "historical_lf_sha256": "D63CFBADE0C6A35DE6F4544E7A8671EC6B458DB1CEF22799096A79564007BA31",
+  "qualified_file": "sim-checkpoints-qualified.txt",
+  "qualification": "Manufacturer raw opcode/flag/cycle and peripheral vectors plus native boot/trap invariants. Exact state hashes are regression records, not a silicon oracle.",
+  "images": {
+    "p30-skeleton bare": "a5f5693781bbf8d400825e93d7aeebfe6a818e70e2ca8f353a989558d93b376a",
+    "p30-skeleton Default": "6e59ed25261d8e4daf0bd5e24e2d315e84f67daed6cf53f6f1a1b5692e676b82",
+    "p30.bin": "c3decae27ff4dec5587df26633107dc7fb1712c91ab501668311941cf8761dfa",
+    "p13-skeleton bare": "e4ef7109d0cac0eac874749e0439a4194c6220664acd0cf92b531d9ae718ae63",
+    "p13-skeleton Default": "c67b2bb87b8d465fdab947b423c4ac72caf566c1d972f72763cb8aa5b1495991",
+    "p13.bin": "c150892a817518c894a91a5c71ee6b7313979c52df7cc142fba8084aadcab0e0"
+  }
+}

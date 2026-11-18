@@ -176,7 +176,9 @@ public sealed class EngineState
 
     private double _nextCkpCycle;
 
-    /// Generate the distributor signals for the elapsed CPU cycles: * CKP (24 per cam rev): latches TM2 into TMR2 and raises the timer-2 interrupt. The ROM never writes TMR2 after init, reads it as the tooth timestamp, and derives the crank period from it (rpm = 1,875,000 / period at the 375 kHz TM2 clock). * TDC (4 per cam rev, every 6th CKP): INT1. * CYP (1 per cam rev, 3 teeth after the cylinder-1 TDC): TRNS0 status bit. * VSS: INT0, see AdvanceVss.
+    /// Generate distributor signals: CKP captures TM2 and requests its interrupt;
+    /// TDC requests INT1 every sixth CKP; CYP sets TRNS0 once per cam revolution.
+    /// VSS uses INT0 (AdvanceVss).
     public ushort CheckDistributorPulses(Bus bus, ulong totalCycles, ulong cpuFreqHz)
     {
         ushort irq = AdvanceVss(bus, totalCycles, cpuFreqHz);
@@ -188,7 +190,7 @@ public sealed class EngineState
             // the noise pulse: a capture and its interrupt like any tooth, but no tooth of the pattern
             _extraCkpCycle = 0;
             bus.CaptureTm2();
-            if (Bus.Is66911) irq |= bus.TakeCrankIrq(); else irq |= (ushort)(1 << Bus.IrqTm2);
+            irq |= bus.TakeCrankIrq();
             return irq;
         }
         if (_nextCkpCycle == 0 || _nextCkpCycle > totalCycles + (2 * cyclesPerCkp))
@@ -213,7 +215,7 @@ public sealed class EngineState
         }
         else
         {
-            irq |= (ushort)(1 << Bus.IrqTm2);
+            irq |= bus.TakeCrankIrq();
             if (CkpPulseCount % 6 == 0 && !(Trigger == TriggerFault.TdcMissing && CkpPulseCount % 24 == 12))
             {
                 TdcPulseCount += 1;
