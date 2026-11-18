@@ -486,9 +486,8 @@ internal sealed class Exec
                         default: // SRA: arithmetic right shift keeps the sign bit.
                             res = (v32 >> 1) | (v32 & msb); carry = (v32 & 1) != 0; break;
                     }
+                    // Shifts and rotates update only carry. A PSW destination still receives the result.
                     _cpu.Cf = carry;
-                    // ROR and SRL change carry only. A following branch still sees the previous Z.
-                    if (baseOp is not ("ROR" or "SRL")) SetZf((ushort)res, byteWidth);
                     Write(args[0], byteWidth, (ushort)res);
                     break;
                 }
