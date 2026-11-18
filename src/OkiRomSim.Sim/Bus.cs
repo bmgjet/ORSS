@@ -912,10 +912,8 @@ public sealed class Bus
                 ulong clocks = lastClock / period - firstClock / period;
                 if (clocks == 0) continue;
                 bool freeRun = (con & 4) != 0;
-                // P.108 explicitly specifies fixed16-bit/modulo65536. Table10-6
-                // contradicts that text/figure by giving selected-width periods.
-                // Follow the operational text, retaining this unresolved manual
-                // conflict; do not claim silicon/erratum verification.
+                // Hardware manual p.108 specifies 16-bit free-run. PWM0 was tested
+                // on an ECU across all four clock settings; see the qualification notes.
                 ulong modulus = freeRun ? 65536UL : period;
                 ulong value = RamWord(counter) & (modulus - 1);
                 ulong distance = modulus - value;

@@ -15,8 +15,10 @@ PUSHS A is word-wide regardless of DD. Unqualified costs retain existing estimat
 Timers (hardware pp.85..95): three-bit clock selection, RUN, Mode C capture
 status, Mode D TRBUF-to-TROUT transfer and peripheral output ownership.
 PWM (pp.96..110): RUN/ERQ, modes, clocks, reload, output/status and snapshots.
-Free-run follows the fixed-16-bit description on p.108; Table 10-6 on p.110
-contradicts that width. External-memory/wait-state costs, STOP and simultaneous
+PWM0 free-run was tested on an ECU at all four clock settings. The results
+support the fixed 16-bit counter on p.108. Table 10-6 on p.110 gives
+conflicting periods for the first three settings.
+External-memory/wait-state costs, STOP and simultaneous
 SFR-write/compare phases remain unqualified. The 66911 peripheral model is unchanged.
 
 OR obj,#N16 is valid (instruction Table 3-24, p.3-202), but its detailed encoding

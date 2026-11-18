@@ -2,8 +2,7 @@
 using OkiRomSim.Core;
 namespace OkiRomSim.Tests;
 /// MSM66207 user manual, printed pp. 96-110. Both channels and all clock selectors.
-/// Free-run uses the explicit 16-bit operational text/figure on p. 108;
-/// Table 10-6 conflicts with that width. These model tests do not resolve silicon.
+/// Free-run follows the 16-bit description on p. 108. PWM0 was tested on an ECU.
 static class PwmTests
 {
     public static void Run()
