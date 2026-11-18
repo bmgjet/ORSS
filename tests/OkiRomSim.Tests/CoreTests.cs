@@ -62,6 +62,20 @@ static class CoreTests
             sim.StepOne();
             T.Check("ROR A giving 0000h leaves Z clear", sim.Cpu.A == 0x0000 && sim.Cpu.Cf && !sim.Cpu.Zf, $"A {sim.Cpu.A:X4}h, C {sim.Cpu.Cf}, Z {sim.Cpu.Zf}");
         }
+        // 63h is SRL A in word mode and SRLB A in byte mode. Neither changes Z.
+        foreach (bool word in new[] { false, true })
+        foreach (bool zero in new[] { false, true })
+        {
+            var sim = Load(Program(0x63));
+            sim.Cpu.Dd = word;
+            sim.Cpu.A = (ushort)((word ? 0 : 0xA500) | (zero ? 2 : 1));
+            sim.Cpu.Zf = zero;
+            sim.Cpu.Cf = zero;
+            sim.StepOne();
+            int expected = (word ? 0 : 0xA500) | (zero ? 1 : 0);
+            T.Check($"{(word ? "SRL" : "SRLB")} A preserves Z={zero}", sim.Cpu.A == expected && sim.Cpu.Cf == !zero && sim.Cpu.Zf == zero,
+                $"A {sim.Cpu.A:X4}h, C {sim.Cpu.Cf}, Z {sim.Cpu.Zf}");
+        }
         // decimal adjust: 99h + 99h = 132h leaves A = 32h with carry and half carry; DAA makes 98h and keeps the carry (the hundreds)
         {
             var sim = Load(Program(0x93));
