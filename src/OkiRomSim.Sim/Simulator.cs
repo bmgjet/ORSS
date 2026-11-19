@@ -317,7 +317,9 @@ public sealed class Simulator
         return new TraceEntry(pcBefore, d, (ushort)(pcBefore + d.Len));
     }
 
-    /// Skip the bulk of pure time-wasting countdown loops such as the boot delay adc_wait_loop: MB r0.0, C JRNZ DP, adc_wait_loop ; DP starts at 0 -> 65,536 passes which the ROMs run eight times before starting (several seconds of chip time). Only loops of JRNZ DP around a body of register-only instructions are touched, and only while no interrupt can be taken; time, timers and the crank signal still advance by exactly the skipped cycles, so the program sees the same state afterwards.
+    /// Skip NOP-only countdown loops while no interrupt can be taken. JRNZ decrements
+    /// DPL, so a zero low byte means 256 passes; DPH is preserved. Register-writing bodies
+    /// run normally: local registers can alias DP, and entry need not follow the body.
     public bool FastForwardDelayLoops { get; set; }
     public long FastForwardedInstructions { get; private set; }
 
@@ -335,9 +337,7 @@ public sealed class Simulator
         {
             Decoded b;
             try { b = DecodeCached((ushort)a); } catch (ExecException) { return; }
-            bool harmless = b.Mnemonic == "NOP" ||
-                            (b.Mnemonic.StartsWith("MB r", StringComparison.Ordinal) && b.Mnemonic.EndsWith(", C", StringComparison.Ordinal));
-            if (!harmless) return;
+            if (b.Mnemonic != "NOP") return;
             body += b.Cycles; count++;
             a += b.Len;
         }
@@ -345,10 +345,10 @@ public sealed class Simulator
         ushort ie = (ushort)(Bus.Ram[0x1A] | (Bus.Ram[0x1B] << 8));
         if (Cpu.Mie() && ie != 0) return;
         int dpAddr = 0x80 + (Cpu.Scb() * 8) + 4;
-        int dp = Bus.Ram[dpAddr] | (Bus.Ram[dpAddr + 1] << 8);
-        if (dp == 0) dp = 0x10000;
-        if (dp <= 2) return;
-        long n = dp - 1;                              // iterations to skip; DP ends at 1 so the JRNZ falls through
+        int dpl = Bus.Ram[dpAddr];
+        if (dpl == 0) dpl = 0x100;
+        if (dpl <= 2) return;
+        long n = dpl - 1;                             // iterations to skip; DPL ends at 1 so the JRNZ falls through
         ulong per = j.Cycles + 4u + body;             // taken branch costs 4 more
         ulong total = (ulong)n * per;
         const uint chunk = 50_000;
@@ -362,7 +362,7 @@ public sealed class Simulator
         }
         Cpu.Instructions += (ulong)(n * (1 + count));
         FastForwardedInstructions += n * (1 + count);
-        Bus.Ram[dpAddr] = 1; Bus.Ram[dpAddr + 1] = 0;
+        Bus.Ram[dpAddr] = 1;                         // leave DPH untouched
     }
 
     /// Decode the instruction at `pc` (without executing it), advance PC and Cycles/Instructions by its normal cost, and let timers/interrupts progress by that same elapsed time -- but skip every effect the instruction itself would have had (no branch taken, no register/ flag/stack changes). Returns null if nothing decodes at `pc`.

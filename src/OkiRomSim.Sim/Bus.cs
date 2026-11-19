@@ -188,14 +188,14 @@ public sealed class Bus
     public readonly ulong[] InjectorLastEventAt = new ulong[4];
     /// Most recent pulse width on any injector, microseconds.
     public uint InjectorPulseWidthUs;
-    /// Sparks since reset, and when the last one was. Timer 3 drives the coil: a compare match armed by TCON3 bit 3 switches it off, one armed by bit 2 alone toggles it (at idle the ROM leaves bit 2 armed and times both edges with it; higher up it starts the dwell with bit 2 and ends it with bit 3). Switching the coil off fires the plug. A match with neither armed (the ROM's spark cut) or one that leaves the coil off fires nothing. The igniter lets the coil go without a spark once it has been on for longer than any dwell (CoilTimeoutUs); that also puts the toggling back in step after a stray match (a compare the ROM left behind wrapping round).
+    /// Inferred command completions: count LOW-to-HIGH transitions after an observed LOW.
+    /// This logical pin model does not measure coil current or spark.
     public long IgnitionEvents;
     public ulong LastIgnitionAt;
-    /// Dwell (coil on time) before the last spark, microseconds.
+    /// Observed LOW command interval before the last inferred completion, microseconds.
     public uint LastDwellUs;
-    bool _coilOn;
-    ulong _coilOnAt;
-    const uint CoilTimeoutUs = 20000;
+    bool _ignitionCommandLow;
+    ulong _ignitionCommandLowAt;
     public float IacvDutyCyclePct;
 
     /// Oil pressure is available to the VTEC spool: the pressure switch (D6) then closes while the solenoid is open, pulling bit 1 of the 4700h switch buffer low (SwitchLatchPins) - what code 22 checks.
@@ -212,9 +212,12 @@ public sealed class Bus
 
     /// PWM0/PWM1 output pin state, surfaced on P4.2 / P4.3.
     public bool[] PwmOut = new bool[2];
+    readonly bool[] _pwmFlipFlop = new bool[2];
 
     /// Fractional prescaler remainder for TM0..TM3.
     public uint[] TimerAccum = new uint[4];
+    // Mode C remembers equality between captures; TCERR is published at the next capture.
+    readonly bool[] _captureEqualityPending = new bool[4];
 
 
     /// Remaining machine cycles in the current A/D conversion.
@@ -302,8 +305,8 @@ public sealed class Bus
         Array.Clear(Ram);
         ElapsedCycles = 0; NowCycles = 0;
         _injOpen.Clear(); Array.Clear(InjectorPulseUs); Array.Clear(InjectorEvents); Array.Clear(InjectorLastEventAt);
-        InjectorPulseWidthUs = 0; IgnitionEvents = 0; LastIgnitionAt = 0; LastDwellUs = 0; _coilOn = false; _coilOnAt = 0; IacvDutyCyclePct = 0;
-        Array.Clear(PwmOut); Array.Clear(TimerAccum);
+        InjectorPulseWidthUs = 0; IgnitionEvents = 0; LastIgnitionAt = 0; LastDwellUs = 0; _ignitionCommandLow = false; _ignitionCommandLowAt = 0; IacvDutyCyclePct = 0;
+        Array.Clear(PwmOut); Array.Clear(_pwmFlipFlop); Array.Clear(TimerAccum); Array.Clear(_captureEqualityPending);
         AdcCyclesRemaining = null; SerialTxCyclesRemaining = null;
         WatchdogCyclesRemaining = 0; WatchdogTripped = false; _wdtSequence = 0;
         SerialRxQueue.Clear(); SerialTxQueue.Clear(); _rxIncoming.Clear(); _rxLastAt = 0;
@@ -476,6 +479,14 @@ public sealed class Bus
                 return (byte)((Ram[idx] | 0x30) & ~(VtecSolenoidActive ? 0x20 : 0) & ~(VtecSolenoidActive && VtecPressureSwitch ? 0x10 : 0));
             return Ram[idx];
         }
+        // Manufacturer table 10-2: unused PWMR bits read as one.
+        if (addr is SfrPwmr0 or SfrPwmr0 + 1 or SfrPwmr1 or SfrPwmr1 + 1)
+        {
+            int channel = addr >= SfrPwmr1 ? 1 : 0;
+            int bits = PwmWidths[Ram[SfrPwcon0 + channel * 2] & 3];
+            ushort value = (ushort)(RamWord(SfrPwmr0 + channel * 4) | (0xFFFF << bits));
+            return (byte)(value >> ((addr & 1) * 8));
+        }
         if (addr == SwitchLatchAddr) return SwitchLatchPins;
         if (addr == SfrSrbuf)
         {
@@ -543,10 +554,11 @@ public sealed class Bus
     /// Named external inputs, for pins whose harness signal this model tracks as a field rather than as a raw bit in PortPins. Only consulted when the ROM has left the pin configured as an input.
     private bool? InputLevel(int port, int bit) => Board != null ? Board.InputLevel(port, bit) : (port, bit) switch { (4, 6) => true, _ => null };
 
-    /// Level driven by the on-chip peripheral assigned to a pin. Port 4's map: P4.0/TM0CK, P4.1/TM1CK, P4.2/PWM0, P4.3/PWM1, P4.4-7/TRNS0-3. Only the two PWM outputs are driven from inside the chip in this model.
+    /// Level driven by the on-chip peripheral assigned to a pin. Port 4's map: P4.0/TM0CK, P4.1/TM1CK, P4.2/PWM0, P4.3/PWM1, P4.4-7/TRNS0-3. P3.4-P3.7 carry TM0IO-TM3IO in realtime output mode (TCON bits 1:0 = 11).
     private bool? SecondaryFnLevel(int port, int bit) =>
         (port, bit) switch
         {
+            (3, >= 4 and <= 7) when (Ram[SfrTcon0 + bit - 4] & 3) == 3 => (Ram[SfrTcon0 + bit - 4] & 4) != 0,
             (Port4, 2) => PwmOut[0],
             (Port4, 3) => PwmOut[1],
             _ => null,
@@ -613,6 +625,17 @@ public sealed class Bus
         {
             UpdatePins();
         }
+        else if (addr is >= SfrTcon0 and <= SfrTcon3)
+        {
+            // TROUT is software-writable. Changing TRBUF alone does not change the output.
+            if ((old & 3) != (val & 3)) _captureEqualityPending[addr - SfrTcon0] = false;
+            UpdatePins();
+        }
+        else if (addr is SfrPwcon0 or SfrPwcon1)
+        {
+            int channel = (addr - SfrPwcon0) / 2;
+            if ((val & 8) != 0) SetPwmOutput(channel, _pwmFlipFlop[channel], ElapsedCycles, hardware: false);
+        }
         else if (addr == SfrStbuf)
         {
             SerialTxQueue.Add(val);
@@ -633,10 +656,37 @@ public sealed class Bus
     }
 
     /// Re-evaluate every port pin's driven level and log any change.
-    void UpdatePins()
+    void UpdatePins(ulong? eventCycle = null, bool hardware = false)
     {
+        ulong at = eventCycle ?? ElapsedCycles;
         for (int p = 0; p < Ports.Length; p++)
-            Pins.Update(p, ReadPort(p), Ram[Ports[p].Mode], ElapsedCycles, CurrentPc);
+        {
+            byte direction = Ram[Ports[p].Mode];
+            if (Ports[p].Sf is ushort sf)
+            {
+                byte mux = Ram[sf];
+                for (int bit = 0; bit < 8; bit++)
+                {
+                    byte mask = (byte)(1 << bit);
+                    if ((mux & mask) != 0 && SecondaryFnLevel(p, bit).HasValue) direction |= mask;
+                }
+            }
+            Pins.Update(p, ReadPort(p), direction, at, CurrentPc, hardware);
+        }
+        // Board feedback is inferred from logical pin edges, never from a compare count.
+        // Keep this separate from the documented MCU TRBUF/TROUT transfer above.
+        if ((Ram[SfrP3Sf] & 0x80) != 0 && (Ram[SfrTcon3] & 3) == 3)
+        {
+            if (Pins.JustFell(3, 7)) { _ignitionCommandLow = true; _ignitionCommandLowAt = at; }
+            if (Pins.JustRose(3, 7) && _ignitionCommandLow)
+            {
+                _ignitionCommandLow = false;
+                Ram[SfrTrns] |= 0x02;
+                IgnitionEvents++; LastIgnitionAt = at;
+                LastDwellUs = (uint)((at - _ignitionCommandLowAt) / CyclesPerUs);
+            }
+        }
+        else _ignitionCommandLow = false;
         for (int n = 0; n < 4; n++)
         {
             if (!IsOutput(2, n)) continue;
@@ -725,8 +775,28 @@ public sealed class Bus
     public void CaptureTm2()
     {
         if (Is66911) { _crankIrq = P66911.CaptureCrank(); return; }
-        Ram[SfrTmr2] = Ram[SfrTm2];
-        Ram[SfrTmr2 + 1] = Ram[SfrTm2 + 1];
+        _crankIrq = CaptureTimer(2);
+    }
+
+    /// Supply a falling edge on TMxIO for the 66207 capture peripheral. A selected
+    /// mode-C timer latches TM into TMR and publishes whether equality occurred since its last capture.
+    /// Pin pulse-width constraints and simultaneous CPU read-modify-write arbitration are not modelled.
+    /// RUN gates counting. Capture admission with RUN=0 remains unqualified; this model retains capture
+    /// of the frozen count rather than inventing a RUN-based rejection. Chip STOP is not implemented.
+    public ushort CaptureTimer(int timer)
+    {
+        if ((uint)timer >= 4) throw new ArgumentOutOfRangeException(nameof(timer));
+        if (Is66911) return 0;
+        var (tm, tmr, con, irqBit) = TimerRegs[timer];
+        if ((Ram[con] & 3) != 2 || (Ram[SfrP3Sf] & (0x10 << timer)) == 0) return 0;
+        Ram[con] = (byte)((Ram[con] & ~4) | (_captureEqualityPending[timer] ? 4 : 0));
+        _captureEqualityPending[timer] = false;
+        Ram[tmr] = Ram[tm];
+        Ram[tmr + 1] = Ram[tm + 1];
+        ushort irq = (ushort)(1 << irqBit);
+        Ram[SfrIrq] |= (byte)irq;
+        Ram[SfrIrq + 1] |= (byte)(irq >> 8);
+        return irq;
     }
 
     public ushort PushSerialRxByte(byte b)
@@ -768,7 +838,6 @@ public sealed class Bus
         (SfrTm2, SfrTmr2, SfrTcon2, IrqTm2),
         (SfrTm3, SfrTmr3, SfrTcon3, IrqTm3),
     ];
-    static readonly (ushort c, ushort r)[] PwmRegs = [(SfrPwmc0, SfrPwmr0), (SfrPwmc1, SfrPwmr1)];
 
     // The timer and PWM counters are plain registers (no port, PPI or serial behaviour hangs off their addresses), so the timer step reads and writes them in RAM directly instead of through the full bus decode - which walks the port table for every byte and ran for each timer after every instruction. The write hook still hears each byte, as it did.
     internal ushort RamWord(int a) => (ushort)(Ram[a] | (Ram[a + 1] << 8));
@@ -783,6 +852,94 @@ public sealed class Bus
         OnDataWrite?.Invoke((ushort)(addr + 1), oldHi, hi);
     }
 
+    // MSM66207 user manual pp.96-110: PWCON controls mode, RUN, ERQ and status.
+    static readonly int[] PwmWidths = [8, 10, 12, 16];
+
+    void SetPwmOutput(int channel, bool active, ulong clockCycle, bool hardware = true)
+    {
+        _pwmFlipFlop[channel] = active;
+        bool level = active ^ ((Ram[SfrPwcon0 + channel * 2] & 0x20) != 0);
+        if (PwmOut[channel] == level) return;
+        PwmOut[channel] = level;
+        UpdatePins(clockCycle, hardware);
+    }
+
+    ushort TickPwm(ulong before, ulong after)
+    {
+        ushort irq = 0;
+        // TBC source clock is fOSC/2; shared phase survives RUN changes.
+        ulong firstClock = before * (ulong)Chip.ClockDivider / 2;
+        ulong lastClock = after * (ulong)Chip.ClockDivider / 2;
+        for (int channel = 0; channel < 2; channel++)
+        {
+            ushort counter = (ushort)(SfrPwmc0 + channel * 4);
+            ushort reload = (ushort)(counter + 2);
+            ushort control = (ushort)(SfrPwcon0 + channel * 2);
+            byte con = Ram[control];
+            if ((con & 0x10) == 0) continue;
+            int bits = PwmWidths[con & 3];
+            ulong period = 1UL << bits, mask = period - 1;
+            if ((con & 8) != 0)
+            {
+                // PWM mode: TBC falling edge reloads PWMR and sets the output
+                // F/F. Counter overflow resets it; coincident overflow has reset
+                // priority (pp.103-104). Counter clock is fOSC/2.
+                ulong cursor = firstClock, value = RamWord(counter) & mask;
+                while (cursor < lastClock)
+                {
+                    ulong boundary = (cursor / period + 1) * period;
+                    ulong end = Math.Min(lastClock, boundary);
+                    ulong clocks = end - cursor, distance = period - value;
+                    bool overflow = clocks >= distance;
+                    if (overflow)
+                    {
+                        RequestOverflow();
+                        SetPwmOutput(channel, false, CpuCycle(cursor + distance));
+                    }
+                    value = (value + clocks) & mask;
+                    if (end == boundary)
+                    {
+                        bool overflowAtBoundary = overflow && (clocks - distance) % period == 0;
+                        value = (ulong)RamWord(reload) & mask;
+                        SetPwmOutput(channel, !overflowAtBoundary, CpuCycle(boundary));
+                    }
+                    cursor = end;
+                }
+                WriteRamWord(counter, (ushort)value);
+            }
+            else
+            {
+                ulong clocks = lastClock / period - firstClock / period;
+                if (clocks == 0) continue;
+                bool freeRun = (con & 4) != 0;
+                // Hardware manual p.108 specifies 16-bit free-run. PWM0 was tested
+                // on an ECU across all four clock settings; see the qualification notes.
+                ulong modulus = freeRun ? 65536UL : period;
+                ulong value = RamWord(counter) & (modulus - 1);
+                ulong distance = modulus - value;
+                if (clocks >= distance)
+                {
+                    RequestOverflow();
+                    ulong remaining = clocks - distance;
+                    ulong start = freeRun ? 0UL : (ulong)RamWord(reload) & mask;
+                    value = start + remaining % (modulus - start);
+                }
+                else value += clocks;
+                WriteRamWord(counter, (ushort)value);
+            }
+            void RequestOverflow()
+            {
+                // ERQ controls source request generation. Source status stays
+                // until software writes PWCON; both sources share IRQ13.
+                if ((con & 0x40) == 0) return;
+                Ram[control] |= 0x80;
+                irq |= 1 << IrqPwm;
+            }
+        }
+        return irq;
+        static ulong CpuCycle(ulong clock) => (clock * 2 + (ulong)Chip.ClockDivider - 1) / (ulong)Chip.ClockDivider;
+    }
+
     // Hardware timer step
     public ushort TickTimers(uint cycles)
     {
@@ -793,34 +950,7 @@ public sealed class Bus
 
         ushort irqFlags = 0;
 
-        // 16-bit PWM: the counter counts up, and on overflow reloads from the PWM register and flips the output pin.
-        var pwmRegs = PwmRegs;
-        bool pwmToggled = false;
-        for (int i = 0; i < pwmRegs.Length; i++)
-        {
-            var (c, r) = pwmRegs[i];
-            // Rust truncates `cycles` to u16 before the add (overflowing_add on a u16 counter); mirror that so multi-instruction batches wrap identically.
-            ushort cyclesU16 = (ushort)cycles;
-            uint sum0 = (uint)RamWord(c) + cyclesU16;
-            bool overflow = sum0 > 0xFFFF;
-            ushort wrapped = (ushort)sum0;
-            ushort v;
-            if (overflow)
-            {
-                PwmOut[i] = !PwmOut[i];
-                pwmToggled = true;
-                irqFlags |= (ushort)(1 << IrqPwm);
-                v = (ushort)(RamWord(r) + wrapped);
-            }
-            else
-            {
-                v = wrapped;
-            }
-            Ram[c] = (byte)(v & 0xFF);
-            Ram[c + 1] = (byte)(v >> 8);
-        }
-
-        if (pwmToggled) UpdatePins();
+        irqFlags |= TickPwm(ElapsedCycles - cycles, ElapsedCycles);
 
         while (_rxIncoming.Count > 0 && _rxIncoming.Peek().At <= ElapsedCycles)
         {
@@ -878,48 +1008,57 @@ public sealed class Bus
             // TCON bit 4 is the run bit; a stopped timer neither counts nor toggles its pin.
             if ((tcon & (1 << 4)) == 0) continue;
 
-            // Prescaler. The shifts below are in units of 4 oscillator clocks: 00b (/8 = fOSC/32) and 01b (/2 = fOSC/8, timer 1's 4x-faster rate) are
-            // the encodings the P28 ROMs use. The prescaler divides the oscillator, so Chip.PeripheralShiftExtra turns them into machine cycles.
-            // (every division is a power of two: 8, 2, then 2 and 1 - a shift gives the same count as a 64-bit divide, at a fraction of the cost)
-            int shift = ((tcon >> 5) & 0x03) switch
+            // MSM66207 user manual tables 9-3/9-4: all THREE selector bits matter.
+            // Divisors are oscillator clocks, not instruction/machine cycles.
+            int oscillatorDivisor = (tcon >> 5) switch
             {
-                0b00 => 3,
-                0b01 => 1,
-                var other => 3 - Math.Min(other, 3),
-            } + Chip.PeripheralShiftExtra;
-            if (shift < 0) shift = 0;
-            // One prescaler feeds every timer, so timers on the same division tick on the same machine cycles (the ROMs' boot self-test checks TM2 and TM3 agree).
-            uint steps = (uint)((ElapsedCycles >> shift) - ((ElapsedCycles - cycles) >> shift));
+                0 => 2, 1 => 4, 2 => 8, 3 => 16, 4 => 32, 5 => 128, 6 => 512,
+                _ => 0, // external input (TM0/1 only); no CPU-derived ticks
+            };
+            if (oscillatorDivisor == 0) continue;
+            // One free-running prescaler feeds the timers. Retain phase across batches and RUN changes.
+            ulong before = ElapsedCycles - cycles;
+            ulong steps = ElapsedCycles * (ulong)Chip.ClockDivider / (ulong)oscillatorDivisor
+                - before * (ulong)Chip.ClockDivider / (ulong)oscillatorDivisor;
             if (steps == 0) continue;
 
             ushort tm = RamWord(tmSfr);
             ushort tmr = RamWord(tmrSfr);
-            // Rust truncates `steps` to u16 before the add; mirror that.
-            ushort stepsU16 = (ushort)steps;
-            uint sum = (uint)tm + stepsU16;
+            ulong sum = tm + steps;
             bool overflow = sum > 0xFFFF;
             ushort newTm = (ushort)sum;
-            // TMR is a compare register, not a reload value; TM keeps free running after a match.
-            bool matched = overflow ? (tm < tmr || newTm >= tmr) : (tm < tmr && newTm >= tmr);
+            // A compare at the starting count is reached again only after a full wrap.
+            uint distance = (ushort)(tmr - tm);
+            if (distance == 0) distance = 65536;
+            bool matched = steps >= distance;
             WriteRamWord(tmSfr, newTm);
 
-            // TMR2 holds the CKP capture (see CaptureTm2), so timer 2 has no compare event of its own; its interrupt comes from the capture.
-            if (matched && i != 2) irqFlags |= (ushort)(1 << irqBit);
-            if (matched && i == 0) EndInjectorPulses();
-            // Igniter feedback: each timer-3 compare drives the coil, and the igniter's confirmation pulse comes back on TRNS1 when a spark fires. The ROMs test "RB TRNSIT.1" once per TDC and log code 15 (ignition output) when it has not latched.
-            if (matched && i == 3)
+            int mode = tcon & 3;
+            if (matched && mode == 2)
             {
-                byte t3 = Ram[SfrTcon3];
-                if (_coilOn && (ElapsedCycles - _coilOnAt) / CyclesPerUs > CoilTimeoutUs) _coilOn = false;
-                if ((t3 & 0x0C) != 0 && _coilOn)
-                {
-                    Ram[SfrTrns] |= 0x02;
-                    _coilOn = false;
-                    IgnitionEvents++; LastIgnitionAt = ElapsedCycles;
-                    LastDwellUs = (uint)((ElapsedCycles - _coilOnAt) / CyclesPerUs);
-                }
-                else if ((t3 & 0x0C) == 0x04) { _coilOn = true; _coilOnAt = ElapsedCycles; }
+                // Mode C: remember equality, then publish TCERR at the NEXT capture (manual p.90).
+                _captureEqualityPending[i] = true;
             }
+            else if (matched && mode == 3)
+            {
+                // Mode D: the compare copies TRBUF into TROUT independently of IE/MIE.
+                // TickTimers is instruction-batched: the manual's simultaneous SFR write/RMW
+                // arbitration requires bus-phase modelling and is NOT established by this model.
+                byte next = (byte)((tcon & ~4) | ((tcon & 8) >> 1));
+                Ram[tconSfr] = next;
+                if ((next & 4) != (tcon & 4))
+                {
+                    // First compare within this batch. Subsequent matches copy the same buffer,
+                    // so they cannot create another transition without intervening software.
+                    ulong inputTick = before * (ulong)Chip.ClockDivider / (ulong)oscillatorDivisor + distance;
+                    ulong matchCycle = (inputTick * (ulong)oscillatorDivisor + (ulong)Chip.ClockDivider - 1)
+                        / (ulong)Chip.ClockDivider;
+                    UpdatePins(matchCycle, hardware: true);
+                }
+                irqFlags |= (ushort)(1 << irqBit);
+                if (i == 0) EndInjectorPulses();
+            }
+            // Modes A/B (auto reload/clock output) remain outside this realtime-output qualification.
             // Every timer also raises a counter-overflow interrupt on the even bit just below its event bit.
             if (overflow) irqFlags |= (ushort)(1 << (irqBit - 1));
         }
@@ -944,17 +1083,19 @@ public sealed class PinActivity
     public readonly ulong[,] LastHighCycles = new ulong[5, 8];
     public readonly ulong[,] LastLowCycles = new ulong[5, 8];
     public readonly long[,] Changes = new long[5, 8];
+    // For hardware edges this PC is an observation point, not the instruction that drove the pin.
     public readonly ushort[,] LastDriverPc = new ushort[5, 8];
+    public readonly bool[,] LastChangeWasHardware = new bool[5, 8];
     readonly bool[,] _rose = new bool[5, 8];
     readonly bool[,] _fell = new bool[5, 8];
 
     public void Reset()
     {
         Array.Clear(Level); Array.Clear(Direction); Array.Clear(LastChange); Array.Clear(LastHighCycles);
-        Array.Clear(LastLowCycles); Array.Clear(Changes); Array.Clear(LastDriverPc); Array.Clear(_rose); Array.Clear(_fell);
+        Array.Clear(LastLowCycles); Array.Clear(Changes); Array.Clear(LastDriverPc); Array.Clear(LastChangeWasHardware); Array.Clear(_rose); Array.Clear(_fell);
     }
 
-    internal void Update(int port, byte level, byte dir, ulong now, ushort pc)
+    internal void Update(int port, byte level, byte dir, ulong now, ushort pc, bool hardware = false)
     {
         byte diff = (byte)(level ^ Level[port]);
         Direction[port] = dir;
@@ -970,6 +1111,7 @@ public sealed class PinActivity
             LastChange[port, b] = now;
             Changes[port, b]++;
             LastDriverPc[port, b] = pc;
+            LastChangeWasHardware[port, b] = hardware;
         }
         Level[port] = level;
     }

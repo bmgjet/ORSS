@@ -1096,7 +1096,7 @@ POPS LRB		-UN 64
 
 ; ---- PUSHS ----
 
-PUSHS A			-1N 55
+PUSHS A			-UN 55  ; manual 3-113: word push, independent of DD
 PUSHS LRB		-UN 54
 
 ; ---- PUSHU ----

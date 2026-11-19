@@ -360,7 +360,9 @@ internal sealed class Exec
                         half = (a & 0xF) < (b & 0xF) + carryIn;               // borrow from bit 4
                     }
                     _cpu.Cf = carry;
-                    _cpu.Hc = half;
+                    // OKI instruction manual pp.3-35..3-48: comparisons change
+                    // ZF/CF only. Unlike subtraction, they preserve half-carry.
+                    if (baseOp != "CMP" && baseOp != "CMPC") _cpu.Hc = half;
                     SetZf((ushort)res, byteWidth);
                     if (baseOp != "CMP" && baseOp != "CMPC") Write(args[0], byteWidth, (ushort)res);
                     break;
@@ -388,7 +390,15 @@ internal sealed class Exec
                     ushort v = Read(args[0], byteWidth, false);
                     uint res = baseOp == "INC" ? (uint)(v + 1) : (uint)(v - 1);
                     ushort masked = Mask(res, byteWidth);
-                    SetZf(masked, byteWidth);
+                    // Manual 3-55/56/60/61 and hardware p.33: HC is the
+                    // bit3 carry/borrow for both widths; CF and DD are preserved.
+                    _cpu.Hc = (v & 0x0F) == (baseOp == "INC" ? 0x0F : 0);
+                    // INC LRB (including memory aliases), and INCB of its high
+                    // byte, preserve ZF. DEC has no corresponding exception.
+                    bool keepZero = baseOp == "INC" &&
+                        (args[0].Kind == ArgKind.Reg && args[0].Reg == Reg.Lrb ||
+                         args[0].Kind == ArgKind.Mem && Ea(args[0].Mem) == (byteWidth ? 3 : 2));
+                    if (!keepZero) SetZf(masked, byteWidth);
                     Write(args[0], byteWidth, masked);
                     break;
                 }
@@ -486,12 +496,8 @@ internal sealed class Exec
                         default: // SRA: arithmetic right shift keeps the sign bit.
                             res = (v32 >> 1) | (v32 & msb); carry = (v32 & 1) != 0; break;
                     }
+                    // Shifts and rotates update only carry. A PSW destination still receives the result.
                     _cpu.Cf = carry;
-                    // ROR / RORB leave Z alone (nX-8/500 manual: the rotates change C only). The factory code depends on it: the P08 (0835h)
-                    // and HTS (078Fh) rpm index is DIV / SLL A / LB A,r1 / RORB A / SC / JNE, and that JNE tests the Z of LB A,r1. Setting Z
-                    // here flipped the index byte (0C2h) to FFh at many rpm: high-cam map read past its last row, dwell started a tooth early,
-                    // no spark around 6900-7100 rpm on HTS 1.15. The other shifts keep setting Z: no factory code tells them apart.
-                    if (baseOp != "ROR") SetZf((ushort)res, byteWidth);
                     Write(args[0], byteWidth, (ushort)res);
                     break;
                 }
@@ -661,10 +667,12 @@ internal sealed class Exec
                 }
             case "JRNZ":
                 {
-                    // Decrement the named register and branch while non-zero.
-                    ushort v = (ushort)(Read(args[0], false, false) - 1);
-                    Write(args[0], false, v);
-                    if (v != 0)
+                    // JRNZ DP counts DPL only, independent of DD; DPH and every flag
+                    // survive (OKI instruction manual, p. 3-68).
+                    ushort dp = Read(args[0], false, false);
+                    byte dpl = unchecked((byte)(dp - 1));
+                    Write(args[0], false, (ushort)((dp & 0xFF00) | dpl));
+                    if (dpl != 0)
                     {
                         short off = _d.Fields.Rel8;
                         _cpu.Pc = (ushort)(_cpu.Pc + off);

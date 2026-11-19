@@ -1,0 +1,47 @@
+MSM66207 regression notes
+
+Selected instruction costs/flags and timer/PWM behavior are checked against OKI
+MSM66201 instruction and MSM66201/66207 hardware manuals (printed page numbers).
+
+nX-8/200 instruction references: JRNZ 3-68; ROL/ROLB 3-117..120;
+SLL/SLLB, SRA/SRAB and SRL/SRLB 3-142..153; comparisons 3-35..48;
+INC/DEC 3-55/56/60/61; L/LB/ST 3-69/70/154; MB/MBR 3-77..80; MOV 3-82/84/87;
+PUSHS 3-113; RB/SB 3-114/127; logical byte forms 3-27/110.
+Raw-byte tests cover operand costs, flags, addressing and DD independence.
+JRNZ counts DPL only; fast batching accepts only interrupt-disabled NOP loops.
+Comparisons and SRL preserve HC; INC/DEC use bit-3 carry/borrow (hardware p.33).
+PUSHS A is word-wide regardless of DD. Unqualified costs retain existing estimates.
+
+Timers (hardware pp.85..95): three-bit clock selection, RUN, Mode C capture
+status, Mode D TRBUF-to-TROUT transfer and peripheral output ownership.
+PWM (pp.96..110): RUN/ERQ, modes, clocks, reload, output/status and snapshots.
+PWM0 free-run was tested on an ECU at all four clock settings. The results
+support the fixed 16-bit counter on p.108. Table 10-6 on p.110 gives
+conflicting periods for the first three settings.
+External-memory/wait-state costs, STOP and simultaneous
+SFR-write/compare phases remain unqualified. The 66911 peripheral model is unchanged.
+
+OR obj,#N16 is valid (instruction Table 3-24, p.3-202), but its detailed encoding
+page is missing. Existing assembler rules reject it instead of emitting D0/AND.
+The decoder's E0 forms are insufficient independent evidence to enable assembly.
+
+Checkpoint verification retains the original file and executes it on pinned
+upstream 01d678730ccba53f81cd7d64f2037c6c686d0594. All 36 states reproduce.
+A separate 36-state current record adds input hashes, completion and reset-BRK
+assertions. These are regression states, not measured hardware traces.
+
+Isolated indirect-cost ablation, with JRNZ/SRL behavior held constant:
+Upstream fixture      First cost difference               Reset BRK
+p30-skeleton bare     step14  PC1A25 LB A,[DP] 2->4        none
+p30-skeleton Default  step14  PC20B3 LB A,[DP] 2->4        none
+p30.bin               step14  PC2211 LB A,[DP] 2->4        none
+p13-skeleton bare     step75  PC0880 ST A,[DP] 2->4        step4 PC0771 reason0
+p13-skeleton Default  step104 PC09EE L A,[DP]  2->4        step4 PC08E6 reason0
+p13.bin               step104 PC0894 L A,[DP]  2->4        step4 PC078C reason0
+Timing changes all 36 states. HC-only changes saved PSW bits without branch/cycle
+changes. Timer/PWM ablations affect the 66207 fixtures, not 66911 peripheral state.
+The P13 reset BRK occurs once; P30 fixtures must not trap.
+
+Reproduce with .NET 10:
+  dotnet run --project tests/OkiRomSim.Tests -c Release
+  pwsh tools/verify-checkpoint-lineage.ps1

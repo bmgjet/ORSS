@@ -3122,7 +3122,7 @@ public sealed class MainWindow : Window, IRestartAfterUpdate
         {
             new([new("Fuel pump relay"), new("8255 PB7", DataList.Address), OnOff(o.FuelPump), new("")], o.FuelPump ? DataList.Good : null),
             new([new("VTEC solenoid"), new("8255 PC0", DataList.Address), OnOff(o.Vtec), new($"pressure switch {(o.VtecPressure ? "closed" : "open")}", DataList.Dim)], o.Vtec ? DataList.Good : null),
-            new([new("Ignition coil"), new("timer 3", DataList.Address), new($"{o.SparksPerSec:F0} /s", o.SparksPerSec > 0 ? DataList.Good : DataList.Dim), new("dwell start + fire events", DataList.Dim)], o.SparksPerSec > 0 ? DataList.Good : null),
+            new([new("Ignition estimate"), new("timer 3", DataList.Address), new($"{o.SparksPerSec:F0} /s", o.SparksPerSec > 0 ? DataList.Good : DataList.Dim), new("rising command edges; inferred completion", DataList.Dim)], o.SparksPerSec > 0 ? DataList.Good : null),
             new([new("Injectors - firing order 1-3-4-2", DataList.Text)], Heading: true),
         };
         const string injTip = "P2.0-3 latch the pattern (firing order 1-3-4-2), the P3.4 gate pulse from timer 0 opens it";
@@ -3164,7 +3164,7 @@ public sealed class MainWindow : Window, IRestartAfterUpdate
         string Ago(double ms) => ms < 0 ? "never" : ms < 1000 ? $"{ms:F0} ms ago" : $"{ms / 1000:F1} s ago";
         sb.AppendLine($"Fuel pump relay  8255 PB7 (P0.7)  {(o.FuelPump ? "ON " : "off")}");
         sb.AppendLine($"VTEC solenoid    8255 PC0 (P1.0)  {(o.Vtec ? "ON " : "off")}   pressure sw (4700h.1) {(o.VtecPressure ? "closed" : "open")}");
-        sb.AppendLine($"Ignition coil    {o.SparksPerSec,5:F0} timer-3 events/s (dwell start + fire)");
+        sb.AppendLine($"Ignition estimate {o.SparksPerSec,5:F0} timer-3 rising command edges/s (inferred completion)");
         sb.AppendLine();
         sb.AppendLine("Injector  pattern  pulse ms  events/s  duty %  last event");
         for (int n = 0; n < 4; n++)

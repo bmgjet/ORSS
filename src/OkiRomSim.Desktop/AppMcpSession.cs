@@ -219,7 +219,7 @@ public sealed class AppMcpSession : IMcpSession
         Notify($"MCP simulator {action}");
         return $"{s.StopReason} at {s.Pc:X4} {s.Label}; {s.SimSeconds:0.000} s simulated; rpm {s.Rpm:0} MAP {s.Map:0.0} TPS {s.Tps:0} ECT {s.Ect:0}; " +
                $"fuel pump {(o.FuelPump ? "on" : "off")}, VTEC {(o.Vtec ? "on" : "off")}, injectors {string.Join("/", o.InjectorMs.Select(x => x.ToString("0.00", CultureInfo.InvariantCulture)))} ms, " +
-               $"{o.SparksPerSec:0} ignition events/s" + (s.Fault != null ? $"; FAULT {s.Fault}" : "") +
+               $"{o.SparksPerSec:0} estimated ignition events/s" + (s.Fault != null ? $"; FAULT {s.Fault}" : "") +
                (s.Traps.Count > 0 ? "; traps " + string.Join(", ", s.Traps.Select(t => $"{t.Pc:X4} reason {t.Reason:X2} x{t.Count}")) : "");
     }
 

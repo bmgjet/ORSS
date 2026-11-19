@@ -10,7 +10,9 @@ public static class Chip
     public const int RomSize = 32768; // 32KB ROM space (0x0000..0x7FFF)
     public const int RamSize = 4096;  // 4KB Data RAM & SFR space (0x0000..0x0FFF)
 
-    /// The board carries a 10 MHz crystal (measured on OSC0/OSC1). The simulator's cycle counts (Decoder.IntCycles, from the instruction tables, NOP = 2) run at fOSC/2 = 5 MHz, 200 ns a machine cycle: the MSM66207 datasheet gives "minimum cycle for instruction 400 ns @ 10 MHz" and the shortest instructions take 2 cycles. The peripherals are clocked from the oscillator, not from the machine cycle: the timers' 00b setting and the serial baud generator count fOSC/32 = 312.5 kHz - at exactly that rate the ROMs' crank-period word reads 1,875,000 / rpm and a timer tick is 3.2 us, the tuning software's own rpm and injector scalings. The ROMs' boot delay loop then lasts about 2.25 s. The active ProcessorProfile sets the crystal and the divider.
+    /// The default profile uses a 10 MHz oscillator and fOSC/2 machine cycles (200 ns).
+    /// Timer selector 100b and the serial baud generator use fOSC/32 (312.5 kHz).
+    /// ProcessorProfile sets the oscillator frequency and divider.
     public static double CrystalMHz { get; private set; } = 10.0;
     /// Rate of the simulator's machine cycles, Hz (fOSC / 2).
     public static ulong CpuHz { get; private set; } = 5_000_000;

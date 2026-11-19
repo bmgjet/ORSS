@@ -123,7 +123,7 @@ static class SkeletonTests
     }
 }
 
-/// A ROM run in the simulator the same way every time, its state hashed at checkpoints and compared with the saved run.
+/// A ROM run in the simulator the same way every time, its state hashed at checkpoints and compared with the qualified run; original lineage stays executable.
 static class SimRun
 {
     public const long Steps = 3_000_000, Every = 500_000;
@@ -137,9 +137,15 @@ static class SimRun
         e.Rpm = 3000; e.MapKpa = 60; e.TpsPct = 20; e.EctCelsius = 85; e.IatCelsius = 25; e.VbattVolts = 14.2; e.SpeedKmh = 60;
         sim.SyncSensors();
         var lines = new List<string>();
+        long firstTrapStep = 0;
+        ushort firstTrapPc = 0;
+        long completed = 0;
         for (long i = 1; i <= Steps; i++)
         {
+            ushort beforePc = sim.Cpu.Pc;
             if (sim.StepOne() == null) { lines.Add($"{name}: stopped at {i}: {sim.FaultMessage}"); break; }
+            completed = i;
+            if (firstTrapStep == 0 && sim.TrapLog.Count != 0) { firstTrapStep = i; firstTrapPc = beforePc; }
             if ((sim.Cpu.Instructions & 1023) == 0) sim.SyncSensors();
             if (i % Every == 0)
             {
@@ -149,14 +155,25 @@ static class SimRun
                 lines.Add($"{name} @{i}: pc {c.Pc:X4} cycles {c.Cycles} traps {sim.TrapLog.Values.Sum()} state {h}");
             }
         }
+        T.Check($"{name}: completes all {Steps} steps without a model fault", completed == Steps && sim.FaultMessage == null);
+        bool p13 = name.StartsWith("p13", StringComparison.Ordinal);
+        ushort expectedBrk = name switch { "p13.bin" => 0x078C, "p13-skeleton bare" => 0x0771, "p13-skeleton Default" => 0x08E6, _ => 0 };
+        bool expectedTraps = p13
+            ? firstTrapStep == 4 && firstTrapPc == expectedBrk && sim.TrapLog.Count == 1
+              && sim.TrapLog.All(x => x.Key.Pc == expectedBrk && x.Key.Reason == 0 && x.Value == 1)
+            : sim.TrapLog.Count == 0;
+        T.Check($"{name}: only the documented native reset BRK is admitted", expectedTraps,
+            $"first step {firstTrapStep}, PC {firstTrapPc:X4}, total {sim.TrapLog.Values.Sum()}");
         return lines;
     }
 
     public static void Compare(string name, byte[] image, Action part)
     {
+        CheckpointLineageTests.CheckImage(name, image);
         var now = Run(name, image, part);
-        var file = T.Data("sim-checkpoints.txt");
-        // --save-checkpoints: this ROM's lines recorded again (a skeleton change that is meant: the new run becomes the baseline)
+        var file = T.Data("sim-checkpoints-qualified.txt");
+        // Record only the qualified-model output copy for explicit review. The original
+        // upstream file is immutable here; its model is exercised by the lineage job.
         if (Environment.GetCommandLineArgs().Contains("--save-checkpoints"))
         {
             var kept = File.ReadAllLines(file).Where(l => !l.StartsWith(name + " @") && !l.StartsWith(name + ":")).ToList();
@@ -164,7 +181,7 @@ static class SimRun
             Console.WriteLine($"        saved {now.Count} checkpoints of {name} to {file}");
         }
         var saved = File.ReadAllLines(file).Where(l => l.StartsWith(name + " @") || l.StartsWith(name + ":")).ToList();
-        if (saved.Count == 0) { T.Skip($"{name}: runs in the simulator exactly as saved", "not in data/sim-checkpoints.txt"); return; }
+        if (saved.Count != Steps / Every) { T.Check($"{name}: all six qualified checkpoints exist", false); return; }
         int firstDiff = Enumerable.Range(0, Math.Max(now.Count, saved.Count)).FirstOrDefault(i => i >= now.Count || i >= saved.Count || now[i] != saved[i], -1);
         T.Check($"{name}: runs in the simulator exactly as saved ({Steps / 1_000_000}M instructions, machine state at {saved.Count} checkpoints)", firstDiff < 0,
             firstDiff < 0 ? now.LastOrDefault() ?? "" : $"first difference: {(firstDiff < now.Count ? now[firstDiff] : "(ended)")} - saved {(firstDiff < saved.Count ? saved[firstDiff] : "(nothing)")}");

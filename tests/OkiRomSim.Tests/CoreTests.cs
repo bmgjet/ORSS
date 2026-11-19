@@ -4,8 +4,8 @@ using OkiRomSim.Core;
 
 namespace OkiRomSim.Tests;
 
-/// The core and simulator fixes, each on the smallest program that shows it. (That the shipped ROMs still run exactly as before is the
-/// simulation checkpoints in the p30 / p13 / roms groups: none of them uses the instructions changed here.)
+/// Core and simulator regressions on small programs. The p30 / p13 / roms groups
+/// separately compare upstream test fixtures with the current simulation checkpoints.
 static class CoreTests
 {
     /// A 32 KB image of FF with the reset vector pointing at 0100h and `code` there.
@@ -24,6 +24,34 @@ static class CoreTests
         var sim = new Simulator();
         sim.LoadRom(image);
         return sim;
+    }
+
+    // DD selects the accumulator width. [DP] encodes the width in its opcode.
+    static void CheckShift(string name, byte accumulator, byte memoryOp, bool word, int input, int result, bool carryIn, bool carryOut)
+    {
+        foreach (bool memory in new[] { false, true })
+        {
+            byte[] code = memory ? [(byte)(word ? 0xB2 : 0xC2), memoryOp] : [accumulator];
+            var sim = Load(Program(code));
+            bool zero = result != 0;  // Opposite to a zero flag calculated from the result.
+            sim.Cpu.Dd = memory ? !word : word;
+            sim.Cpu.Zf = zero;
+            sim.Cpu.Hc = !zero;
+            sim.Cpu.Cf = carryIn;
+            ushort before = (ushort)(input | (word ? 0 : 0xA500));
+            ushort expected = (ushort)(result | (word ? 0 : 0xA500));
+            if (memory)
+            {
+                sim.Bus.Ram[0x84] = 0x80; sim.Bus.Ram[0x85] = 0x02;  // DP = 0280h
+                sim.Bus.WriteDataU16(0x280, before);
+            }
+            else sim.Cpu.A = before;
+            sim.StepOne();
+            ushort actual = memory ? sim.Bus.ReadDataU16(0x280) : sim.Cpu.A;
+            T.Check($"{name}{(word ? "" : "B")} {(memory ? "[DP]" : "A")} preserves Z={zero}",
+                actual == expected && sim.Cpu.Cf == carryOut && sim.Cpu.Zf == zero && sim.Cpu.Hc == !zero && sim.Cpu.Dd == (memory ? !word : word),
+                $"result {actual:X4}h, C {sim.Cpu.Cf}, Z {sim.Cpu.Zf}, HC {sim.Cpu.Hc}, DD {sim.Cpu.Dd}");
+        }
     }
 
     public static void Run()
@@ -62,6 +90,18 @@ static class CoreTests
             sim.StepOne();
             T.Check("ROR A giving 0000h leaves Z clear", sim.Cpu.A == 0x0000 && sim.Cpu.Cf && !sim.Cpu.Zf, $"A {sim.Cpu.A:X4}h, C {sim.Cpu.Cf}, Z {sim.Cpu.Zf}");
         }
+        foreach (bool word in new[] { false, true })
+        {
+            int sign = word ? 0x8000 : 0x80;
+            CheckShift("ROL", 0x33, 0xB7, word, sign, 0, false, true);
+            CheckShift("ROL", 0x33, 0xB7, word, 0, 1, true, false);
+            CheckShift("SLL", 0x53, 0xD7, word, sign, 0, false, true);
+            CheckShift("SLL", 0x53, 0xD7, word, 1, 2, true, false);
+            CheckShift("SRA", 0x73, 0xF7, word, 1, 0, false, true);
+            CheckShift("SRA", 0x73, 0xF7, word, sign, sign | (sign >> 1), true, false);
+            CheckShift("SRL", 0x63, 0xE7, word, 1, 0, false, true);
+            CheckShift("SRL", 0x63, 0xE7, word, 2, 1, true, false);
+        }
         // decimal adjust: 99h + 99h = 132h leaves A = 32h with carry and half carry; DAA makes 98h and keeps the carry (the hundreds)
         {
             var sim = Load(Program(0x93));
@@ -87,13 +127,13 @@ static class CoreTests
         {
             var sim = Load(Program(new byte[1000]));                     // 1000 NOPs
             T.Check("66207 machine cycle is 200 ns (fOSC/2)", Chip.CpuHz == 5_000_000 && Chip.ClockDivider == 2, $"{Chip.CpuHz} Hz, divider {Chip.ClockDivider}");
-            sim.Bus.Ram[Bus.SfrTcon0] = 0x10;                           // timer 0 running, prescaler 00b
+            sim.Bus.Ram[Bus.SfrTcon0] = 0x93;                           // timer 0 running, realtime mode, selector 100b (/32)
             sim.Bus.Ram[Bus.SfrTm0] = 0; sim.Bus.Ram[Bus.SfrTm0 + 1] = 0;
             ulong c0 = sim.Cpu.Cycles;
             for (int i = 0; i < 1000; i++) sim.StepOne();
             double us = (sim.Cpu.Cycles - c0) / Chip.CyclesPerUs;
             int tm0 = sim.Bus.Ram[Bus.SfrTm0] | sim.Bus.Ram[Bus.SfrTm0 + 1] << 8;
-            T.Check("1000 NOPs take 400 us and timer 0 (00b) ticks every 3.2 us", Math.Abs(us - 400) < 0.01 && tm0 == 125, $"{us:0.###} us, TM0 {tm0}");
+            T.Check("1000 NOPs take 400 us and timer 0 (100b) ticks every 3.2 us", Math.Abs(us - 400) < 0.01 && tm0 == 125, $"{us:0.###} us, TM0 {tm0}");
             sim.Bus.Ram[Bus.SfrSttmr] = 0xF8; sim.Bus.Ram[Bus.SfrSttmc] = 0x01;
             T.Check("STTMR F8h: 39,062 baud, a byte (10 bits) in 256 us", sim.Bus.RomSerialBaud == 39_062 && sim.Bus.TxByteCycles() / Chip.CyclesPerUs == 256,
                 $"{sim.Bus.RomSerialBaud} baud, {sim.Bus.TxByteCycles() / Chip.CyclesPerUs:0.###} us a byte");

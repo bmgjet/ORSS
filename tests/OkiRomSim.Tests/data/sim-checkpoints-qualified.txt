@@ -1,0 +1,39 @@
+# Qualified CPU/timer/PWM model, including MBR and INC/DEC rows.
+# Historical sim-checkpoints.txt is retained unchanged and executed at pinned upstream source.
+# These are deterministic regression states, not measured hardware traces.
+p30-skeleton bare @500000: pc 02D1 cycles 3183555 traps 0 state B7E68EE756EF54CD
+p30-skeleton bare @1000000: pc 2976 cycles 6355056 traps 0 state 31974A2E0BE5F838
+p30-skeleton bare @1500000: pc 31B9 cycles 9525677 traps 0 state A2A892EFE40B1264
+p30-skeleton bare @2000000: pc 256F cycles 12696785 traps 0 state 655A618AF051B43C
+p30-skeleton bare @2500000: pc 05BA cycles 15867840 traps 0 state AAB77E165BF84828
+p30-skeleton bare @3000000: pc 35E6 cycles 19037625 traps 0 state BAD8FB0C05EA8C6C
+p30-skeleton Default @500000: pc 1E65 cycles 3087450 traps 0 state 5121C934A73B4384
+p30-skeleton Default @1000000: pc 2429 cycles 6163745 traps 0 state A27D07C20C22C55B
+p30-skeleton Default @1500000: pc 4532 cycles 9241148 traps 0 state 376C3CFB6CD0CE48
+p30-skeleton Default @2000000: pc 44D1 cycles 12316341 traps 0 state 268DB41F5C7689E0
+p30-skeleton Default @2500000: pc 0532 cycles 15392231 traps 0 state 5F97314CAED16652
+p30-skeleton Default @3000000: pc 0A0B cycles 18470594 traps 0 state BE042C6D8DECD25E
+p13-skeleton bare @500000: pc 4ABB cycles 3026588 traps 1 state DDE22745901BD6C6
+p13-skeleton bare @1000000: pc 4814 cycles 5943226 traps 1 state 9A04BD0C1C866FFF
+p13-skeleton bare @1500000: pc 03DB cycles 8858940 traps 1 state 153832232E83E4E9
+p13-skeleton bare @2000000: pc 0DCD cycles 11773764 traps 1 state 37347F0FD44F8D95
+p13-skeleton bare @2500000: pc 1AAF cycles 14691618 traps 1 state C00CFBC40ED7A809
+p13-skeleton bare @3000000: pc 42CB cycles 17606237 traps 1 state FBB22D663A01D67F
+p13-skeleton Default @500000: pc 45BD cycles 3014111 traps 1 state F2AC3C12077D0F34
+p13-skeleton Default @1000000: pc 791C cycles 5905700 traps 1 state 1514828CD34CDDED
+p13-skeleton Default @1500000: pc 1D83 cycles 8799648 traps 1 state FD97AD7343377C53
+p13-skeleton Default @2000000: pc 039A cycles 11691960 traps 1 state F954780B23667382
+p13-skeleton Default @2500000: pc 1961 cycles 14586046 traps 1 state 411B1D10A0AEBCD4
+p13-skeleton Default @3000000: pc 4ED4 cycles 17479534 traps 1 state BE533B79E6BE2FA3
+p30.bin @500000: pc 4EE1 cycles 3096227 traps 0 state 282045C10DCAAA85
+p30.bin @1000000: pc 5063 cycles 6181182 traps 0 state 7FD7E76A43581E2C
+p30.bin @1500000: pc 07FF cycles 9268788 traps 0 state 54F27248706E6411
+p30.bin @2000000: pc 4EA2 cycles 12352758 traps 0 state C507D119D23BAFE5
+p30.bin @2500000: pc 0343 cycles 15437899 traps 0 state 3CEAD2507A4E5809
+p30.bin @3000000: pc 533C cycles 18524922 traps 0 state 76F1C583151F321A
+p13.bin @500000: pc 4D55 cycles 3029634 traps 1 state 3CB37CC137D632CA
+p13.bin @1000000: pc 4D68 cycles 5945425 traps 1 state 4C19732DBC1C33A3
+p13.bin @1500000: pc 0432 cycles 8858991 traps 1 state 8656ED76CF51D247
+p13.bin @2000000: pc 14BD cycles 11774389 traps 1 state 7078D626AC524E5B
+p13.bin @2500000: pc 1161 cycles 14688241 traps 1 state 5E7DD95998165F82
+p13.bin @3000000: pc 218E cycles 17603963 traps 1 state CD7DD10BC703F6C7
